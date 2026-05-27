@@ -1,0 +1,18 @@
+Package: orkllm
+Version: 0.1.0
+Architecture: arm64
+Maintainer: Michael Fischer <mfischer@toorakcapital.io>
+Depends: nodejs (>= 18.0.0)
+Section: net
+Priority: optional
+Homepage: https://github.com/mafischer/oRKLLM
+Description: OpenAI-compatible LLM inference server for Rockchip NPU
+ oRKLLM is a high-performance local LLM inference server designed for
+ Rockchip NPU-powered platforms (RK3576, RK3588). Provides an OpenAI-
+ compatible API and a premium admin dashboard.
+Filename: pool/main/o/orkllm/orkllm_0.1.0_arm64.deb
+Size: 9545908
+MD5sum: cc9cd2471c36e41169319d66d5737ad7
+SHA1: 2fd96f7e58860d6678af13c65d022c6983e089c7
+SHA256: d234c8e67f0f6a327c24460691fd2b1f42c71e953b0575aaed39d6b2fda63b9b
+

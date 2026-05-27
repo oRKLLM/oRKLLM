@@ -1,0 +1,46 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA256
+
+Origin: oRKLLM
+Label: oRKLLM
+Suite: stable
+Codename: stable
+Architectures: arm64
+Components: main
+Description: oRKLLM APT Repository - OpenAI-compatible LLM inference for Rockchip NPU
+Date: Wed, 27 May 2026 23:44:11 +0000
+MD5Sum:
+ b3dba1bea684a8dbd8c0564dfe018ed4 499 main/binary-arm64/Packages.gz
+hash=b3dba1bea684a8dbd8c0564dfe018ed4
+ fc28686f5991e5554bb102c4b3d84aaa 540 main/binary-arm64/Packages.bz2
+hash=fc28686f5991e5554bb102c4b3d84aaa
+ 9c2b517d401a4281c3fd07bec1614783 697 main/binary-arm64/Packages
+SHA1:
+ 62eb9c1830f9bbc1664f61204640830d815462d9 499 main/binary-arm64/Packages.gz
+hash=62eb9c1830f9bbc1664f61204640830d815462d9
+ e9e8f41513ffdf5b85d4653ed43ecde8033b5137 540 main/binary-arm64/Packages.bz2
+hash=e9e8f41513ffdf5b85d4653ed43ecde8033b5137
+ 181bb25f85fa1b84f9bd77cb15c9cfedbb26562a 697 main/binary-arm64/Packages
+SHA256:
+ be87124c6866954bef759c338065c49b811b975c13784927fd0607f0e3056178 499 main/binary-arm64/Packages.gz
+hash=be87124c6866954bef759c338065c49b811b975c13784927fd0607f0e3056178
+ dcd67ef40e449749d0aa05a1ebd3e8a52946c4fa09f8fc73e7b983175e2b24e4 540 main/binary-arm64/Packages.bz2
+hash=dcd67ef40e449749d0aa05a1ebd3e8a52946c4fa09f8fc73e7b983175e2b24e4
+ 27f2214461b1d6ffce37f36fbe24eab34c0a5af5000e4ff7d91fd4a7c80ce743 697 main/binary-arm64/Packages
+-----BEGIN PGP SIGNATURE-----
+
+iQJPBAEBCAA5FiEEjp2Wca5u0JcYtaE/MGfg+E4PQEUFAmoXgcsbFIAAAAAABAAO
+bWFudTIsMi41KzEuMTIsMCwzAAoJEDBn4PhOD0BF/fUQAN48sKCb8jJMFcfXakt5
+FNf1/vc8PPgmXf4raYiAC14Qvg2leE/LK8ky0YtoJuhPnm8zn0nN9hrCujBtWofu
+p5Gil0u8EDB00MlwtU6jmY8AIki27X5v4LycuVJzIbPuCB/vkH9Tnv4v6m27DOZD
+zTecCbrKde5GKVi5G/aDHDJm2VFlrEtwQEqM2fSeiZDxo8JYajwORxjuXgareiqG
+P9rpY/3z96MW9KP1c1iHh2nAKFusxkuJQF6z9h2ow+0SbP0IFqGwU3HipFsE/YYw
+b7G9A8SPUdHzhNJHft2GvY44YyCAqefba0ool3X4qHYPuiI5O1yL2ys4fSiUoEWa
+bYHMozK0APG+X4+4Kxw1hiVmJ74mfzXiXnZJ6FEs6RDg5XfpZLUKM98VB70AweBY
+AHKh/mdZdxE068TyOmHiBiN5GMAEFlz3cNAg2fBF9RLAUInXA7whmv/ui4sMrlsL
+cjeXH3V2/QdT8hHc0tYt7k+3f73V7XMDQtBPT/SelUipOZ7tyOTkpB1fxfbIVO98
+ECXqVT1QjM0yd/7j78ptdkyTFRXZ/WQ2nBuYBV7I2aspRLiisE2Jhdx6JdWzh7MK
+POsRlvCYeT58pwuShgjs2Gd6HDi6PYcxUbeUAAU47ygidpCNoq6H6oUs8Rzq0ADo
+8LZ6JdixHGhwFvDWsjNrwiXQ
+=hIkF
+-----END PGP SIGNATURE-----
