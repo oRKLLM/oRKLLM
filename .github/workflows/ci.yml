@@ -89,6 +89,19 @@ jobs:
       - name: npm audit (frontend)
         run: cd frontend && npm audit --audit-level=high --omit=dev
 
+      - name: Get week number for Trivy DB cache key
+        id: weekly
+        run: echo "week=$(date +%Y-W%V)" >> "$GITHUB_OUTPUT"
+
+      # Cache Trivy binary + vulnerability DB (refreshed weekly)
+      - name: Cache Trivy DB
+        uses: actions/cache@v4
+        id: trivy-cache
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ runner.os }}-${{ steps.weekly.outputs.week }}
+          restore-keys: trivy-db-${{ runner.os }}-
+
       # Trivy filesystem scan — catches CVEs in node_modules and source
       - name: Run Trivy vulnerability scan
         uses: aquasecurity/trivy-action@0.30.0
@@ -100,6 +113,8 @@ jobs:
           severity: 'HIGH,CRITICAL'
           exit-code: '0'          # report but don't fail the build
           ignore-unfixed: true
+          cache-dir: ~/.cache/trivy
+          skip-db-update: ${{ steps.trivy-cache.outputs.cache-hit == 'true' }}
 
       - name: Upload Trivy SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
