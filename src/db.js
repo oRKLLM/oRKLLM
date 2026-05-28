@@ -5,11 +5,14 @@ import os from 'os';
 // Determine config and database paths
 const home = os.homedir();
 export const CONFIG_DIR = path.join(home, '.config', 'orkllm');
-export const AUTH_FILE = process.env.ORKLLM_AUTH_FILE || path.join(CONFIG_DIR, 'auth.json');
 
-export const DB_FILE = AUTH_FILE.endsWith('.json') 
-  ? AUTH_FILE.slice(0, -5) + '.db' 
-  : path.join(CONFIG_DIR, 'orkllm.db');
+// ORKLLM_DB_PATH is the canonical env var (set by systemd unit).
+// ORKLLM_AUTH_FILE is the legacy name kept for backward compatibility.
+export const DB_FILE = process.env.ORKLLM_DB_PATH
+  || process.env.ORKLLM_AUTH_FILE?.replace(/\.json$/, '.db')
+  || path.join(CONFIG_DIR, 'auth.db');
+
+export const AUTH_FILE = DB_FILE; // kept for any legacy import consumers
 
 // Ensure parent directory exists
 const dbDir = path.dirname(DB_FILE);
