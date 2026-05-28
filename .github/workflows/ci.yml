@@ -56,21 +56,20 @@ jobs:
 
       - name: Run E2E tests
         id: playwright
-        run: |
-          npx playwright test --reporter=json,github 2>/dev/null | tee /tmp/pw-results.json || true
-          # Also run normally to get proper exit code
-          npx playwright test --reporter=github
+        # Use reporter config to write JSON to file while printing github annotations.
+        # PLAYWRIGHT_JSON_OUTPUT_NAME is the env var Playwright uses to set the JSON output path.
+        run: npx playwright test --reporter=json,github
         env:
-          ORKLLM_MOCK: '1'
           CI: '1'
+          PLAYWRIGHT_JSON_OUTPUT_NAME: /tmp/pw-results.json
 
       - name: Parse test results
         id: results
         if: always()
         run: |
           if [ -f /tmp/pw-results.json ]; then
-            PASSED=$(python3 -c "import json,sys; d=json.load(open('/tmp/pw-results.json')); print(d.get('stats',{}).get('expected',0))")
-            TOTAL=$(python3  -c "import json,sys; d=json.load(open('/tmp/pw-results.json')); print(d.get('stats',{}).get('total',0))")
+            PASSED=$(python3 -c "import json; d=json.load(open('/tmp/pw-results.json')); print(d.get('stats',{}).get('expected',0))")
+            TOTAL=$(python3  -c "import json; d=json.load(open('/tmp/pw-results.json')); print(d.get('stats',{}).get('total',0))")
           else
             PASSED=0; TOTAL=0
           fi
