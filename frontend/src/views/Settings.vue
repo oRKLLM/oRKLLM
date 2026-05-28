@@ -170,6 +170,67 @@
         </v-row>
       </v-card>
 
+      <!-- Prefix Cache -->
+      <v-card class="glass-card pa-5 mb-5">
+        <div class="section-heading mb-4">
+          <v-icon color="primary" size="18" class="mr-2">mdi-lightning-bolt-outline</v-icon>
+          Prefix Cache
+        </div>
+        <div class="text-caption text-grey mb-4">
+          Saves KV cache state to disk after each response. On subsequent turns the model skips re-processing the conversation prefix, reducing prefill time significantly.
+        </div>
+
+        <div class="d-flex align-center mb-4">
+          <v-switch v-model="settings.cacheEnabled" color="primary" hide-details density="compact" class="mr-3"></v-switch>
+          <div>
+            <div class="text-subtitle-2 font-weight-medium">Enable prefix cache</div>
+            <div class="text-caption text-grey">Requires a restart of any active model to take effect</div>
+          </div>
+        </div>
+
+        <template v-if="settings.cacheEnabled">
+          <v-divider class="mb-4"></v-divider>
+
+          <div class="text-subtitle-2 font-weight-medium mb-1">Hot Cache Limit (RAM-speed storage)</div>
+          <div class="text-caption text-grey mb-2">Most-recently-used cache files kept here for lowest latency. Uses fast local SSD or tmpfs.</div>
+          <v-row no-gutters class="align-center mb-4">
+            <v-col cols="9"><v-slider v-model="settings.cacheHotLimitMB" :min="0" :max="8192" :step="128" color="primary" density="compact" hide-details></v-slider></v-col>
+            <v-col cols="3" class="pl-3"><v-chip size="small" class="font-weight-bold">{{ settings.cacheHotLimitMB === 0 ? 'Disabled' : formatMB(settings.cacheHotLimitMB) }}</v-chip></v-col>
+          </v-row>
+
+          <div class="text-subtitle-2 font-weight-medium mb-1">Cold Cache Limit (SSD)</div>
+          <div class="text-caption text-grey mb-2">Evicted hot-cache entries are demoted here. Files promoted back to hot on next access.</div>
+          <v-row no-gutters class="align-center mb-4">
+            <v-col cols="9"><v-slider v-model="settings.cacheColdLimitMB" :min="0" :max="102400" :step="1024" color="teal" density="compact" hide-details></v-slider></v-col>
+            <v-col cols="3" class="pl-3"><v-chip size="small" class="font-weight-bold">{{ settings.cacheColdLimitMB === 0 ? 'Disabled' : formatMB(settings.cacheColdLimitMB) }}</v-chip></v-col>
+          </v-row>
+
+          <div class="text-subtitle-2 font-weight-medium mb-1">Cache Directory</div>
+          <div class="text-caption text-grey mb-2">Where hot/ and cold/ subdirectories are stored. Default: ~/.config/orkllm/cache</div>
+          <v-text-field v-model="settings.cacheDir" density="compact" variant="outlined" hide-details placeholder="~/.config/orkllm/cache" class="mb-4 font-mono" prepend-inner-icon="mdi-folder-outline"></v-text-field>
+
+          <v-divider class="mb-4"></v-divider>
+
+          <div class="text-subtitle-2 font-weight-medium mb-1">Sliding Context Window</div>
+          <div class="text-caption text-grey mb-2">Oldest non-system messages are dropped when the conversation exceeds this estimated token count. Prevents context overflow on the NPU.</div>
+          <v-row no-gutters class="align-center mb-4">
+            <v-col cols="9"><v-slider v-model="settings.cacheMaxContextTokens" :min="512" :max="4096" :step="128" color="orange" density="compact" hide-details></v-slider></v-col>
+            <v-col cols="3" class="pl-3"><v-chip size="small" class="font-weight-bold">{{ settings.cacheMaxContextTokens }} tok</v-chip></v-col>
+          </v-row>
+
+          <v-divider class="mb-4"></v-divider>
+
+          <div class="text-subtitle-2 font-weight-medium mb-2">Cache Status</div>
+          <div v-if="cacheStats" class="d-flex gap-3 flex-wrap mb-3">
+            <v-chip size="small" prepend-icon="mdi-fire">Hot: {{ cacheStats.hot?.entries ?? 0 }} entries · {{ cacheStats.hot?.sizeMB ?? 0 }} MB</v-chip>
+            <v-chip size="small" prepend-icon="mdi-snowflake">Cold: {{ cacheStats.cold?.entries ?? 0 }} entries · {{ cacheStats.cold?.sizeMB ?? 0 }} MB</v-chip>
+          </div>
+          <v-btn size="small" variant="outlined" color="error" prepend-icon="mdi-delete-sweep-outline" :loading="clearingCache" @click="clearCache">
+            Clear All Cache
+          </v-btn>
+        </template>
+      </v-card>
+
       <!-- Generation Defaults -->
       <v-card class="glass-card pa-5 mb-5">
         <div class="section-heading mb-1">
@@ -254,8 +315,15 @@ export default {
       topK: 40,
       maxNewTokens: 512,
       repPenalty: 1.0,
-      hfToken: ''
+      hfToken: '',
+      cacheEnabled: false,
+      cacheHotLimitMB: 512,
+      cacheColdLimitMB: 10240,
+      cacheDir: '',
+      cacheMaxContextTokens: 3500,
     },
+    cacheStats: null,
+    clearingCache: false,
     passwordForm: { current: '', next: '', confirm: '' },
     passwordError: '',
     passwordSaving: false,
@@ -297,7 +365,29 @@ export default {
         this.settings.maxNewTokens = s.maxNewTokens ?? 512;
         this.settings.repPenalty = s.repPenalty ?? 1.0;
         this.settings.hfToken = s.hfToken ?? '';
+        this.settings.cacheEnabled          = s.cacheEnabled ?? false;
+        this.settings.cacheHotLimitMB       = s.cacheHotLimitMB ?? 512;
+        this.settings.cacheColdLimitMB      = s.cacheColdLimitMB ?? 10240;
+        this.settings.cacheDir              = s.cacheDir ?? '';
+        this.settings.cacheMaxContextTokens = s.cacheMaxContextTokens ?? 3500;
+        this.cacheStats = data.cacheStats || null;
       } catch (e) {}
+    },
+    formatMB(mb) {
+      if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
+      return mb + ' MB';
+    },
+    async clearCache() {
+      this.clearingCache = true;
+      try {
+        await fetch('/api/admin/cache', { method: 'DELETE' });
+        this.notify('Cache cleared', 'success');
+        await this.fetchSettings();
+      } catch (e) {
+        this.notify('Failed to clear cache', 'error');
+      } finally {
+        this.clearingCache = false;
+      }
     },
     async saveSettings() {
       this.saving = true;

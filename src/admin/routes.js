@@ -1,4 +1,5 @@
 import { getCredentials, saveCredentials, verifyCredentials, MODELS_DIR, LIBRKLLMRT_PATH } from '../config.js';
+import { clearAllCache, getCacheStats } from '../cache.js';
 import pool from '../pool.js';
 import crypto from 'crypto';
 import os from 'os';
@@ -269,14 +270,21 @@ export default async function adminRoutes(fastify, options) {
         topK: parseInt(dbGetSetting('default_top_k') ?? '40'),
         maxNewTokens: parseInt(dbGetSetting('default_max_new_tokens') ?? '512'),
         repPenalty: parseFloat(dbGetSetting('default_rep_penalty') ?? '1.0'),
-        hfToken: dbGetSetting('hf_token') ?? ''
-      }
+        hfToken: dbGetSetting('hf_token') ?? '',
+        cacheEnabled:          dbGetSetting('cache_enabled') === '1',
+        cacheHotLimitMB:       parseInt(dbGetSetting('cache_hot_limit_mb')          ?? '512'),
+        cacheColdLimitMB:      parseInt(dbGetSetting('cache_cold_limit_mb')         ?? String(10 * 1024)),
+        cacheDir:              dbGetSetting('cache_dir') ?? '',
+        cacheMaxContextTokens: parseInt(dbGetSetting('cache_max_context_tokens')    ?? '3500'),
+      },
+      cacheStats: getCacheStats()
     };
   });
 
   // POST /api/admin/global-settings
   fastify.post('/global-settings', async (request, reply) => {
-    const { idleTimeoutMinutes, temperature, topP, topK, maxNewTokens, repPenalty, hfToken } = request.body || {};
+    const { idleTimeoutMinutes, temperature, topP, topK, maxNewTokens, repPenalty, hfToken,
+            cacheEnabled, cacheHotLimitMB, cacheColdLimitMB, cacheDir, cacheMaxContextTokens } = request.body || {};
     if (typeof idleTimeoutMinutes === 'number') {
       pool.setIdleTimeout(idleTimeoutMinutes);
     }
@@ -286,6 +294,17 @@ export default async function adminRoutes(fastify, options) {
     if (typeof maxNewTokens === 'number') dbSetSetting('default_max_new_tokens', maxNewTokens);
     if (typeof repPenalty === 'number') dbSetSetting('default_rep_penalty', repPenalty);
     if (typeof hfToken === 'string') dbSetSetting('hf_token', hfToken);
+    if (typeof cacheEnabled === 'boolean') dbSetSetting('cache_enabled', cacheEnabled ? '1' : '0');
+    if (typeof cacheHotLimitMB === 'number')  dbSetSetting('cache_hot_limit_mb',        cacheHotLimitMB);
+    if (typeof cacheColdLimitMB === 'number') dbSetSetting('cache_cold_limit_mb',       cacheColdLimitMB);
+    if (typeof cacheDir === 'string')         dbSetSetting('cache_dir',                 cacheDir);
+    if (typeof cacheMaxContextTokens === 'number') dbSetSetting('cache_max_context_tokens', cacheMaxContextTokens);
+    return { success: true };
+  });
+
+  // DELETE /api/admin/cache — clear all prefix cache files
+  fastify.delete('/cache', async (request, reply) => {
+    clearAllCache();
     return { success: true };
   });
 

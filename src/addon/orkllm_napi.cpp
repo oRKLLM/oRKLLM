@@ -167,6 +167,7 @@ typedef int (*rkllm_run_t)(RKLLM_Handle_t handle, RKLLMInput* input, RKLLMInferP
 typedef int (*rkllm_destroy_t)(RKLLM_Handle_t handle);
 typedef int (*rkllm_clear_kv_cache_t)(RKLLM_Handle_t handle, int type, int* reserved1, int* reserved2);
 typedef int (*rkllm_abort_t)(RKLLM_Handle_t handle);
+typedef int (*rkllm_load_prompt_cache_t)(RKLLM_Handle_t handle, const char* prompt_cache_path);
 
 // Global state variables
 DYNLIB_HANDLE g_libHandle = nullptr;
@@ -177,6 +178,7 @@ rkllm_run_t g_rkllm_run = nullptr;
 rkllm_destroy_t g_rkllm_destroy = nullptr;
 rkllm_clear_kv_cache_t g_rkllm_clear_kv_cache = nullptr;
 rkllm_abort_t g_rkllm_abort = nullptr;
+rkllm_load_prompt_cache_t g_rkllm_load_prompt_cache = nullptr;
 
 struct RequestContext {
     Napi::ThreadSafeFunction tsfn;
@@ -252,7 +254,9 @@ Napi::Value LoadLibrary(const Napi::CallbackInfo& info) {
     g_rkllm_destroy = (rkllm_destroy_t)DYNLIB_GETSYM(g_libHandle, "rkllm_destroy");
     g_rkllm_clear_kv_cache = (rkllm_clear_kv_cache_t)DYNLIB_GETSYM(g_libHandle, "rkllm_clear_kv_cache");
     g_rkllm_abort = (rkllm_abort_t)DYNLIB_GETSYM(g_libHandle, "rkllm_abort");
-    
+    // Optional: rkllm_load_prompt_cache may not be present in all runtime versions
+    g_rkllm_load_prompt_cache = (rkllm_load_prompt_cache_t)DYNLIB_GETSYM(g_libHandle, "rkllm_load_prompt_cache");
+
     if (!g_rkllm_init || !g_rkllm_run || !g_rkllm_destroy || !g_rkllm_clear_kv_cache || !g_rkllm_abort) {
         DYNLIB_FREE(g_libHandle);
         g_libHandle = nullptr;
@@ -339,7 +343,11 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
     Napi::Function jsCallback = info[1].As<Napi::Function>();
     
     std::string prompt = inputObj.Has("prompt") ? inputObj.Get("prompt").As<Napi::String>().Utf8Value() : "";
-    
+    std::string loadCachePath = inputObj.Has("loadCachePath") && inputObj.Get("loadCachePath").IsString()
+        ? inputObj.Get("loadCachePath").As<Napi::String>().Utf8Value() : "";
+    std::string saveCachePath = inputObj.Has("saveCachePath") && inputObj.Get("saveCachePath").IsString()
+        ? inputObj.Get("saveCachePath").As<Napi::String>().Utf8Value() : "";
+
     RequestContext* ctx = new RequestContext();
     ctx->tsfn = Napi::ThreadSafeFunction::New(
         env,
@@ -348,19 +356,32 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
         0, // infinite queue
         1  // 1 thread reference
     );
-    
+
     // Spawn background thread to run inference synchronously without blocking the event loop
-    std::thread runThread([prompt, ctx]() {
+    std::thread runThread([prompt, loadCachePath, saveCachePath, ctx]() {
+        // Load prefix KV cache from disk if provided
+        if (!loadCachePath.empty() && g_rkllm_load_prompt_cache) {
+            g_rkllm_load_prompt_cache(g_handle, loadCachePath.c_str());
+        }
+
         RKLLMInput input;
         memset(&input, 0, sizeof(RKLLMInput));
         input.input_type = RKLLM_INPUT_PROMPT;
         input.input_data.prompt_input = prompt.c_str();
-        
+
         RKLLMInferParam inferParam;
         memset(&inferParam, 0, sizeof(RKLLMInferParam));
         inferParam.mode = RKLLM_INFER_GENERATE;
         inferParam.keep_history = 0;
-        
+
+        RKLLMPromptCacheParam cacheParam;
+        if (!saveCachePath.empty()) {
+            memset(&cacheParam, 0, sizeof(RKLLMPromptCacheParam));
+            cacheParam.save_prompt_cache = 1;
+            cacheParam.prompt_cache_path = saveCachePath.c_str();
+            inferParam.prompt_cache_params = &cacheParam;
+        }
+
         int ret = g_rkllm_run(g_handle, &input, &inferParam, static_cast<void*>(ctx));
         if (ret != 0) {
             // If run failed to trigger, call error and clean up
@@ -411,6 +432,23 @@ Napi::Value ClearKVCache(const Napi::CallbackInfo& info) {
     return Napi::Number::New(env, ret);
 }
 
+Napi::Value LoadPromptCache(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (g_libHandle == nullptr || g_handle == nullptr) {
+        return Napi::Number::New(env, -1);
+    }
+    if (!g_rkllm_load_prompt_cache) {
+        return Napi::Number::New(env, -2); // not supported by this runtime version
+    }
+    if (info.Length() < 1 || !info[0].IsString()) {
+        Napi::TypeError::New(env, "Expected string cache path").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    std::string cachePath = info[0].As<Napi::String>().Utf8Value();
+    int ret = g_rkllm_load_prompt_cache(g_handle, cachePath.c_str());
+    return Napi::Number::New(env, ret);
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set(Napi::String::New(env, "load_library"), Napi::Function::New(env, LoadLibrary));
     exports.Set(Napi::String::New(env, "init_model"), Napi::Function::New(env, InitModel));
@@ -418,6 +456,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set(Napi::String::New(env, "unload_model"), Napi::Function::New(env, UnloadModel));
     exports.Set(Napi::String::New(env, "abort_inference"), Napi::Function::New(env, AbortInference));
     exports.Set(Napi::String::New(env, "clear_kv_cache"), Napi::Function::New(env, ClearKVCache));
+    exports.Set(Napi::String::New(env, "load_prompt_cache"), Napi::Function::New(env, LoadPromptCache));
     return exports;
 }
 

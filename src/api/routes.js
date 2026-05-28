@@ -3,6 +3,22 @@ import path from 'path';
 import { MODELS_DIR } from '../config.js';
 import pool from '../pool.js';
 import { recordRequest } from '../stats.js';
+import { cacheKey, getCachePath, putCachePath, tmpCachePath, isCacheEnabled, getMaxContextTokens } from '../cache.js';
+
+// Rough token estimate: ~4 chars per token
+function estimateTokens(messages) {
+  return messages.reduce((n, m) => n + Math.ceil((m.content?.length ?? 0) / 4) + 4, 0);
+}
+
+// Drop oldest non-system messages until the conversation fits within maxTokens
+function trimMessages(messages, maxTokens) {
+  const sys  = messages.filter(m => m.role === 'system');
+  let conv   = messages.filter(m => m.role !== 'system');
+  while (estimateTokens([...sys, ...conv]) > maxTokens && conv.length > 1) {
+    conv.shift();
+  }
+  return [...sys, ...conv];
+}
 
 export default async function apiRoutes(fastify, options) {
   
@@ -51,18 +67,45 @@ export default async function apiRoutes(fastify, options) {
       return reply.status(400).send({ error: "Missing or invalid field 'messages'" });
     }
 
-    // Convert chat messages to ChatML format prompt
-    let prompt = "";
-    for (const msg of messages) {
-      if (msg.role === 'system') {
-        prompt += `<|im_start|>system\n${msg.content}<|im_end|>\n`;
-      } else if (msg.role === 'user') {
-        prompt += `<|im_start|>user\n${msg.content}<|im_end|>\n`;
-      } else if (msg.role === 'assistant') {
-        prompt += `<|im_start|>assistant\n${msg.content}<|im_end|>\n`;
+    // Sliding window: trim oldest non-system turns if conversation is too long
+    const maxCtx = getMaxContextTokens();
+    const trimmed = trimMessages(messages, maxCtx);
+
+    // Prefix cache: check if we have KV state for all messages except the new user turn
+    const cacheEnabled = isCacheEnabled();
+    let loadCachePath = null;
+    let saveCachePath = null;
+    let prefixMessages = trimmed;
+
+    if (cacheEnabled && trimmed.length >= 2) {
+      const prefixMsgs = trimmed.slice(0, -1); // everything except last (new user) message
+      const pKey       = cacheKey(model, prefixMsgs);
+      const hit        = getCachePath(pKey);
+
+      // Key for the state we'll save after this response
+      const nextKey    = cacheKey(model, trimmed);
+      saveCachePath    = tmpCachePath(nextKey);
+
+      if (hit) {
+        loadCachePath   = hit;
+        prefixMessages  = trimmed.slice(-1); // only the new user message
+        console.log(`[Cache] HIT ${pKey} → sending only ${prefixMessages.length} message(s)`);
+      } else {
+        console.log(`[Cache] MISS ${pKey}`);
       }
     }
-    prompt += `<|im_start|>assistant\n`;
+
+    // Convert (possibly shortened) messages to ChatML format
+    function formatMessages(msgs) {
+      let p = "";
+      for (const msg of msgs) {
+        if (msg.role === 'system')    p += `<|im_start|>system\n${msg.content}<|im_end|>\n`;
+        else if (msg.role === 'user') p += `<|im_start|>user\n${msg.content}<|im_end|>\n`;
+        else if (msg.role === 'assistant') p += `<|im_start|>assistant\n${msg.content}<|im_end|>\n`;
+      }
+      return p + `<|im_start|>assistant\n`;
+    }
+    const prompt = formatMessages(prefixMessages);
 
     const modelOptions = {
       temperature,
@@ -99,8 +142,13 @@ export default async function apiRoutes(fastify, options) {
       };
 
        try {
-        const finalResult = await pool.generate(model, prompt, modelOptions, onToken);
+        const cachePaths = loadCachePath || saveCachePath ? { loadCachePath, saveCachePath } : {};
+        const finalResult = await pool.generate(model, prompt, modelOptions, onToken, cachePaths);
         recordRequest(finalResult.perf);
+        if (cacheEnabled && saveCachePath) {
+          const nextKey = cacheKey(model, trimmed);
+          putCachePath(nextKey, saveCachePath);
+        }
         
         const stopChunk = {
           id: completionId,
@@ -132,8 +180,13 @@ export default async function apiRoutes(fastify, options) {
       };
 
       try {
-        const finalResult = await pool.generate(model, prompt, modelOptions, onToken);
+        const cachePaths = loadCachePath || saveCachePath ? { loadCachePath, saveCachePath } : {};
+        const finalResult = await pool.generate(model, prompt, modelOptions, onToken, cachePaths);
         recordRequest(finalResult.perf);
+        if (cacheEnabled && saveCachePath) {
+          const nextKey = cacheKey(model, trimmed);
+          putCachePath(nextKey, saveCachePath);
+        }
         return {
           id: completionId,
           object: 'chat.completion',

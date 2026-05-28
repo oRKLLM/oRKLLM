@@ -150,9 +150,9 @@ class EnginePool {
     this.isLoaded = false;
   }
 
-  async generate(modelName, prompt, options, onToken) {
+  async generate(modelName, prompt, options, onToken, cachePaths = {}) {
     return new Promise((resolve, reject) => {
-      this.queue.push({ modelName, prompt, options, onToken, resolve, reject });
+      this.queue.push({ modelName, prompt, options, onToken, cachePaths, resolve, reject });
       this.processQueue();
     });
   }
@@ -167,7 +167,7 @@ class EnginePool {
     }
 
     const request = this.queue.shift();
-    const { modelName, prompt, options, onToken, resolve, reject } = request;
+    const { modelName, prompt, options, onToken, cachePaths, resolve, reject } = request;
 
     try {
       await this.load(modelName, options);
@@ -204,10 +204,12 @@ class EnginePool {
         this.worker.on('message', tokenHandler);
         this.worker.on('exit', exitHandler);
 
-        // Send generation task
+        // Send generation task (cache paths are optional; undefined fields are ignored by worker)
         this.worker.send({
           type: 'run',
-          prompt
+          prompt,
+          loadCachePath: cachePaths?.loadCachePath,
+          saveCachePath: cachePaths?.saveCachePath,
         });
       });
 
