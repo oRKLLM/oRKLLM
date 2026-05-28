@@ -286,12 +286,167 @@
 
         <!-- Downloader Tab -->
         <v-tabs-window-item value="downloader">
+
+          <!-- Search HuggingFace -->
           <v-card class="glass-card pa-5 mb-5">
+            <div class="text-h6 font-weight-bold mb-1 d-flex align-center">
+              <v-icon start color="primary">mdi-magnify</v-icon>
+              Search HuggingFace
+            </div>
+            <div class="text-caption text-grey mb-4">Find .rkllm models on HuggingFace Hub.</div>
+
+            <div class="d-flex gap-3 align-start mb-3 flex-wrap">
+              <v-text-field
+                v-model="searchQuery"
+                label="Search models"
+                placeholder="e.g. Qwen3, Llama, Mistral"
+                variant="outlined"
+                density="comfortable"
+                hide-details
+                prepend-inner-icon="mdi-magnify"
+                style="min-width: 220px; flex: 1;"
+                @keyup.enter="searchHf"
+              ></v-text-field>
+
+              <v-select
+                v-model="searchSort"
+                :items="[{title:'Most Downloads',value:'downloads'},{title:'Most Likes',value:'likes'},{title:'Trending',value:'trendingScore'},{title:'Recently Updated',value:'lastModified'}]"
+                item-title="title"
+                item-value="value"
+                label="Sort"
+                variant="outlined"
+                density="comfortable"
+                hide-details
+                style="max-width: 200px;"
+              ></v-select>
+
+              <v-btn
+                color="primary"
+                variant="flat"
+                :loading="searchLoading"
+                prepend-icon="mdi-magnify"
+                @click="searchHf"
+              >
+                Search
+              </v-btn>
+            </div>
+
+            <v-checkbox
+              v-model="searchRkllmOnly"
+              label="RKLLM models only (adds 'rkllm' to search)"
+              density="compact"
+              hide-details
+              color="primary"
+              class="mb-2"
+            ></v-checkbox>
+
+            <v-alert v-if="searchError" type="error" variant="tonal" density="compact" class="mb-3 text-caption">
+              {{ searchError }}
+            </v-alert>
+
+            <v-list v-if="searchResults.length" class="pa-0" bg-color="transparent">
+              <v-list-item
+                v-for="model in searchResults"
+                :key="model.id"
+                class="border-bottom py-2 px-0"
+              >
+                <template v-slot:prepend>
+                  <v-icon color="grey" class="mr-2">mdi-robot-outline</v-icon>
+                </template>
+                <v-list-item-title class="text-body-2 font-weight-bold text-truncate">{{ model.id }}</v-list-item-title>
+                <v-list-item-subtitle class="text-caption">
+                  <v-icon size="12" class="mr-1">mdi-download-outline</v-icon>{{ formatNum(model.downloads) }}
+                  <span class="mx-2">·</span>
+                  <v-icon size="12" class="mr-1">mdi-heart-outline</v-icon>{{ formatNum(model.likes) }}
+                  <span v-for="tag in model.tags.slice(0,3)" :key="tag" class="ml-2">
+                    <v-chip size="x-small" variant="tonal">{{ tag }}</v-chip>
+                  </span>
+                </v-list-item-subtitle>
+                <template v-slot:append>
+                  <v-btn size="small" color="primary" variant="tonal" @click="selectModel(model.id)">Use</v-btn>
+                </template>
+              </v-list-item>
+            </v-list>
+
+            <div v-if="searchResults.length === 0 && !searchLoading && searchQuery" class="text-caption text-grey py-2">
+              No results. Try a different query.
+            </div>
+          </v-card>
+
+          <!-- Browse Collection -->
+          <v-card class="glass-card pa-5 mb-5">
+            <div class="text-h6 font-weight-bold mb-1 d-flex align-center">
+              <v-icon start color="primary">mdi-folder-multiple-outline</v-icon>
+              Browse Collection
+            </div>
+            <div class="text-caption text-grey mb-4">
+              Browse models in a HuggingFace collection. Paste a collection URL, e.g.
+              <code class="font-mono">https://huggingface.co/collections/Qwen/qwen3-...</code>
+            </div>
+
+            <div class="d-flex gap-3 align-start mb-3 flex-wrap">
+              <v-text-field
+                v-model="collectionUrl"
+                label="Collection URL"
+                placeholder="https://huggingface.co/collections/Qwen/qwen3-..."
+                variant="outlined"
+                density="comfortable"
+                hide-details
+                prepend-inner-icon="mdi-link-variant"
+                style="flex: 1;"
+                @keyup.enter="browseCollection"
+              ></v-text-field>
+              <v-btn
+                color="primary"
+                variant="flat"
+                :loading="collectionLoading"
+                prepend-icon="mdi-folder-open-outline"
+                @click="browseCollection"
+              >
+                Browse
+              </v-btn>
+            </div>
+
+            <v-alert v-if="collectionError" type="error" variant="tonal" density="compact" class="mb-3 text-caption">
+              {{ collectionError }}
+            </v-alert>
+
+            <div v-if="collectionData">
+              <div class="text-subtitle-2 font-weight-bold mb-1">{{ collectionData.title }}</div>
+              <div v-if="collectionData.description" class="text-caption text-grey mb-3">{{ collectionData.description }}</div>
+              <v-list class="pa-0" bg-color="transparent">
+                <v-list-item
+                  v-for="model in collectionData.models"
+                  :key="model.id"
+                  class="border-bottom py-2 px-0"
+                >
+                  <template v-slot:prepend>
+                    <v-icon color="grey" class="mr-2">mdi-robot-outline</v-icon>
+                  </template>
+                  <v-list-item-title class="text-body-2 font-weight-bold text-truncate">{{ model.id }}</v-list-item-title>
+                  <v-list-item-subtitle class="text-caption">
+                    <v-icon size="12" class="mr-1">mdi-download-outline</v-icon>{{ formatNum(model.downloads) }}
+                    <span class="mx-2">·</span>
+                    <v-icon size="12" class="mr-1">mdi-heart-outline</v-icon>{{ formatNum(model.likes) }}
+                    <span v-for="tag in model.tags.slice(0,3)" :key="tag" class="ml-2">
+                      <v-chip size="x-small" variant="tonal">{{ tag }}</v-chip>
+                    </span>
+                  </v-list-item-subtitle>
+                  <template v-slot:append>
+                    <v-btn size="small" color="primary" variant="tonal" @click="selectModel(model.id)">Use</v-btn>
+                  </template>
+                </v-list-item>
+              </v-list>
+            </div>
+          </v-card>
+
+          <!-- Direct Download -->
+          <v-card class="glass-card pa-5 mb-5" ref="downloadCard">
             <div class="text-h6 font-weight-bold mb-1 d-flex align-center">
               <v-icon start color="primary">mdi-download-outline</v-icon>
               Download from HuggingFace
             </div>
-            <div class="text-caption text-grey mb-5">Download a pre-converted .rkllm model from a HuggingFace repository.</div>
+            <div class="text-caption text-grey mb-5">Download a .rkllm model file from a HuggingFace repository.</div>
 
             <v-text-field
               v-model="dlRepoId"
@@ -407,6 +562,20 @@ export default {
     dlLoading: false,
     dlStatus: null,
     dlPollTimer: null,
+
+    // HF Search
+    searchQuery: '',
+    searchSort: 'downloads',
+    searchRkllmOnly: true,
+    searchLoading: false,
+    searchResults: [],
+    searchError: '',
+
+    // Collection browser
+    collectionUrl: '',
+    collectionLoading: false,
+    collectionData: null,
+    collectionError: '',
 
     appVersion: __APP_VERSION__,
     themeName: localStorage.getItem('orkllm-theme') || 'customDarkTheme'
@@ -608,6 +777,57 @@ export default {
       } catch (e) {
         alert('Network error saving timeout');
       }
+    },
+    async searchHf() {
+      if (!this.searchQuery.trim() && !this.searchRkllmOnly) return;
+      this.searchLoading = true;
+      this.searchError = '';
+      this.searchResults = [];
+      try {
+        const params = new URLSearchParams({
+          q: this.searchQuery.trim(),
+          sort: this.searchSort,
+          rkllm: this.searchRkllmOnly ? 'true' : 'false',
+          limit: '25',
+        });
+        const res = await fetch(`/api/admin/hf/search?${params}`);
+        const data = await res.json();
+        if (!res.ok) { this.searchError = data.error || 'Search failed'; return; }
+        this.searchResults = data;
+      } catch (e) {
+        this.searchError = 'Network error: ' + e.message;
+      } finally {
+        this.searchLoading = false;
+      }
+    },
+    async browseCollection() {
+      if (!this.collectionUrl.trim()) return;
+      this.collectionLoading = true;
+      this.collectionError = '';
+      this.collectionData = null;
+      try {
+        const res = await fetch(`/api/admin/hf/collection?url=${encodeURIComponent(this.collectionUrl.trim())}`);
+        const data = await res.json();
+        if (!res.ok) { this.collectionError = data.error || 'Failed to load collection'; return; }
+        this.collectionData = data;
+      } catch (e) {
+        this.collectionError = 'Network error: ' + e.message;
+      } finally {
+        this.collectionLoading = false;
+      }
+    },
+    selectModel(id) {
+      this.dlRepoId = id;
+      this.$nextTick(() => {
+        const el = this.$refs.downloadCard?.$el || this.$refs.downloadCard;
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    },
+    formatNum(n) {
+      if (!n) return '0';
+      if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+      if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+      return String(n);
     },
     async startDownload() {
       if (!this.dlRepoId.trim()) return;

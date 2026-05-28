@@ -77,10 +77,16 @@ graph TD
 | `src/config.js` | Env-driven settings; credentials hashed with PBKDF2-HMAC-SHA256 |
 | `src/server.js` | Fastify bootstrap; mounts `/ws/metrics`, `/ws/logs`, static SPA, API routes |
 | `src/api/routes.js` | `/v1/chat/completions` (SSE streaming), `/v1/models`, `/v1/embeddings` |
-| `src/admin/routes.js` | Auth check, setup, login/logout, stats clear, network interface list |
+| `src/admin/routes.js` | Auth, setup, login/logout, stats, settings, HF search & collection proxy |
 | `src/mock_engine.js` | JS mock engine streaming realistic fake tokens (for macOS dev) |
-| `frontend/` | Vue 3 + Vuetify 3 SPA (Dashboard, Login, Setup views) |
-| `e2e/orkllm.spec.js` | Playwright end-to-end test suite |
+| `frontend/src/components/AppNav.vue` | Shared navbar with Dashboard/Models/Settings/Logs/Bench/Chat buttons |
+| `frontend/src/views/Dashboard.vue` | Serving stats, hardware telemetry, inference playground |
+| `frontend/src/views/Models.vue` | Model manager + HF search/collection browser/downloader |
+| `frontend/src/views/Settings.vue` | Global settings, HF token, password change |
+| `frontend/src/views/Logs.vue` | Full-page live log terminal (WebSocket) |
+| `frontend/src/views/Bench.vue` | Inference benchmark (TTFT, tok/s) |
+| `frontend/src/views/Chat.vue` | Full streaming chat against OpenAI-compatible API |
+| `e2e/orkllm.spec.js` | Playwright end-to-end test suite (21 tests) |
 
 ---
 
@@ -113,19 +119,28 @@ oRKLLM/
 │   └── worker.js
 ├── frontend/               # Vue 3 + Vuetify 3 SPA
 │   ├── package.json
-│   ├── vite.config.js
+│   ├── vite.config.js      # Route-based code splitting
 │   ├── index.html
 │   └── src/
 │       ├── main.js
 │       ├── App.vue
 │       ├── router.js
 │       ├── plugins/vuetify.js
+│       ├── components/
+│       │   └── AppNav.vue  # Shared navbar (all authenticated views)
 │       └── views/
-│           ├── Dashboard.vue
+│           ├── Dashboard.vue   # Stats, telemetry, inference playground
+│           ├── Models.vue      # Model manager + HF search/downloader
+│           ├── Settings.vue    # Global settings + HF token
+│           ├── Logs.vue        # Live log terminal
+│           ├── Bench.vue       # Inference benchmark
+│           ├── Chat.vue        # Full chat interface
 │           ├── Login.vue
 │           └── Setup.vue
 └── e2e/
-    └── orkllm.spec.js
+    ├── global-setup.js     # Resets server state between test runs
+    ├── orkllm.spec.js      # 12 feature tests
+    └── regression.spec.js  # UI regression tests
 ```
 
 ---

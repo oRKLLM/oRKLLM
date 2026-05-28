@@ -328,6 +328,69 @@ export default async function adminRoutes(fastify, options) {
     return { success: true, modelId, settings };
   });
 
+  // GET /api/admin/hf/search?q=<query>&sort=downloads&rkllm=true&limit=20
+  fastify.get('/hf/search', async (request, reply) => {
+    const { q = '', sort = 'downloads', rkllm = 'false', limit = '20' } = request.query;
+    const hfToken = dbGetSetting('hf_token') ?? '';
+    const params = new URLSearchParams({
+      search: rkllm === 'true' ? `${q} rkllm`.trim() : q,
+      sort,
+      direction: '-1',
+      limit: String(Math.min(parseInt(limit) || 20, 50)),
+      full: 'true',
+    });
+    const headers = { 'User-Agent': 'oRKLLM/1.0' };
+    if (hfToken) headers['Authorization'] = `Bearer ${hfToken}`;
+    try {
+      const res = await fetch(`https://huggingface.co/api/models?${params}`, { headers });
+      if (!res.ok) return reply.status(res.status).send({ error: `HuggingFace API error: ${res.status}` });
+      const models = await res.json();
+      return models.map(m => ({
+        id: m.id,
+        downloads: m.downloads ?? 0,
+        likes: m.likes ?? 0,
+        tags: (m.tags ?? []).slice(0, 8),
+        lastModified: m.lastModified,
+        private: m.private ?? false,
+      }));
+    } catch (e) {
+      return reply.status(502).send({ error: `Failed to reach HuggingFace: ${e.message}` });
+    }
+  });
+
+  // GET /api/admin/hf/collection?url=<collection_url>
+  fastify.get('/hf/collection', async (request, reply) => {
+    const { url = '' } = request.query;
+    // Parse org/slug from URLs like:
+    //   https://huggingface.co/collections/Qwen/qwen3
+    //   https://huggingface.co/collections/Qwen/qwen3-6787119e1f61f98e08fd3b4b
+    const match = url.match(/huggingface\.co\/collections\/([^/]+)\/([^/?#]+)/);
+    if (!match) return reply.status(400).send({ error: 'Invalid collection URL. Expected: https://huggingface.co/collections/<org>/<slug>' });
+    const [, org, slug] = match;
+    const hfToken = dbGetSetting('hf_token') ?? '';
+    const headers = { 'User-Agent': 'oRKLLM/1.0' };
+    if (hfToken) headers['Authorization'] = `Bearer ${hfToken}`;
+    try {
+      const res = await fetch(`https://huggingface.co/api/collections/${org}/${slug}`, { headers });
+      if (!res.ok) return reply.status(res.status).send({ error: `HuggingFace API error: ${res.status}` });
+      const col = await res.json();
+      const models = (col.items ?? [])
+        .filter(item => item.type === 'model')
+        .map(item => ({
+          id: item.item?.id ?? item.item?.modelId ?? '',
+          downloads: item.item?.downloads ?? 0,
+          likes: item.item?.likes ?? 0,
+          tags: (item.item?.tags ?? []).slice(0, 8),
+          lastModified: item.item?.lastModified,
+          private: item.item?.private ?? false,
+        }))
+        .filter(m => m.id);
+      return { title: col.title ?? slug, description: col.description ?? '', models };
+    } catch (e) {
+      return reply.status(502).send({ error: `Failed to reach HuggingFace: ${e.message}` });
+    }
+  });
+
   // DELETE /api/admin/models/:modelId
   fastify.delete('/models/:modelId', async (request, reply) => {
     const { modelId } = request.params;

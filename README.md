@@ -31,12 +31,19 @@ This project draws key design patterns and architectural inspiration from the [j
 ## 🚀 Key Features
 
 * **OpenAI API Compatibility**: Exposes standard `/v1/chat/completions`, `/v1/models`, and `/v1/embeddings` endpoints.
-* **Premium Admin Dashboard**: Built with **Vue 3** and **Vuetify 3**, featuring a modern slate/violet dark theme, live telemetry gauges (CPU, NPU, RAM, Temperature), a model explorer, real-time log streaming, and an interactive chat playground.
+* **Full Admin Console**: Built with **Vue 3** and **Vuetify 3** — six dedicated pages accessible from a persistent navbar:
+  * **Dashboard** — live telemetry gauges (CPU/NPU/RAM/Temperature), serving stats, inference playground
+  * **Models** — local model manager, HuggingFace search, collection browser, and model downloader
+  * **Settings** — global inference defaults, HuggingFace API token, password management
+  * **Logs** — full-page real-time log terminal over WebSocket
+  * **Bench** — inference benchmark measuring TTFT, prefill tok/s, and generation tok/s
+  * **Chat** — full streaming chat UI with system prompt, model selector, and parameter controls
+* **HuggingFace Integration**: Search the HF Hub, browse collections (e.g. `huggingface.co/collections/Qwen/qwen3-...`), and download `.rkllm` models directly from the admin console. HF token stored in settings for gated/private repos.
 * **Process-Isolated Execution**: Launches the inference engine inside a dedicated Node.js child process (`worker.js`). If a model is unloaded or swapped, the child process is terminated, ensuring 100% cleanup of NPU driver memory to prevent driver OOM crashes.
 * **Smart Resource Management**:
   * **Single Active Model Lock**: Ensures only one model is active in NPU memory at a time.
   * **Auto-Swapping**: Automatically unloads the current model and loads the requested one when a new inference request arrives.
-  * **Idle Timeout**: Automatically unloads models after 5 minutes of inactivity to reclaim system memory.
+  * **Idle Timeout**: Automatically unloads models after a configurable period of inactivity.
 * **Seamless Mock Fallback**: If run on non-Linux or non-ARM64 platforms, or if `librkllmrt.so` is missing, oRKLLM transparently falls back to a Javascript-based mock engine. This enables rapid frontend and integration development on macOS, Windows, and x86 Linux.
 * **Dynamic N-API Bindings**: Built using C++ N-API (`node-addon-api`) with dynamic loading (`dlopen`/`dlsym`). The native addon compiles on any environment without compile-time link-dependencies on the RKLLM shared library.
 * **Secure First-Launch Flow**: Forces setup of credentials on first launch. Subsequent requests require cookie-based session verification. Password hashes are generated using `PBKDF2-HMAC-SHA256`.
