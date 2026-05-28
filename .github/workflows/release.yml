@@ -30,6 +30,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
@@ -46,10 +47,21 @@ jobs:
           cp package.json package-lock.json binding.gyp arm64_deps/
           cp -r src arm64_deps/src
 
+      - name: Cache ARM64 compiled dependencies
+        id: arm64-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            arm64_deps/node_modules
+            arm64_deps/build
+          key: arm64-deps-node22-${{ hashFiles('package-lock.json', 'binding.gyp', 'src/addon/**') }}
+
       - name: Set up QEMU
+        if: steps.arm64-cache.outputs.cache-hit != 'true'
         uses: docker/setup-qemu-action@v3
 
       - name: Compile ARM64 production dependencies
+        if: steps.arm64-cache.outputs.cache-hit != 'true'
         run: |
           docker run --rm --platform linux/arm64 \
             -v "${{ github.workspace }}/arm64_deps:/workspace" \
