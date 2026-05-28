@@ -12,11 +12,12 @@ mkdir -p "$REPO_ROOT/dists/stable/main/binary-arm64"
 
 cp "$DEB" "$REPO_ROOT/pool/main/o/orkllm/$DEBNAME"
 
-# Packages index
-dpkg-scanpackages --arch arm64 "$REPO_ROOT/pool/" \
-  > "$REPO_ROOT/dists/stable/main/binary-arm64/Packages"
-gzip  -k -f "$REPO_ROOT/dists/stable/main/binary-arm64/Packages"
-bzip2 -k -f "$REPO_ROOT/dists/stable/main/binary-arm64/Packages"
+# Packages index — run from REPO_ROOT so Filename: paths are relative
+cd "$REPO_ROOT"
+dpkg-scanpackages --arch arm64 pool/ \
+  > dists/stable/main/binary-arm64/Packages
+gzip  -k -f dists/stable/main/binary-arm64/Packages
+bzip2 -k -f dists/stable/main/binary-arm64/Packages
 
 # Release file
 cd "$REPO_ROOT/dists/stable"
