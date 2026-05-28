@@ -186,7 +186,7 @@ export default async function adminRoutes(fastify, options) {
     const port = request.server.server.address()?.port || 8000;
     status.networkAddresses = getNetworkAddresses();
     status.port = port;
-    status.libPath = process.env.ORKLLM_LIB_PATH || '/home/michael/rkllama/src/rkllama/lib/librkllmrt.so';
+    status.libPath = LIBRKLLMRT_PATH;
     return status;
   });
 

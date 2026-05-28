@@ -23,7 +23,7 @@ if (!fs.existsSync(MODELS_DIR)) {
 }
 
 // RKLLM Shared Library Path on the board
-export const LIBRKLLMRT_PATH = process.env.ORKLLM_LIB_PATH || '/home/michael/rkllama/src/rkllama/lib/librkllmrt.so';
+export const LIBRKLLMRT_PATH = process.env.ORKLLM_LIB_PATH || '/usr/lib/librkllmrt.so';
 
 /**
  * Retrieve saved credentials

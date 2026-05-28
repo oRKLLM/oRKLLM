@@ -84,6 +84,7 @@ class EnginePool {
           if (msg.type === 'loaded') {
             clearTimeout(loadTimeout);
             this.worker.removeListener('exit', onExit);
+            this.worker.removeListener('message', onMessage);
             if (msg.status === 0) {
               this.isLoaded = true;
               this.activeModel = {
@@ -187,6 +188,9 @@ class EnginePool {
 
         const exitHandler = () => {
           cleanup();
+          this.isLoaded = false;
+          this.worker = null;
+          this.activeModel = null;
           genReject(new Error("Worker process exited unexpectedly during generation"));
         };
 
