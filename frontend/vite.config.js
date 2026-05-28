@@ -11,6 +11,22 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(version),
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-vue': ['vue', 'vue-router'],
+          'vendor-vuetify': ['vuetify'],
+          'views-dashboard': ['./src/views/Dashboard.vue'],
+          'views-models': ['./src/views/Models.vue'],
+          'views-chat': ['./src/views/Chat.vue'],
+          'views-logs': ['./src/views/Logs.vue'],
+          'views-bench': ['./src/views/Bench.vue'],
+          'views-settings': ['./src/views/Settings.vue'],
+        }
+      }
+    }
+  },
   server: {
     port: 5173,
     proxy: {
