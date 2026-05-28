@@ -225,6 +225,11 @@ export default {
   border: 1px solid rgba(124, 58, 237, 0.2) !important;
 }
 
+.v-theme--customLightTheme .terminal-logs {
+  background-color: #F8FAFC !important;
+  color: #047857 !important;
+}
+
 .terminal-logs {
   background-color: #030712 !important;
   color: #10B981 !important;

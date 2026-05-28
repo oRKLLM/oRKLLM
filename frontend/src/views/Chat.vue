@@ -445,6 +445,9 @@ export default {
 .chat-messages-container {
   background: rgba(10, 15, 30, 0.3);
 }
+.v-theme--customLightTheme .chat-messages-container {
+  background: rgba(241, 245, 249, 0.5);
+}
 
 .message-bubble {
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
@@ -454,9 +457,15 @@ export default {
 .bg-surface-variant {
   background-color: #1F2937 !important;
 }
+.v-theme--customLightTheme .bg-surface-variant {
+  background-color: #E2E8F0 !important;
+}
 
 .bg-slate-input {
   background: rgba(17, 24, 39, 0.9);
+}
+.v-theme--customLightTheme .bg-slate-input {
+  background: rgba(241, 245, 249, 0.9);
 }
 
 .border-top-dashed {

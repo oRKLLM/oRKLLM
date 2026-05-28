@@ -709,6 +709,9 @@ export default {
 .chat-messages-container {
   background: rgba(10, 15, 30, 0.3);
 }
+.v-theme--customLightTheme .chat-messages-container {
+  background: rgba(241, 245, 249, 0.5);
+}
 
 .message-bubble {
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
@@ -718,9 +721,15 @@ export default {
 .bg-surface-variant {
   background-color: #1F2937 !important;
 }
+.v-theme--customLightTheme .bg-surface-variant {
+  background-color: #E2E8F0 !important;
+}
 
 .bg-slate-input {
   background: rgba(17, 24, 39, 0.9);
+}
+.v-theme--customLightTheme .bg-slate-input {
+  background: rgba(241, 245, 249, 0.9);
 }
 
 /* Pulse dots animation for LLM wait indicator */
@@ -755,9 +764,17 @@ export default {
   border-left: 3px solid #7C3AED;
   overflow-x: auto;
 }
+.v-theme--customLightTheme .code-block {
+  background: #F1F5F9 !important;
+  color: #047857 !important;
+}
 
 .inline-code {
   background: #111827 !important;
   color: #F43F5E !important;
+}
+.v-theme--customLightTheme .inline-code {
+  background: #E2E8F0 !important;
+  color: #BE123C !important;
 }
 </style>

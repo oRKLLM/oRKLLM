@@ -14,23 +14,28 @@ export default {
 html, body {
   margin: 0;
   padding: 0;
-  background-color: #0B0F19 !important;
+  background-color: rgb(var(--v-theme-background)) !important;
   font-family: 'Roboto', sans-serif;
 }
 
-/* Custom scrollbars for slate theme consistency */
+/* Global bg-slate-page follows the active Vuetify theme */
+.bg-slate-page {
+  background-color: rgb(var(--v-theme-background)) !important;
+}
+
+/* Custom scrollbars */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #0B0F19;
+  background: rgb(var(--v-theme-background));
 }
 ::-webkit-scrollbar-thumb {
-  background: #1F2937;
+  background: rgba(var(--v-theme-on-background), 0.15);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #374151;
+  background: rgba(var(--v-theme-on-background), 0.25);
 }
 </style>
