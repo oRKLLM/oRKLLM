@@ -6,8 +6,8 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen?logo=node.js)](https://nodejs.org)
 [![License](https://img.shields.io/github/license/mafischer/oRKLLM)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-RK3576%20%7C%20RK3588-blueviolet?logo=linux)](https://github.com/mafischer/oRKLLM)
-[![Tests](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/mafischer/3f7aa1a18ad678cb62b818d4207dc926/raw/orkllm-tests.json)](https://github.com/mafischer/oRKLLM/actions/workflows/ci.yml)
-[![Vulnerabilities](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/mafischer/3f7aa1a18ad678cb62b818d4207dc926/raw/orkllm-vulns.json)](https://github.com/mafischer/oRKLLM/security/code-scanning)
+[![Tests](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/mafischer/1da454f93b1363fff7f67f731e579a2f/raw/orkllm-tests.json)](https://github.com/mafischer/oRKLLM/actions/workflows/ci.yml)
+[![Vulnerabilities](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/mafischer/1da454f93b1363fff7f67f731e579a2f/raw/orkllm-vulns.json)](https://github.com/mafischer/oRKLLM/security/code-scanning)
 
 ```
               )       (
