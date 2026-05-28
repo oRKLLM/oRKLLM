@@ -22,6 +22,11 @@
         </v-list-item>
         <v-divider></v-divider>
         <v-list-item
+          :prepend-icon="isDark ? 'mdi-weather-sunny' : 'mdi-weather-night'"
+          :title="isDark ? 'Light Mode' : 'Dark Mode'"
+          @click="toggleTheme"
+        ></v-list-item>
+        <v-list-item
           prepend-icon="mdi-cog-outline"
           title="Global Settings"
           @click="$router.push('/settings')"
@@ -680,6 +685,9 @@ export default {
     appVersion: __APP_VERSION__
   }),
   computed: {
+    isDark() {
+      return this.$vuetify.theme.global.name.value === 'customDarkTheme';
+    },
     modelSelectItems() {
       return this.models.map(m => ({
         title: this.modelSettings[m.id]?.display_name || m.id,
@@ -914,6 +922,11 @@ export default {
         alert('Network error saving timeout');
       }
     },
+    toggleTheme() {
+      const next = this.isDark ? 'customLightTheme' : 'customDarkTheme';
+      this.$vuetify.theme.global.name.value = next;
+      localStorage.setItem('orkllm-theme', next);
+    },
     async logout() {
       try {
         await fetch('/api/admin/logout', { method: 'POST' });
@@ -1105,12 +1118,27 @@ export default {
   backdrop-filter: blur(12px);
   border-bottom: 1px solid rgba(139, 92, 246, 0.15) !important;
 }
+.v-theme--customLightTheme .glass-nav {
+  background: rgba(255, 255, 255, 0.85) !important;
+  border-bottom: 1px solid rgba(124, 58, 237, 0.15) !important;
+}
 
 .glass-card {
   background: rgba(17, 24, 39, 0.7) !important;
   backdrop-filter: blur(16px);
   border: 1px solid rgba(139, 92, 246, 0.15) !important;
   border-radius: 12px !important;
+}
+.v-theme--customLightTheme .glass-card {
+  background: rgba(255, 255, 255, 0.85) !important;
+  border: 1px solid rgba(124, 58, 237, 0.2) !important;
+}
+
+.bg-slate-page {
+  background: #0B0F19 !important;
+}
+.v-theme--customLightTheme .bg-slate-page {
+  background: #F1F5F9 !important;
 }
 
 .text-gradient {
@@ -1124,7 +1152,7 @@ export default {
 }
 
 .border-top-dashed {
-  border-top: 1px dashed rgba(255, 255, 255, 0.2);
+  border-top: 1px dashed rgba(128, 128, 128, 0.2);
 }
 
 .max-list-height {
