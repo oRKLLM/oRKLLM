@@ -121,6 +121,16 @@ export default async function adminRoutes(fastify, options) {
     return { status: 'need_login' };
   });
 
+  // POST /api/admin/reset-for-testing — only available in mock/test mode
+  if (process.env.ORKLLM_MOCK) {
+    fastify.post('/reset-for-testing', async (request, reply) => {
+      const { dbResetForTesting } = await import('../db.js');
+      dbResetForTesting();
+      pool.unloadAll?.();
+      return { ok: true };
+    });
+  }
+
   // POST /api/admin/setup
   fastify.post('/setup', async (request, reply) => {
     const creds = getCredentials();
@@ -258,14 +268,15 @@ export default async function adminRoutes(fastify, options) {
         topP: parseFloat(dbGetSetting('default_top_p') ?? '0.9'),
         topK: parseInt(dbGetSetting('default_top_k') ?? '40'),
         maxNewTokens: parseInt(dbGetSetting('default_max_new_tokens') ?? '512'),
-        repPenalty: parseFloat(dbGetSetting('default_rep_penalty') ?? '1.0')
+        repPenalty: parseFloat(dbGetSetting('default_rep_penalty') ?? '1.0'),
+        hfToken: dbGetSetting('hf_token') ?? ''
       }
     };
   });
 
   // POST /api/admin/global-settings
   fastify.post('/global-settings', async (request, reply) => {
-    const { idleTimeoutMinutes, temperature, topP, topK, maxNewTokens, repPenalty } = request.body || {};
+    const { idleTimeoutMinutes, temperature, topP, topK, maxNewTokens, repPenalty, hfToken } = request.body || {};
     if (typeof idleTimeoutMinutes === 'number') {
       pool.setIdleTimeout(idleTimeoutMinutes);
     }
@@ -274,6 +285,7 @@ export default async function adminRoutes(fastify, options) {
     if (typeof topK === 'number') dbSetSetting('default_top_k', topK);
     if (typeof maxNewTokens === 'number') dbSetSetting('default_max_new_tokens', maxNewTokens);
     if (typeof repPenalty === 'number') dbSetSetting('default_rep_penalty', repPenalty);
+    if (typeof hfToken === 'string') dbSetSetting('hf_token', hfToken);
     return { success: true };
   });
 

@@ -5,7 +5,7 @@ async function login(page) {
   await page.locator('input[type="text"]').fill('admin_test');
   await page.locator('input[type="password"]').fill('secret123');
   await page.click('button:has-text("Sign In")');
-  await expect(page).toHaveURL(/http:\/\/127.0.0.1:8000\/?$/, { timeout: 8000 });
+  await expect(page).toHaveURL(/http:\/\/127.0.0.1:18000\/?$/, { timeout: 8000 });
 }
 
 function accountBtn(page) {
@@ -60,7 +60,7 @@ test('Theme toggle: label says "Light Mode" when in dark mode', async ({ page })
 
   await page.evaluate(() => localStorage.setItem('orkllm-theme', 'customDarkTheme'));
   await page.reload();
-  await expect(page).toHaveURL(/http:\/\/127.0.0.1:8000\/?$/);
+  await expect(page).toHaveURL(/http:\/\/127.0.0.1:18000\/?$/);
 
   await accountBtn(page).click();
   const d = drawer(page);
@@ -76,7 +76,7 @@ test('Theme toggle: switches to light mode and updates localStorage', async ({ p
 
   await page.evaluate(() => localStorage.setItem('orkllm-theme', 'customDarkTheme'));
   await page.reload();
-  await expect(page).toHaveURL(/http:\/\/127.0.0.1:8000\/?$/);
+  await expect(page).toHaveURL(/http:\/\/127.0.0.1:18000\/?$/);
 
   await accountBtn(page).click();
   const d = drawer(page);
@@ -103,7 +103,7 @@ test('Theme toggle: round-trips back to dark mode', async ({ page }) => {
 
   await page.evaluate(() => localStorage.setItem('orkllm-theme', 'customDarkTheme'));
   await page.reload();
-  await expect(page).toHaveURL(/http:\/\/127.0.0.1:8000\/?$/);
+  await expect(page).toHaveURL(/http:\/\/127.0.0.1:18000\/?$/);
 
   await accountBtn(page).click();
   const d = drawer(page);
@@ -130,7 +130,7 @@ test('Theme toggle: persists across page reload', async ({ page }) => {
 
   await page.evaluate(() => localStorage.setItem('orkllm-theme', 'customDarkTheme'));
   await page.reload();
-  await expect(page).toHaveURL(/http:\/\/127.0.0.1:8000\/?$/);
+  await expect(page).toHaveURL(/http:\/\/127.0.0.1:18000\/?$/);
 
   // Switch to light
   await accountBtn(page).click();
@@ -145,7 +145,7 @@ test('Theme toggle: persists across page reload', async ({ page }) => {
 
   // Reload and verify light mode is still active
   await page.reload();
-  await expect(page).toHaveURL(/http:\/\/127.0.0.1:8000\/?$/);
+  await expect(page).toHaveURL(/http:\/\/127.0.0.1:18000\/?$/);
 
   await accountBtn(page).click();
   await expect(drawer(page)).toBeVisible();

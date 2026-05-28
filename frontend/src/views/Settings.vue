@@ -1,30 +1,11 @@
 <template>
-  <!-- Navbar -->
-  <v-app-bar flat class="glass-nav px-4" density="comfortable">
-    <v-btn icon variant="text" color="primary" @click="$router.push('/')">
-      <v-icon>mdi-arrow-left</v-icon>
-    </v-btn>
-    <v-icon color="primary" class="mx-2" size="28">mdi-cog-outline</v-icon>
-    <v-app-bar-title class="font-weight-bold text-h6 text-gradient">Global Settings</v-app-bar-title>
-    <v-spacer></v-spacer>
-    <v-menu location="bottom end">
-      <template v-slot:activator="{ props }">
-        <v-btn v-bind="props" icon color="primary" variant="tonal" size="36">
-          <v-icon size="20">mdi-account</v-icon>
-        </v-btn>
-      </template>
-      <v-list density="compact" class="glass-card py-1" min-width="180">
-        <v-list-item class="px-4 py-2">
-          <div class="text-caption text-grey">Signed in as</div>
-          <div class="text-body-2 font-weight-bold">{{ username }}</div>
-        </v-list-item>
-        <v-divider></v-divider>
-        <v-list-item prepend-icon="mdi-view-dashboard-outline" title="Dashboard" @click="$router.push('/')"></v-list-item>
-        <v-divider></v-divider>
-        <v-list-item prepend-icon="mdi-logout" title="Sign Out" @click="logout" class="text-error"></v-list-item>
-      </v-list>
-    </v-menu>
-  </v-app-bar>
+  <AppNav
+    :app-version="appVersion"
+    :username="username"
+    :is-dark="isDark"
+    @toggle-theme="toggleTheme"
+    @logout="logout"
+  />
 
   <v-main class="bg-slate-page fill-height">
     <v-container fluid class="pt-6 px-6" style="max-width: 860px;">
@@ -120,6 +101,44 @@
         >
           Update Password
         </v-btn>
+      </v-card>
+
+      <!-- HuggingFace -->
+      <v-card class="glass-card pa-5 mb-5">
+        <div class="section-heading mb-4">
+          <v-icon color="primary" size="18" class="mr-2">mdi-robot-happy-outline</v-icon>
+          HuggingFace
+        </div>
+        <div class="text-caption text-grey mb-4">
+          Used for downloading models from private or gated HuggingFace repositories via the Models Downloader.
+        </div>
+        <v-row>
+          <v-col cols="12" sm="8">
+            <v-text-field
+              v-model="settings.hfToken"
+              label="HuggingFace Token"
+              :type="showHfToken ? 'text' : 'password'"
+              density="compact"
+              variant="outlined"
+              hide-details
+              :append-inner-icon="showHfToken ? 'mdi-eye-off' : 'mdi-eye'"
+              @click:append-inner="showHfToken = !showHfToken"
+              placeholder="hf_..."
+            ></v-text-field>
+          </v-col>
+          <v-col cols="12" sm="4" class="d-flex align-center">
+            <v-btn
+              color="primary"
+              variant="tonal"
+              size="small"
+              :loading="hfTokenSaving"
+              @click="saveHfToken"
+              prepend-icon="mdi-content-save-outline"
+            >
+              Save Token
+            </v-btn>
+          </v-col>
+        </v-row>
       </v-card>
 
       <!-- Model Management -->
@@ -220,8 +239,11 @@
 </template>
 
 <script>
+import AppNav from '../components/AppNav.vue';
+
 export default {
   name: 'Settings',
+  components: { AppNav },
   data: () => ({
     username: 'admin',
     serverInfo: {},
@@ -231,14 +253,24 @@ export default {
       topP: 0.9,
       topK: 40,
       maxNewTokens: 512,
-      repPenalty: 1.0
+      repPenalty: 1.0,
+      hfToken: ''
     },
     passwordForm: { current: '', next: '', confirm: '' },
     passwordError: '',
     passwordSaving: false,
     saving: false,
-    snackbar: { show: false, text: '', color: 'success' }
+    hfTokenSaving: false,
+    showHfToken: false,
+    snackbar: { show: false, text: '', color: 'success' },
+    appVersion: __APP_VERSION__,
+    themeName: localStorage.getItem('orkllm-theme') || 'customDarkTheme'
   }),
+  computed: {
+    isDark() {
+      return this.themeName === 'customDarkTheme';
+    }
+  },
   mounted() {
     this.fetchAuth();
     this.fetchSettings();
@@ -264,6 +296,7 @@ export default {
         this.settings.topK = s.topK ?? 40;
         this.settings.maxNewTokens = s.maxNewTokens ?? 512;
         this.settings.repPenalty = s.repPenalty ?? 1.0;
+        this.settings.hfToken = s.hfToken ?? '';
       } catch (e) {}
     },
     async saveSettings() {
@@ -284,6 +317,26 @@ export default {
         this.notify('Network error', 'error');
       } finally {
         this.saving = false;
+      }
+    },
+    async saveHfToken() {
+      this.hfTokenSaving = true;
+      try {
+        const res = await fetch('/api/admin/global-settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ hfToken: this.settings.hfToken })
+        });
+        if (res.ok) {
+          this.notify('HuggingFace token saved', 'success');
+        } else {
+          const d = await res.json();
+          this.notify(d.error || 'Failed to save token', 'error');
+        }
+      } catch (e) {
+        this.notify('Network error', 'error');
+      } finally {
+        this.hfTokenSaving = false;
       }
     },
     async changePassword() {
@@ -315,6 +368,16 @@ export default {
         this.passwordSaving = false;
       }
     },
+    toggleTheme() {
+      const next = this.isDark ? 'customLightTheme' : 'customDarkTheme';
+      this.themeName = next;
+      localStorage.setItem('orkllm-theme', next);
+      try {
+        this.$vuetify.theme.global.name.value = next;
+      } catch {
+        this.$vuetify.theme.global.name = next;
+      }
+    },
     async logout() {
       try {
         await fetch('/api/admin/logout', { method: 'POST' });
@@ -332,11 +395,8 @@ export default {
 .bg-slate-page {
   background-color: #0B0F19 !important;
 }
-
-.glass-nav {
-  background: rgba(17, 24, 39, 0.8) !important;
-  backdrop-filter: blur(12px);
-  border-bottom: 1px solid rgba(139, 92, 246, 0.15) !important;
+.v-theme--customLightTheme .bg-slate-page {
+  background: #F1F5F9 !important;
 }
 
 .glass-card {
@@ -344,6 +404,10 @@ export default {
   backdrop-filter: blur(16px);
   border: 1px solid rgba(139, 92, 246, 0.15) !important;
   border-radius: 12px !important;
+}
+.v-theme--customLightTheme .glass-card {
+  background: rgba(255, 255, 255, 0.85) !important;
+  border: 1px solid rgba(124, 58, 237, 0.2) !important;
 }
 
 .text-gradient {

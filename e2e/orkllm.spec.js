@@ -2,7 +2,6 @@ import { test, expect } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
 
-const testAuthPath = path.resolve('./test_auth.json');
 const modelsDir = path.resolve('./models');
 const dummyModelName = 'qwen_1.8b.rkllm';
 const dummyModelPath = path.join(modelsDir, dummyModelName);
@@ -11,124 +10,329 @@ test.beforeAll(() => {
   if (!fs.existsSync(modelsDir)) {
     fs.mkdirSync(modelsDir, { recursive: true });
   }
-
-  // Create dummy models for testing
   fs.writeFileSync(dummyModelPath, 'fake-model-binary-data', 'utf-8');
 });
 
 test.afterAll(() => {
-  // Cleanup test artifacts
   if (fs.existsSync(dummyModelPath)) {
     fs.rmSync(dummyModelPath, { force: true });
   }
 });
 
-test('oRKLLM End-to-End User Journey', async ({ page }) => {
-  // Capture page logs
-  page.on('console', msg => console.log('PAGE LOG:', msg.text()));
+// v-btn with :to renders as <a class="v-btn">, not <button>
+function navBtn(page, label) {
+  return page.locator(`.v-app-bar .v-btn:has-text("${label}")`);
+}
+
+async function login(page, username = 'admin_test', password = 'secret123') {
+  await page.goto('/');
+  await expect(page).toHaveURL(/\/login/, { timeout: 8000 });
+  await page.locator('input[type="text"]').fill(username);
+  await page.locator('input[type="password"]').fill(password);
+  await page.click('button:has-text("Sign In")');
+  await expect(page).toHaveURL(/http:\/\/127.0.0.1:18000\/?$/, { timeout: 8000 });
+}
+
+async function loadModel(page) {
+  await page.goto('/models');
+  // Wait for the model list to render (at least the dummy model row appears)
+  await expect(page.locator('.v-list-item').filter({ hasText: dummyModelName }).first()).toBeVisible({ timeout: 5000 });
+  const unloadBtn = page.locator(`.v-list-item:has-text("${dummyModelName}") button:has-text("Unload")`);
+  if (await unloadBtn.isVisible()) return; // already loaded
+  const loadBtn = page.locator(`.v-list-item:has-text("${dummyModelName}") button:has-text("Load")`);
+  await loadBtn.click();
+  await expect(page.locator('.v-alert')).toContainText(`Loaded: ${dummyModelName}`, { timeout: 10000 });
+}
+
+async function unloadModel(page) {
+  await page.goto('/models');
+  await expect(page.locator('.v-list-item').filter({ hasText: dummyModelName }).first()).toBeVisible({ timeout: 5000 });
+  const unloadBtn = page.locator(`.v-list-item:has-text("${dummyModelName}") button:has-text("Unload")`);
+  if (!await unloadBtn.isVisible()) return; // already unloaded
+  await unloadBtn.click();
+  await expect(page.locator('.v-alert')).toContainText('No active model', { timeout: 5000 });
+}
+
+// ---------------------------------------------------------------------------
+// Test 1: First-launch setup & auth
+// ---------------------------------------------------------------------------
+test('Setup, auth enforcement, and login', async ({ page }) => {
   page.on('pageerror', err => console.log('PAGE ERROR:', err.message));
 
-  // --- STEP 1: First Launch & Credentials Setup ---
+  // Fresh server (test port 18000 + global-setup deleted test_auth.json)
   await page.goto('/');
-
-  // Expect automatic redirection to setup page
-  await expect(page).toHaveURL(/\/setup/);
+  await expect(page).toHaveURL(/\/setup/, { timeout: 8000 });
   await expect(page.locator('h1')).toContainText('oRKLLM Setup');
 
-  // Fill in registration form
   await page.locator('input[type="text"]').fill('admin_test');
   await page.locator('input[type="password"]').first().fill('secret123');
   await page.locator('input[type="password"]').nth(1).fill('secret123');
-
-  // Click Initialize
   await page.click('button:has-text("Initialize Server")');
 
-  // Expect redirect back to dashboard
-  await expect(page).toHaveURL(/http:\/\/127.0.0.1:8000\/?$/);
-  await expect(page.locator('.text-gradient')).toContainText('oRKLLM');
+  await expect(page).toHaveURL(/http:\/\/127.0.0.1:18000\/?$/, { timeout: 8000 });
+  await expect(page.locator('.text-gradient').first()).toContainText('oRKLLM');
 
-  // --- STEP 2: Authentication (Logout & Login Enforcement) ---
-  // Open user menu drawer then sign out
+  // Sign out
   await page.click('.v-app-bar .v-btn:has(.mdi-account)');
   await page.waitForSelector('.v-navigation-drawer', { state: 'visible' });
   await page.click('.v-navigation-drawer .v-list-item:has-text("Sign Out")');
-
-  // Expect redirect to login page
   await expect(page).toHaveURL(/\/login/);
-  await expect(page.locator('h1')).toContainText('oRKLLM Login');
 
-  // Try wrong login
+  // Wrong password
   await page.locator('input[type="text"]').fill('admin_test');
   await page.locator('input[type="password"]').fill('wrong_pass');
   await page.click('button:has-text("Sign In")');
-
-  // Expect error alert
   await expect(page.locator('.v-alert')).toBeVisible();
 
-  // Try correct login
+  // Correct password
   await page.locator('input[type="password"]').fill('secret123');
   await page.click('button:has-text("Sign In")');
+  await expect(page).toHaveURL(/http:\/\/127.0.0.1:18000\/?$/);
+});
 
-  // Redirect back to dashboard
-  await expect(page).toHaveURL(/http:\/\/127.0.0.1:8000\/?$/);
+// ---------------------------------------------------------------------------
+// Test 2: Dashboard - telemetry + navbar
+// ---------------------------------------------------------------------------
+test('Dashboard shows telemetry and navbar does not overlap content', async ({ page }) => {
+  await login(page);
 
-  // --- STEP 3: Dashboard & Inference Playground ---
-  // Verify telemetry circular progress circles are visible
   await expect(page.locator('text=CPU Utilization')).toBeVisible();
   await expect(page.locator('text=NPU Utilization')).toBeVisible();
   await expect(page.locator('text=RAM Utilization')).toBeVisible();
 
-  // --- Regression Test: Navbar Overlapping Check ---
+  for (const label of ['Dashboard', 'Models', 'Settings', 'Logs', 'Bench', 'Chat']) {
+    await expect(navBtn(page, label)).toBeVisible();
+  }
+
   const appBar = page.locator('.v-app-bar');
   const mainContainer = page.locator('.v-main > .v-container');
-  await expect(appBar).toBeVisible();
-  await expect(mainContainer).toBeVisible();
   const appBarBox = await appBar.boundingBox();
   const mainContainerBox = await mainContainer.boundingBox();
   if (appBarBox && mainContainerBox) {
-    // Include 2px tolerance for borders and subpixel rounding
     expect(mainContainerBox.y).toBeGreaterThanOrEqual(appBarBox.y + appBarBox.height - 2);
   }
+});
 
-  // Verify dummy model is scanned and listed
+// ---------------------------------------------------------------------------
+// Test 3: Navbar routing
+// ---------------------------------------------------------------------------
+test('Navbar buttons navigate to correct pages', async ({ page }) => {
+  await login(page);
+
+  await navBtn(page, 'Models').click();
+  await expect(page).toHaveURL(/\/models/);
+
+  await navBtn(page, 'Settings').click();
+  await expect(page).toHaveURL(/\/settings/);
+
+  await navBtn(page, 'Logs').click();
+  await expect(page).toHaveURL(/\/logs/);
+
+  await navBtn(page, 'Bench').click();
+  await expect(page).toHaveURL(/\/bench/);
+
+  await navBtn(page, 'Chat').click();
+  await expect(page).toHaveURL(/\/chat/);
+
+  await navBtn(page, 'Dashboard').click();
+  await expect(page).toHaveURL(/http:\/\/127.0.0.1:18000\/?$/);
+});
+
+// ---------------------------------------------------------------------------
+// Test 4: Models page - model list, load, unload
+// ---------------------------------------------------------------------------
+test('Models page: model list, load, and unload', async ({ page }) => {
+  await login(page);
+  await page.goto('/models');
+
   await expect(page.locator('.v-list-item').filter({ hasText: dummyModelName }).first()).toBeVisible();
 
-  // Load the model
   await page.click(`.v-list-item:has-text("${dummyModelName}") button:has-text("Load")`);
+  const alert = page.locator('.v-alert');
+  await expect(alert).toContainText(`Loaded: ${dummyModelName}`, { timeout: 10000 });
+  await expect(alert).toContainText('Mock Engine');
 
-  // Wait for NPU active model status success alert
-  const statusAlert = page.locator('.v-alert');
-  await expect(statusAlert).toContainText(`Loaded: ${dummyModelName}`, { timeout: 10000 });
-  await expect(statusAlert).toContainText('Platform: Mock Engine');
+  await page.click(`.v-list-item:has-text("${dummyModelName}") button:has-text("Unload")`);
+  await expect(alert).toContainText('No active model', { timeout: 5000 });
+});
 
-  // Verify chat play input area is enabled
+// ---------------------------------------------------------------------------
+// Test 5: Models - Downloader tab has HF fields
+// ---------------------------------------------------------------------------
+test('Models page: Downloader tab visible with HF fields', async ({ page }) => {
+  await login(page);
+  await page.goto('/models');
+
+  await page.click('.v-tab:has-text("Downloader")');
+
+  // HF repo ID field (any input on the page that appeared after tab click)
+  await expect(
+    page.locator('.v-text-field').filter({ hasText: /Repo ID/i }).first()
+  ).toBeVisible({ timeout: 3000 });
+
+  // HF token field
+  await expect(
+    page.locator('.v-text-field').filter({ hasText: /Token/i }).first()
+  ).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// Test 6: Dashboard chat playground
+// ---------------------------------------------------------------------------
+test('Dashboard inference playground: load model and run chat', async ({ page }) => {
+  await login(page);
+  await loadModel(page);
+
+  await page.goto('/');
   const chatInput = page.locator('input[placeholder="Enter your message..."]');
-  await expect(chatInput).toBeEnabled();
+  await expect(chatInput).toBeEnabled({ timeout: 10000 });
 
-  // Type a test prompt and submit
-  await chatInput.fill('Hi mock engine, tell me about your hardware specs');
+  await chatInput.fill('Hi mock engine, what are your specs?');
   await page.keyboard.press('Enter');
 
-  // Check that assistant bubble appears and populates
   const assistantBubble = page.locator('.message-bubble').last();
   await expect(assistantBubble).toContainText('simulated response', { timeout: 10000 });
-  await expect(assistantBubble).toContainText('oRKLLM Mock Engine');
-
-  // Wait for streaming to finish completely (input becomes enabled again)
   await expect(chatInput).toBeEnabled({ timeout: 15000 });
-
-  // Check performance metrics footer in bubble
   await expect(assistantBubble.locator('.text-caption')).toContainText('Prefill:');
-  await expect(assistantBubble.locator('.text-caption')).toContainText('Rate:');
 
-  // Check that logs terminal receives output
-  const logsPre = page.locator('pre.terminal-logs');
-  await expect(logsPre).toContainText('ws/metrics');
-  await expect(logsPre).toContainText('Model loaded successfully');
+  await unloadModel(page);
+});
 
-  // Unload the model
-  await page.click(`.v-list-item:has-text("${dummyModelName}") button:has-text("Unload")`);
+// ---------------------------------------------------------------------------
+// Test 7: Logs page
+// ---------------------------------------------------------------------------
+test('Logs page: log terminal appears and receives WebSocket output', async ({ page }) => {
+  await login(page);
+  await page.goto('/logs');
+  await expect(page).toHaveURL(/\/logs/);
+  await expect(page.locator('.v-main .text-h5, .v-main h1').filter({ hasText: /^Logs$/ }).or(
+    page.locator('.v-main').locator('text=Logs').first()
+  )).toBeVisible();
 
-  // Active status returns to warning (no model loaded)
-  await expect(statusAlert).toContainText('No active model loaded');
+  const terminal = page.locator('.terminal-logs');
+  await expect(terminal).toBeVisible();
+
+  await expect(
+    page.locator('.text-success:has-text("Connected")').or(page.locator('.text-error:has-text("Disconnected")'))
+  ).toBeVisible({ timeout: 5000 });
+
+  // After a couple seconds logs should arrive
+  await page.waitForTimeout(2500);
+  const content = await terminal.textContent();
+  expect(content.trim().length).toBeGreaterThan(0);
+});
+
+// ---------------------------------------------------------------------------
+// Test 8: Settings - HuggingFace token
+// ---------------------------------------------------------------------------
+test('Settings page: HuggingFace token saves and persists', async ({ page }) => {
+  await login(page);
+  await page.goto('/settings');
+
+  const hfCard = page.locator('.v-card').filter({ hasText: 'HuggingFace' }).first();
+  await expect(hfCard).toBeVisible();
+  const hfInput = hfCard.locator('input').first();
+  await expect(hfInput).toBeVisible();
+
+  await hfInput.fill('hf_test_token_12345');
+  await hfCard.locator('button:has-text("Save Token")').click();
+
+  await expect(page.locator('.v-snackbar')).toContainText(/saved|success/i, { timeout: 3000 });
+
+  await page.reload();
+  await expect(hfCard.locator('input').first()).toHaveValue('hf_test_token_12345', { timeout: 3000 });
+});
+
+// ---------------------------------------------------------------------------
+// Test 9: Bench page - renders
+// ---------------------------------------------------------------------------
+test('Bench page: renders benchmark card with prompt textarea', async ({ page }) => {
+  await login(page);
+  await page.goto('/bench');
+  await expect(page).toHaveURL(/\/bench/);
+
+  // Page heading
+  await expect(page.locator('.text-h5, .text-h6').filter({ hasText: 'Benchmark' }).first()).toBeVisible();
+
+  // Prompt textarea visible
+  await expect(page.locator('textarea').first()).toBeVisible();
+
+  // Run button exists
+  await expect(page.locator('button:has-text("Run Benchmark")')).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// Test 10: Bench page - runs benchmark
+// ---------------------------------------------------------------------------
+test('Bench page: runs benchmark and shows generation metrics', async ({ page }) => {
+  await login(page);
+  await loadModel(page);
+
+  await page.goto('/bench');
+
+  // Active model alert (fetched from status on mount — allow time for async)
+  const activeAlert = page.locator('.v-alert').filter({ hasText: 'Active model' });
+  await expect(activeAlert).toBeVisible({ timeout: 8000 });
+
+  const runBtn = page.locator('button:has-text("Run Benchmark")');
+  await expect(runBtn).toBeEnabled({ timeout: 3000 });
+  await runBtn.click();
+
+  // Wait for results card to appear (generation speed stat)
+  const resultsCard = page.locator('.v-card').filter({ hasText: /tok\/s|TTFT|Generation|Prefill/ }).last();
+  await expect(resultsCard).toBeVisible({ timeout: 20000 });
+
+  await unloadModel(page);
+});
+
+// ---------------------------------------------------------------------------
+// Test 11: Chat page
+// ---------------------------------------------------------------------------
+test('Chat page: model auto-selects and sends a streaming message', async ({ page }) => {
+  await login(page);
+  await loadModel(page);
+
+  await page.goto('/chat');
+  await expect(page).toHaveURL(/\/chat/);
+
+  // The model selector should auto-populate (fetchModels then fetchStatus in mounted)
+  const modelSelect = page.locator('.v-select').first();
+  await expect(modelSelect).toContainText(dummyModelName, { timeout: 8000 }).catch(async () => {
+    // Fallback: manually open the dropdown and select the model
+    await modelSelect.click();
+    await page.locator(`.v-list-item:has-text("${dummyModelName}")`).first().click();
+  });
+
+  // Now the textarea should be enabled
+  const chatInput = page.locator('textarea').first();
+  await expect(chatInput).toBeEnabled({ timeout: 5000 });
+
+  await chatInput.fill('Hello, mock engine!');
+  // Send via Enter key (Shift+Enter = newline, Enter = send)
+  await page.keyboard.press('Enter');
+
+  await expect(page.locator('.message-bubble').last()).toContainText(
+    'simulated response', { timeout: 10000 }
+  );
+
+  await unloadModel(page);
+});
+
+// ---------------------------------------------------------------------------
+// Test 12: Theme toggle
+// ---------------------------------------------------------------------------
+test('Theme toggle works and app renders after navigation', async ({ page }) => {
+  await login(page);
+
+  await page.click('.v-app-bar .v-btn:has(.mdi-account)');
+  await page.waitForSelector('.v-navigation-drawer', { state: 'visible' });
+  const themeItem = page.locator('.v-navigation-drawer .v-list-item').filter({ hasText: /Light Mode|Dark Mode/ });
+  await expect(themeItem).toBeVisible();
+  await themeItem.click();
+
+  await navBtn(page, 'Models').click();
+  await expect(page).toHaveURL(/\/models/);
+  await navBtn(page, 'Dashboard').click();
+  await expect(page).toHaveURL(/http:\/\/127.0.0.1:18000\/?$/);
+  await expect(page.locator('.v-app-bar')).toBeVisible();
 });

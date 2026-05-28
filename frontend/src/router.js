@@ -3,6 +3,10 @@ import Dashboard from './views/Dashboard.vue';
 import Login from './views/Login.vue';
 import Setup from './views/Setup.vue';
 import Settings from './views/Settings.vue';
+import Models from './views/Models.vue';
+import Logs from './views/Logs.vue';
+import Bench from './views/Bench.vue';
+import Chat from './views/Chat.vue';
 
 const routes = [
   {
@@ -24,6 +28,26 @@ const routes = [
     path: '/settings',
     name: 'Settings',
     component: Settings,
+  },
+  {
+    path: '/models',
+    name: 'Models',
+    component: Models,
+  },
+  {
+    path: '/logs',
+    name: 'Logs',
+    component: Logs,
+  },
+  {
+    path: '/bench',
+    name: 'Bench',
+    component: Bench,
+  },
+  {
+    path: '/chat',
+    name: 'Chat',
+    component: Chat,
   },
 ];
 

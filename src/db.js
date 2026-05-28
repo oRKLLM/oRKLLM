@@ -55,11 +55,7 @@ try {
   }
 }
 
-console.log(`[Database] Initializing SQLite database at: ${DB_FILE}`);
-const db = new DatabaseSyncClass(DB_FILE);
-
-// Initialize DB schema
-db.exec(`
+const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS auth (
     username TEXT PRIMARY KEY,
     hash TEXT NOT NULL,
@@ -67,7 +63,7 @@ db.exec(`
   );
 
   CREATE TABLE IF NOT EXISTS stats (
-    type TEXT PRIMARY KEY, -- 'session' or 'all_time'
+    type TEXT PRIMARY KEY,
     total_requests INTEGER DEFAULT 0,
     total_prefill_tokens INTEGER DEFAULT 0,
     total_generated_tokens INTEGER DEFAULT 0,
@@ -84,21 +80,41 @@ db.exec(`
     model_id TEXT PRIMARY KEY,
     settings TEXT NOT NULL DEFAULT '{}'
   );
-`);
+`;
 
-// Insert default stats records
-db.exec(`
-  INSERT OR IGNORE INTO stats (type) VALUES ('session');
-  INSERT OR IGNORE INTO stats (type) VALUES ('all_time');
-`);
+function initDb(dbInstance) {
+  dbInstance.exec(SCHEMA_SQL);
+  dbInstance.exec(`
+    INSERT OR IGNORE INTO stats (type) VALUES ('session');
+    INSERT OR IGNORE INTO stats (type) VALUES ('all_time');
+  `);
+  return dbInstance;
+}
+
+console.log(`[Database] Initializing SQLite database at: ${DB_FILE}`);
+let db = initDb(new DatabaseSyncClass(DB_FILE));
+
+// SQLITE_READONLY_DBMOVED (errcode 1032): the DB file was replaced while open
+// (e.g. test isolation deletes and recreates it). Reconnect transparently.
+function withReconnect(fn) {
+  try {
+    return fn(db);
+  } catch (e) {
+    if (e.errcode === 1032) {
+      console.log('[Database] DB file replaced, reconnecting...');
+      db = initDb(new DatabaseSyncClass(DB_FILE));
+      return fn(db);
+    }
+    throw e;
+  }
+}
 
 /**
  * Retrieve credentials
  */
 export function dbGetCredentials() {
   try {
-    const row = db.prepare('SELECT username, hash, salt FROM auth LIMIT 1').get();
-    return row || null;
+    return withReconnect(d => d.prepare('SELECT username, hash, salt FROM auth LIMIT 1').get()) || null;
   } catch (e) {
     console.error('[Database] getCredentials error:', e);
     return null;
@@ -109,9 +125,10 @@ export function dbGetCredentials() {
  * Save credentials
  */
 export function dbSaveCredentials(username, hash, salt) {
-  db.exec('DELETE FROM auth'); // Clear existing auth
-  const stmt = db.prepare('INSERT INTO auth (username, hash, salt) VALUES (?, ?, ?)');
-  stmt.run(username, hash, salt);
+  withReconnect(d => {
+    d.exec('DELETE FROM auth');
+    d.prepare('INSERT INTO auth (username, hash, salt) VALUES (?, ?, ?)').run(username, hash, salt);
+  });
   return true;
 }
 
@@ -120,7 +137,7 @@ export function dbSaveCredentials(username, hash, salt) {
  */
 export function dbGetStats(type) {
   try {
-    const row = db.prepare('SELECT total_requests, total_prefill_tokens, total_generated_tokens, total_prefill_time_ms, total_generate_time_ms FROM stats WHERE type = ?').get(type);
+    const row = withReconnect(d => d.prepare('SELECT total_requests, total_prefill_tokens, total_generated_tokens, total_prefill_time_ms, total_generate_time_ms FROM stats WHERE type = ?').get(type));
     if (!row) return null;
     return {
       totalRequests: row.total_requests,
@@ -140,29 +157,10 @@ export function dbGetStats(type) {
  */
 export function dbRecordRequest(prefillTokens, genTokens, prefillTimeMs, genTimeMs) {
   try {
-    // Update session
-    const updateSession = db.prepare(`
-      UPDATE stats SET
-        total_requests = total_requests + 1,
-        total_prefill_tokens = total_prefill_tokens + ?,
-        total_generated_tokens = total_generated_tokens + ?,
-        total_prefill_time_ms = total_prefill_time_ms + ?,
-        total_generate_time_ms = total_generate_time_ms + ?
-      WHERE type = 'session'
-    `);
-    updateSession.run(prefillTokens, genTokens, prefillTimeMs, genTimeMs);
-
-    // Update all_time
-    const updateAllTime = db.prepare(`
-      UPDATE stats SET
-        total_requests = total_requests + 1,
-        total_prefill_tokens = total_prefill_tokens + ?,
-        total_generated_tokens = total_generated_tokens + ?,
-        total_prefill_time_ms = total_prefill_time_ms + ?,
-        total_generate_time_ms = total_generate_time_ms + ?
-      WHERE type = 'all_time'
-    `);
-    updateAllTime.run(prefillTokens, genTokens, prefillTimeMs, genTimeMs);
+    withReconnect(d => {
+      d.prepare(`UPDATE stats SET total_requests=total_requests+1, total_prefill_tokens=total_prefill_tokens+?, total_generated_tokens=total_generated_tokens+?, total_prefill_time_ms=total_prefill_time_ms+?, total_generate_time_ms=total_generate_time_ms+? WHERE type='session'`).run(prefillTokens, genTokens, prefillTimeMs, genTimeMs);
+      d.prepare(`UPDATE stats SET total_requests=total_requests+1, total_prefill_tokens=total_prefill_tokens+?, total_generated_tokens=total_generated_tokens+?, total_prefill_time_ms=total_prefill_time_ms+?, total_generate_time_ms=total_generate_time_ms+? WHERE type='all_time'`).run(prefillTokens, genTokens, prefillTimeMs, genTimeMs);
+    });
   } catch (e) {
     console.error('[Database] recordRequest error:', e);
   }
@@ -173,16 +171,7 @@ export function dbRecordRequest(prefillTokens, genTokens, prefillTimeMs, genTime
  */
 export function dbClearStats(type) {
   try {
-    const stmt = db.prepare(`
-      UPDATE stats SET
-        total_requests = 0,
-        total_prefill_tokens = 0,
-        total_generated_tokens = 0,
-        total_prefill_time_ms = 0.0,
-        total_generate_time_ms = 0.0
-      WHERE type = ?
-    `);
-    stmt.run(type);
+    withReconnect(d => d.prepare(`UPDATE stats SET total_requests=0, total_prefill_tokens=0, total_generated_tokens=0, total_prefill_time_ms=0.0, total_generate_time_ms=0.0 WHERE type=?`).run(type));
     return true;
   } catch (e) {
     console.error('[Database] clearStats error:', e);
@@ -190,12 +179,9 @@ export function dbClearStats(type) {
   }
 }
 
-/**
- * Get setting value
- */
 export function dbGetSetting(key) {
   try {
-    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+    const row = withReconnect(d => d.prepare('SELECT value FROM settings WHERE key = ?').get(key));
     return row ? row.value : null;
   } catch (e) {
     console.error('[Database] getSetting error:', e);
@@ -203,13 +189,9 @@ export function dbGetSetting(key) {
   }
 }
 
-/**
- * Set setting value
- */
 export function dbSetSetting(key, value) {
   try {
-    const stmt = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
-    stmt.run(key, String(value));
+    withReconnect(d => d.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, String(value)));
     return true;
   } catch (e) {
     console.error('[Database] setSetting error:', e);
@@ -217,12 +199,9 @@ export function dbSetSetting(key, value) {
   }
 }
 
-/**
- * Get per-model settings (returns parsed object or empty object)
- */
 export function dbGetModelSettings(modelId) {
   try {
-    const row = db.prepare('SELECT settings FROM model_settings WHERE model_id = ?').get(modelId);
+    const row = withReconnect(d => d.prepare('SELECT settings FROM model_settings WHERE model_id = ?').get(modelId));
     return row ? JSON.parse(row.settings) : {};
   } catch (e) {
     console.error('[Database] getModelSettings error:', e);
@@ -230,13 +209,9 @@ export function dbGetModelSettings(modelId) {
   }
 }
 
-/**
- * Save per-model settings
- */
 export function dbSetModelSettings(modelId, settings) {
   try {
-    const stmt = db.prepare('INSERT OR REPLACE INTO model_settings (model_id, settings) VALUES (?, ?)');
-    stmt.run(modelId, JSON.stringify(settings));
+    withReconnect(d => d.prepare('INSERT OR REPLACE INTO model_settings (model_id, settings) VALUES (?, ?)').run(modelId, JSON.stringify(settings)));
     return true;
   } catch (e) {
     console.error('[Database] setModelSettings error:', e);
@@ -249,10 +224,18 @@ export function dbSetModelSettings(modelId, settings) {
  */
 export function dbDeleteModelSettings(modelId) {
   try {
-    db.prepare('DELETE FROM model_settings WHERE model_id = ?').run(modelId);
+    withReconnect(d => d.prepare('DELETE FROM model_settings WHERE model_id = ?').run(modelId));
     return true;
   } catch (e) {
     console.error('[Database] deleteModelSettings error:', e);
     return false;
   }
+}
+
+// Only used in test mode (ORKLLM_MOCK=1) to reset state between test runs
+export function dbResetForTesting() {
+  withReconnect(d => {
+    d.exec('DELETE FROM auth; DELETE FROM settings; DELETE FROM model_settings;');
+    d.exec(`INSERT OR IGNORE INTO stats (type) VALUES ('session'); INSERT OR IGNORE INTO stats (type) VALUES ('all_time');`);
+  });
 }
