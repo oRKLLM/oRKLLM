@@ -1,6 +1,6 @@
 {
   "name": "orkllm",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "OpenAI-compatible local LLM inference server and admin dashboard for Rockchip NPU",
   "main": "src/server.js",
   "type": "module",

@@ -1,3 +1,15 @@
+# [1.1.0](https://github.com/mafischer/oRKLLM/compare/v1.0.1...v1.1.0) (2026-05-28)
+
+
+### Bug Fixes
+
+* **ui:** make version chip visible against navbar gradient ([81f1a26](https://github.com/mafischer/oRKLLM/commit/81f1a26295f7e09009d79c1cf8879f53e60393ed))
+
+
+### Features
+
+* **ui:** light/dark theme toggle in user menu, persisted to localStorage ([f2cc175](https://github.com/mafischer/oRKLLM/commit/f2cc175230608b6ffcf39335fcd1c36f9a1c74dc))
+
 ## [1.0.1](https://github.com/mafischer/oRKLLM/compare/v1.0.0...v1.0.1) (2026-05-28)
 
 
