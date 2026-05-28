@@ -361,28 +361,67 @@ export default async function adminRoutes(fastify, options) {
   // GET /api/admin/hf/collection?url=<collection_url>
   fastify.get('/hf/collection', async (request, reply) => {
     const { url = '' } = request.query;
-    // Parse org/slug from URLs like:
-    //   https://huggingface.co/collections/Qwen/qwen3
-    //   https://huggingface.co/collections/Qwen/qwen3-6787119e1f61f98e08fd3b4b
-    const match = url.match(/huggingface\.co\/collections\/([^/]+)\/([^/?#]+)/);
-    if (!match) return reply.status(400).send({ error: 'Invalid collection URL. Expected: https://huggingface.co/collections/<org>/<slug>' });
-    const [, org, slug] = match;
+    // Accept full URLs: https://huggingface.co/collections/Qwen/qwen3-6787119e1f61f98e08fd3b4b
+    // or short URLs:   https://huggingface.co/collections/Qwen/qwen3  (no hash)
+    // Also accept bare paths: Qwen/qwen3
+    let org, slug;
+    const urlMatch = url.match(/(?:huggingface\.co\/collections\/)?([^/\s]+)\/([^/?#\s]+)/);
+    if (!urlMatch) return reply.status(400).send({ error: 'Invalid collection URL. Expected: https://huggingface.co/collections/<org>/<slug>' });
+    [, org, slug] = urlMatch;
+
     const hfToken = dbGetSetting('hf_token') ?? '';
     const headers = { 'User-Agent': 'oRKLLM/1.0' };
     if (hfToken) headers['Authorization'] = `Bearer ${hfToken}`;
+
+    async function fetchCollection(fullSlug) {
+      const res = await fetch(`https://huggingface.co/api/collections/${fullSlug}`, { headers });
+      if (!res.ok) return null;
+      return res.json();
+    }
+
+    async function resolveSlug() {
+      // Try the slug as-is first (works when the full hash slug is provided)
+      const direct = await fetchCollection(`${org}/${slug}`);
+      if (direct) return direct;
+
+      // Short slug: search owner's collections and find the closest match
+      const listRes = await fetch(`https://huggingface.co/api/collections?owner=${org}&limit=100`, { headers });
+      if (!listRes.ok) return null;
+      const list = await listRes.json();
+
+      // Match: slug starts with <org>/<short_slug> (exact name, ignoring the trailing hash)
+      const prefix = `${org}/${slug}`;
+      const candidates = (list ?? []).filter(c => {
+        const s = c.slug ?? '';
+        // Match if slug equals prefix or slug starts with prefix + '-' then a hex hash
+        return s === prefix || s.startsWith(prefix + '-');
+      });
+
+      // Prefer the shortest match (most exact name), then most downloads
+      candidates.sort((a, b) => {
+        const lenDiff = (a.slug?.length ?? 999) - (b.slug?.length ?? 999);
+        if (lenDiff !== 0) return lenDiff;
+        return (b.likes ?? 0) - (a.likes ?? 0);
+      });
+
+      if (!candidates.length) return null;
+      return fetchCollection(candidates[0].slug);
+    }
+
     try {
-      const res = await fetch(`https://huggingface.co/api/collections/${org}/${slug}`, { headers });
-      if (!res.ok) return reply.status(res.status).send({ error: `HuggingFace API error: ${res.status}` });
-      const col = await res.json();
+      const col = await resolveSlug();
+      if (!col) return reply.status(404).send({ error: `Collection not found: ${org}/${slug}` });
+
+      // Collection items have model data directly on the item object (not nested under item.item)
       const models = (col.items ?? [])
-        .filter(item => item.type === 'model')
+        .filter(item => item.type === 'model' || item.repoType === 'model')
         .map(item => ({
-          id: item.item?.id ?? item.item?.modelId ?? '',
-          downloads: item.item?.downloads ?? 0,
-          likes: item.item?.likes ?? 0,
-          tags: (item.item?.tags ?? []).slice(0, 8),
-          lastModified: item.item?.lastModified,
-          private: item.item?.private ?? false,
+          id: item.id ?? item.modelId ?? '',
+          downloads: item.downloads ?? 0,
+          likes: item.likes ?? 0,
+          tags: (item.tags ?? []).slice(0, 8),
+          lastModified: item.lastModified,
+          private: item.private ?? false,
         }))
         .filter(m => m.id);
       return { title: col.title ?? slug, description: col.description ?? '', models };
