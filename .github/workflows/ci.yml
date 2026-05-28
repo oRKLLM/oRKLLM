@@ -176,7 +176,6 @@ jobs:
 
     steps:
       - name: Update dynamic badges in Gist
-        if: secrets.GIST_TOKEN != ''
         env:
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
           GIST_ID: 1da454f93b1363fff7f67f731e579a2f
