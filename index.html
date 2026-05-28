@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>oRKLLM APT Repository</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 60px auto; padding: 0 24px; color: #e2e8f0; background: #0f172a; line-height: 1.6; }
+    h1 { font-size: 2rem; color: #a78bfa; margin-bottom: 4px; }
+    h2 { font-size: 1.1rem; color: #94a3b8; margin-top: 2rem; }
+    pre { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 16px; overflow-x: auto; font-size: 0.875rem; }
+    code { color: #7dd3fc; }
+    a { color: #a78bfa; }
+    .subtitle { color: #64748b; margin-top: 0; }
+    .badge { display: inline-block; background: #1e293b; border: 1px solid #334155; border-radius: 4px; padding: 2px 8px; font-size: 0.75rem; color: #94a3b8; margin-bottom: 1.5rem; }
+  </style>
+</head>
+<body>
+  <h1>oRKLLM</h1>
+  <p class="subtitle">OpenAI-compatible LLM inference for Rockchip NPU</p>
+  <span class="badge">APT Repository · Ubuntu / Armbian · arm64</span>
+
+  <h2>Install via APT</h2>
+  <pre><code># 1. Trust the signing key
+curl -fsSL https://mafischer.github.io/oRKLLM/orkllm.gpg \
+  | sudo gpg --dearmor -o /usr/share/keyrings/orkllm.gpg
+
+# 2. Add the repository
+echo "deb [arch=arm64 signed-by=/usr/share/keyrings/orkllm.gpg] \
+  https://mafischer.github.io/oRKLLM stable main" \
+  | sudo tee /etc/apt/sources.list.d/orkllm.list
+
+# 3. Install
+sudo apt update &amp;&amp; sudo apt install orkllm</code></pre>
+
+  <h2>Managing the service</h2>
+  <pre><code>sudo systemctl start orkllm      # Start
+sudo systemctl stop orkllm       # Stop
+sudo systemctl restart orkllm    # Restart
+journalctl -u orkllm -f          # Live logs</code></pre>
+
+  <h2>Links</h2>
+  <ul>
+    <li><a href="https://github.com/mafischer/oRKLLM">GitHub Repository</a></li>
+    <li><a href="https://github.com/mafischer/oRKLLM/releases">Releases</a></li>
+    <li><a href="orkllm.gpg">GPG Signing Key</a></li>
+  </ul>
+</body>
+</html>
