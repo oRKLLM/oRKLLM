@@ -68,8 +68,8 @@ jobs:
         if: always()
         run: |
           if [ -f /tmp/pw-results.json ]; then
-            PASSED=$(python3 -c "import json; d=json.load(open('/tmp/pw-results.json')); print(d.get('stats',{}).get('expected',0))")
-            TOTAL=$(python3  -c "import json; d=json.load(open('/tmp/pw-results.json')); print(d.get('stats',{}).get('total',0))")
+            PASSED=$(python3 -c "import json; d=json.load(open('/tmp/pw-results.json')); s=d.get('stats',{}); print(s.get('expected', s.get('passed', 0)))")
+            TOTAL=$(python3  -c "import json; d=json.load(open('/tmp/pw-results.json')); s=d.get('stats',{}); print(s.get('total', s.get('expected',0) + s.get('unexpected',0)))")
           else
             PASSED=0; TOTAL=0
           fi
