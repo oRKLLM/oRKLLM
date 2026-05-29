@@ -73,20 +73,24 @@ graph TD
 | `src/pool.js` | Single-active-model lock, auto-swap, idle timeout (configured via SQLite settings) |
 | `src/monitor.js` | Polls CPU, RAM, SoC Temp, NPU load; Rockchip-native on ARM64 Linux, simulated elsewhere |
 | `src/stats.js` | Records prefill/generation tokens and latencies in SQLite |
-| `src/db.js` | SQLite wrapper with `node:sqlite` / `better-sqlite3` fallback |
-| `src/config.js` | Env-driven settings; credentials hashed with PBKDF2-HMAC-SHA256 |
+| `src/db.js` | SQLite wrapper; tables: auth, users, auth_provider_config, audit_log, stats, settings, model_settings |
+| `src/config.js` | Env-driven settings; multi-user credential helpers; PBKDF2-HMAC-SHA256 |
+| `src/cache.js` | Tiered SSD prefix KV cache (hot/cold LRU), sliding context window trim |
 | `src/server.js` | Fastify bootstrap; mounts `/ws/metrics`, `/ws/logs`, static SPA, API routes |
-| `src/api/routes.js` | `/v1/chat/completions` (SSE streaming), `/v1/models`, `/v1/embeddings` |
-| `src/admin/routes.js` | Auth, setup, login/logout, stats, settings, HF search & collection proxy |
+| `src/api/routes.js` | `/v1/chat/completions` (SSE streaming + prefix cache), `/v1/models`, `/v1/embeddings` |
+| `src/admin/routes.js` | Auth (local + OIDC + SAML), user CRUD, RBAC, HF proxy, audit log, settings |
 | `src/mock_engine.js` | JS mock engine streaming realistic fake tokens (for macOS dev) |
-| `frontend/src/components/AppNav.vue` | Shared navbar with Dashboard/Models/Settings/Logs/Bench/Chat buttons |
+| `frontend/src/components/AppNav.vue` | Shared navbar; Site Management item for admins |
 | `frontend/src/views/Dashboard.vue` | Serving stats, hardware telemetry, inference playground |
 | `frontend/src/views/Models.vue` | Model manager + HF search/collection browser/downloader |
-| `frontend/src/views/Settings.vue` | Global settings, HF token, password change |
+| `frontend/src/views/Settings.vue` | Global settings, HF token, prefix cache config |
 | `frontend/src/views/Logs.vue` | Full-page live log terminal (WebSocket) |
 | `frontend/src/views/Bench.vue` | Inference benchmark (TTFT, tok/s) |
 | `frontend/src/views/Chat.vue` | Full streaming chat against OpenAI-compatible API |
-| `e2e/orkllm.spec.js` | Playwright end-to-end test suite (21 tests) |
+| `frontend/src/views/SiteManagement.vue` | Admin-only: user CRUD, OIDC/SAML config, audit log |
+| `frontend/src/views/Login.vue` | Login page; shows SSO button when OIDC/SAML configured |
+| `e2e/orkllm.spec.js` | Playwright E2E suite (21 tests — core flow) |
+| `e2e/rbac.spec.js` | Playwright E2E suite (31 tests — RBAC, auth provider, Keycloak integration) |
 
 ---
 
@@ -140,6 +144,7 @@ oRKLLM/
 └── e2e/
     ├── global-setup.js     # Resets server state between test runs
     ├── orkllm.spec.js      # 12 feature tests
+    ├── rbac.spec.js        # RBAC, auth provider, Keycloak integration tests
     └── regression.spec.js  # UI regression tests
 ```
 
@@ -193,7 +198,43 @@ Tests cover:
 - **Dashboard** — telemetry gauges visible, navbar does not overlap content
 - **Model lifecycle** — scan, load, mock chat stream with prefill/rate metrics
 - **Log terminal** — real-time WebSocket log capture
-- **Model unload** — status returns to "No active model loaded"
+- **RBAC** — Site Management visible for admin, user/provider CRUD, SSO button on login
+- **Keycloak OIDC/SAML** — config tests (skipped unless `ORKLLM_TEST_OIDC_CLIENT_SECRET` set)
+
+Identity provider credentials are read from environment variables. Set them in `.env` locally
+(gitignored) or as GitHub Actions secrets. See `.env` for variable names.
+
+---
+
+## 7a. Authentication & RBAC
+
+### Architecture
+
+- **Two roles**: `admin` (full access) and `user` (everything except site management)
+- **Session cookie**: `userId|username|role|expires|HMAC-SHA256` — backward-compatible with legacy 3-part format
+- **Auto-migration**: on first start after upgrade, the single-user `auth` table is migrated to the multi-user `users` table
+- **Local auth**: always available; admin can disable it once federated auth is working
+
+### OIDC Flow (e.g. Google, Keycloak)
+1. Admin configures issuer URL, client ID/secret, redirect URI in Site Management → Auth Providers
+2. Login page shows "Sign in with [Provider]" button
+3. `/api/admin/oidc/authorize` → redirects to IdP with `state` + `nonce`
+4. `/api/admin/oidc/callback` → exchanges code for tokens → upserts user → issues session cookie
+5. Group → role mapping: OIDC `groups` claim values mapped to `admin`/`user`
+
+### SAML Flow (e.g. Keycloak SAML, Azure AD)
+1. Admin pastes IdP metadata XML or URL; SP metadata available at `/api/admin/saml/metadata`
+2. `/api/admin/saml/login` → creates AuthnRequest → redirects to IdP SSO URL
+3. `/api/admin/saml/acs` (POST) → validates Response → upserts user → session cookie
+4. Attribute mapping: configurable paths for username, email, groups attributes
+
+### Keycloak Configuration
+- **Realm**: `https://auth-lab.fischerapps.com/realms/master`
+- **OIDC client**: `orkllm-oidc`
+- **SAML client**: `orkllm-saml`
+- **Group attribute**: `groups` — add users to `orkllm-admins` for admin role
+- **OIDC discovery**: `https://auth-lab.fischerapps.com/realms/master/.well-known/openid-configuration`
+- **SAML metadata**: `https://auth-lab.fischerapps.com/realms/master/protocol/saml/descriptor`
 
 ---
 
@@ -344,6 +385,9 @@ echo "==> Done! Admin console: http://10.6.0.14:8000/admin"
 | Phase 5: Admin Dashboard UI | ✅ Done | Vue 3 + Vuetify 3 SPA with Chat Arena, telemetry gauges, log terminal |
 | Phase 6: E2E Tests | ✅ Done | Playwright suite covering full user journey in mock mode |
 | Phase 7: Board Deployment | ✅ Done | Deployed to NanoPi M5 at `10.6.0.14`, confirmed listening on port 8000 |
+| Phase 8: Auth & RBAC | ✅ Done | OIDC/SAML federated auth, multi-user RBAC, Site Management UI, Keycloak integration |
+| Phase 9: Prefix Cache | ✅ Done | Tiered SSD KV cache, sliding context window, cache stats in Settings |
+| Phase 10: CI/CD | ✅ Done | GitHub Actions: parallel CI + Release, Trivy scan, dynamic shields.io badges |
 
 ---
 
