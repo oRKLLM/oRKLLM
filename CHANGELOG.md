@@ -1,3 +1,10 @@
+## [0.5.1](https://github.com/mafischer/oRKLLM/compare/v0.5.0...v0.5.1) (2026-05-29)
+
+
+### Bug Fixes
+
+* **auth:** PKCE support for public OIDC clients (no client secret) ([a76b945](https://github.com/mafischer/oRKLLM/commit/a76b945204356b3f0564691b642fdca3698bea67))
+
 # [0.5.0](https://github.com/mafischer/oRKLLM/compare/v0.4.0...v0.5.0) (2026-05-29)
 
 
