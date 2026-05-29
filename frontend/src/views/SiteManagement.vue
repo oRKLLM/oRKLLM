@@ -320,15 +320,19 @@
                 <v-col cols="12" sm="6">
                   <v-text-field
                     v-model="oidcForm.clientSecret"
-                    label="Client Secret"
+                    label="Client Secret (leave blank for public/PKCE clients)"
                     :type="showOidcSecret ? 'text' : 'password'"
                     :append-inner-icon="showOidcSecret ? 'mdi-eye-off' : 'mdi-eye'"
                     @click:append-inner="showOidcSecret = !showOidcSecret"
                     variant="outlined"
                     density="compact"
-                    class="mb-3"
+                    class="mb-1"
                     hide-details
+                    persistent-hint
                   ></v-text-field>
+                  <div class="text-caption text-grey mb-3">
+                    Leave blank for Keycloak public clients. PKCE will be used automatically.
+                  </div>
                 </v-col>
                 <v-col cols="12">
                   <v-text-field

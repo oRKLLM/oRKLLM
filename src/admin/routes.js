@@ -509,11 +509,22 @@ export default async function adminRoutes(fastify, options) {
     if (cfg?.providerType !== 'oidc') return reply.status(400).send({ error: 'OIDC not configured' });
     const c = cfg.config;
 
-    // Build authorization URL manually (avoids needing openid-client's full issuer discovery at this stage)
     const state = crypto.randomBytes(16).toString('hex');
     const nonce = crypto.randomBytes(16).toString('hex');
+
+    // PKCE for public clients (no client secret)
+    // code_verifier: high-entropy random string; code_challenge: BASE64URL(SHA256(verifier))
+    const isPublicClient = !c.clientSecret;
+    let codeVerifier = null;
+    let codeChallenge = null;
+    if (isPublicClient) {
+      codeVerifier = crypto.randomBytes(32).toString('base64url');
+      codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
+      reply.setCookie('oidc_cv', codeVerifier, { path: '/', httpOnly: true, maxAge: 600 });
+    }
+
     reply.setCookie('oidc_state', state, { path: '/', httpOnly: true, maxAge: 600 });
-    reply.setCookie('oidc_nonce', nonce, { path: '/', httpOnly: true, maxAge: 600 });
+    reply.setCookie('oidc_nonce', nonce,  { path: '/', httpOnly: true, maxAge: 600 });
 
     const params = new URLSearchParams({
       response_type: 'code',
@@ -523,8 +534,21 @@ export default async function adminRoutes(fastify, options) {
       state,
       nonce,
     });
-    const authUrl = `${c.issuer.replace(/\/$/, '')}/protocol/openid-connect/auth?${params}`;
-    return reply.redirect(authUrl);
+    if (isPublicClient) {
+      params.set('code_challenge', codeChallenge);
+      params.set('code_challenge_method', 'S256');
+    }
+
+    // Use openid-client discovery to find the correct authorization endpoint
+    try {
+      const { Issuer } = await import('openid-client');
+      const issuer = await Issuer.discover(c.issuer);
+      return reply.redirect(`${issuer.authorization_endpoint}?${params}`);
+    } catch {
+      // Fallback to Keycloak convention if discovery fails
+      const authUrl = `${c.issuer.replace(/\/$/, '')}/protocol/openid-connect/auth?${params}`;
+      return reply.redirect(authUrl);
+    }
   });
 
   fastify.get('/oidc/callback', async (request, reply) => {
@@ -538,17 +562,30 @@ export default async function adminRoutes(fastify, options) {
     const storedState = request.cookies.oidc_state;
     if (!storedState || storedState !== state) return reply.status(400).send({ error: 'Invalid state parameter' });
 
+    const isPublicClient = !c.clientSecret;
+    const codeVerifier = request.cookies.oidc_cv;
+
     // Exchange code for tokens
     let tokenData;
     try {
       const { Issuer } = await import('openid-client');
       const issuer = await Issuer.discover(c.issuer);
-      const client = new issuer.Client({ client_id: c.clientId, client_secret: c.clientSecret });
-      const tokenSet = await client.callback(c.redirectUri, { code, state }, { state, nonce: request.cookies.oidc_nonce });
+
+      // Public client: no secret, use PKCE code_verifier
+      // Confidential client: use client_secret
+      const clientConfig = isPublicClient
+        ? { client_id: c.clientId, token_endpoint_auth_method: 'none' }
+        : { client_id: c.clientId, client_secret: c.clientSecret };
+
+      const client = new issuer.Client(clientConfig);
+      const checks = { state, nonce: request.cookies.oidc_nonce };
+      if (isPublicClient && codeVerifier) checks.code_verifier = codeVerifier;
+
+      const tokenSet = await client.callback(c.redirectUri, { code, state }, checks);
       tokenData = tokenSet.claims();
     } catch (e) {
       console.error('[OIDC] Token exchange failed:', e.message);
-      return reply.redirect(`/?oidc_error=${encodeURIComponent('Authentication failed')}`);
+      return reply.redirect(`/?oidc_error=${encodeURIComponent('Authentication failed: ' + e.message)}`);
     }
 
     const usernameClaim = c.usernameClaim || 'preferred_username';
@@ -578,7 +615,7 @@ export default async function adminRoutes(fastify, options) {
 
     issueSessionCookie(reply, { id: user.id, username: user.username, role: user.role });
     logAudit({ user: { id: user.id, username: user.username }, ip: request.ip }, 'oidc_login', null);
-    reply.clearCookie('oidc_state').clearCookie('oidc_nonce');
+    reply.clearCookie('oidc_state').clearCookie('oidc_nonce').clearCookie('oidc_cv');
     return reply.redirect('/');
   });
 
