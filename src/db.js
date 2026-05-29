@@ -62,6 +62,36 @@ const SCHEMA_SQL = `
     salt TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT UNIQUE NOT NULL,
+    email TEXT,
+    role TEXT NOT NULL DEFAULT 'user',
+    auth_provider TEXT NOT NULL DEFAULT 'local',
+    auth_subject TEXT,
+    password_hash TEXT,
+    password_salt TEXT,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    last_login_at INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS auth_provider_config (
+    id INTEGER PRIMARY KEY,
+    provider_type TEXT,
+    config TEXT NOT NULL DEFAULT '{}'
+  );
+
+  CREATE TABLE IF NOT EXISTS audit_log (
+    id TEXT PRIMARY KEY,
+    user_id TEXT,
+    username TEXT,
+    action TEXT NOT NULL,
+    resource TEXT,
+    ip_address TEXT,
+    timestamp INTEGER NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS stats (
     type TEXT PRIMARY KEY,
     total_requests INTEGER DEFAULT 0,
@@ -235,7 +265,84 @@ export function dbDeleteModelSettings(modelId) {
 // Only used in test mode (ORKLLM_MOCK=1) to reset state between test runs
 export function dbResetForTesting() {
   withReconnect(d => {
-    d.exec('DELETE FROM auth; DELETE FROM settings; DELETE FROM model_settings;');
+    d.exec('DELETE FROM auth; DELETE FROM users; DELETE FROM auth_provider_config; DELETE FROM audit_log; DELETE FROM settings; DELETE FROM model_settings;');
     d.exec(`INSERT OR IGNORE INTO stats (type) VALUES ('session'); INSERT OR IGNORE INTO stats (type) VALUES ('all_time');`);
   });
+}
+
+// ── Users ──────────────────────────────────────────────────────────────────
+
+export function dbCreateUser({ id, username, email, role, authProvider, authSubject, passwordHash, passwordSalt }) {
+  withReconnect(d => d.prepare(
+    `INSERT INTO users (id, username, email, role, auth_provider, auth_subject, password_hash, password_salt, is_active, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`
+  ).run(id, username, email ?? null, role, authProvider, authSubject ?? null, passwordHash ?? null, passwordSalt ?? null, Date.now()));
+}
+
+export function dbGetUserById(id) {
+  return withReconnect(d => d.prepare('SELECT * FROM users WHERE id = ?').get(id)) || null;
+}
+
+export function dbGetUserByUsername(username) {
+  return withReconnect(d => d.prepare('SELECT * FROM users WHERE username = ? AND is_active = 1').get(username)) || null;
+}
+
+export function dbGetUserBySubject(authProvider, authSubject) {
+  return withReconnect(d => d.prepare('SELECT * FROM users WHERE auth_provider = ? AND auth_subject = ?').get(authProvider, authSubject)) || null;
+}
+
+export function dbListUsers() {
+  return withReconnect(d => d.prepare('SELECT id, username, email, role, auth_provider, is_active, created_at, last_login_at FROM users ORDER BY created_at ASC').all());
+}
+
+export function dbUpdateUser(id, fields) {
+  const allowed = ['role', 'is_active', 'email', 'last_login_at', 'password_hash', 'password_salt'];
+  const keys = Object.keys(fields).filter(k => allowed.includes(k));
+  if (!keys.length) return;
+  const sets = keys.map(k => `${k} = ?`).join(', ');
+  const vals = keys.map(k => fields[k]);
+  withReconnect(d => d.prepare(`UPDATE users SET ${sets} WHERE id = ?`).run(...vals, id));
+}
+
+export function dbUsersEmpty() {
+  const row = withReconnect(d => d.prepare('SELECT COUNT(*) as n FROM users').get());
+  return (row?.n ?? 0) === 0;
+}
+
+// ── Auth provider config ───────────────────────────────────────────────────
+
+export function dbGetAuthProviderConfig() {
+  const row = withReconnect(d => d.prepare('SELECT provider_type, config FROM auth_provider_config WHERE id = 1').get());
+  if (!row) return null;
+  return { providerType: row.provider_type, config: JSON.parse(row.config) };
+}
+
+export function dbSetAuthProviderConfig(providerType, config) {
+  withReconnect(d => d.prepare(
+    `INSERT INTO auth_provider_config (id, provider_type, config) VALUES (1, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET provider_type = excluded.provider_type, config = excluded.config`
+  ).run(providerType, JSON.stringify(config)));
+}
+
+export function dbClearAuthProviderConfig() {
+  withReconnect(d => d.prepare('DELETE FROM auth_provider_config WHERE id = 1').run());
+}
+
+// ── Audit log ──────────────────────────────────────────────────────────────
+
+export function dbLogAudit({ id, userId, username, action, resource, ipAddress }) {
+  try {
+    withReconnect(d => d.prepare(
+      `INSERT INTO audit_log (id, user_id, username, action, resource, ip_address, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, userId ?? null, username ?? null, action, resource ?? null, ipAddress ?? null, Date.now()));
+  } catch (e) {
+    console.error('[Database] audit log error:', e);
+  }
+}
+
+export function dbGetAuditLog(limit = 200) {
+  return withReconnect(d => d.prepare(
+    'SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ?'
+  ).all(limit));
 }

@@ -42,9 +42,26 @@
     <v-list density="compact" class="py-1">
       <v-list-item class="px-4 py-3">
         <div class="text-caption text-grey">Signed in as</div>
-        <div class="text-body-2 font-weight-bold">{{ username }}</div>
+        <div class="text-body-2 font-weight-bold">{{ user.username }}</div>
+        <div v-if="user.email" class="text-caption text-grey mt-1">{{ user.email }}</div>
+        <div v-if="user.authProvider && user.authProvider !== 'local'" class="mt-2">
+          <v-chip
+            size="x-small"
+            :color="user.authProvider === 'saml' ? 'teal' : 'primary'"
+            variant="tonal"
+          >
+            {{ user.authProvider.toUpperCase() }}
+          </v-chip>
+        </div>
       </v-list-item>
       <v-divider></v-divider>
+      <v-list-item
+        v-if="user.role === 'admin'"
+        prepend-icon="mdi-shield-account-outline"
+        title="Site Management"
+        @click="$router.push('/site-management'); drawerOpen = false"
+      ></v-list-item>
+      <v-divider v-if="user.role === 'admin'"></v-divider>
       <v-list-item
         :prepend-icon="isDark ? 'mdi-weather-sunny' : 'mdi-weather-night'"
         :title="isDark ? 'Light Mode' : 'Dark Mode'"
@@ -71,9 +88,9 @@ export default {
       type: String,
       default: ''
     },
-    username: {
-      type: String,
-      default: 'admin'
+    user: {
+      type: Object,
+      default: () => ({ username: 'admin', role: 'admin', authProvider: 'local' })
     },
     isDark: {
       type: Boolean,

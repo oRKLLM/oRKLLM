@@ -3,7 +3,7 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { dbGetCredentials, dbSaveCredentials } from './db.js';
+import { dbGetCredentials, dbSaveCredentials, dbGetUserByUsername, dbUpdateUser } from './db.js';
 
 dotenv.config();
 
@@ -47,14 +47,40 @@ export function saveCredentials(username, password) {
 
 /**
  * Validate username and password
- * @param {string} username 
- * @param {string} password 
- * @returns {boolean} true if valid
+ * Checks the multi-user table first, falls back to legacy auth table.
+ * @returns {{ valid: boolean, user: object|null }}
  */
 export function verifyCredentials(username, password) {
+  // Multi-user path
+  const user = dbGetUserByUsername(username);
+  if (user) {
+    if (user.auth_provider !== 'local') return { valid: false, user: null };
+    if (!user.password_hash || !user.password_salt) return { valid: false, user: null };
+    const hash = crypto.pbkdf2Sync(password, user.password_salt, 1000, 64, 'sha256').toString('hex');
+    return { valid: hash === user.password_hash, user: hash === user.password_hash ? user : null };
+  }
+
+  // Legacy single-user fallback
   const creds = getCredentials();
-  if (!creds) return false;
-  if (creds.username !== username) return false;
+  if (!creds) return { valid: false, user: null };
+  if (creds.username !== username) return { valid: false, user: null };
   const hash = crypto.pbkdf2Sync(password, creds.salt, 1000, 64, 'sha256').toString('hex');
-  return hash === creds.hash;
+  return { valid: hash === creds.hash, user: hash === creds.hash ? { username, role: 'admin', auth_provider: 'local', id: 'local-admin' } : null };
+}
+
+/**
+ * Hash a password for storage
+ */
+export function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha256').toString('hex');
+  return { hash, salt };
+}
+
+/**
+ * Verify a password against stored hash/salt
+ */
+export function checkPassword(password, hash, salt) {
+  const derived = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha256').toString('hex');
+  return derived === hash;
 }

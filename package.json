@@ -31,7 +31,10 @@
     "dotenv": "^16.4.5",
     "fastify": "^5.2.1",
     "node-addon-api": "^8.3.0",
-    "systeminformation": "^5.25.0"
+    "openid-client": "^6.8.4",
+    "samlify": "^2.13.1",
+    "systeminformation": "^5.25.0",
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.0",

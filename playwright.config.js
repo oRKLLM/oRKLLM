@@ -1,4 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
+import { config } from 'dotenv';
+
+// Load .env for local development (GitHub Actions passes secrets directly as env vars)
+config();
 
 export default defineConfig({
   testDir: './e2e',
@@ -20,7 +24,7 @@ export default defineConfig({
     },
   ],
   // Always start a fresh server on a dedicated test port so globalSetup's
-  // deletion of test_auth.json takes effect (no stale in-memory credentials).
+  // deletion of test_auth.db takes effect (no stale in-memory credentials).
   webServer: {
     command: 'node src/server.js',
     url: 'http://127.0.0.1:18000',

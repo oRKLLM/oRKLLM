@@ -62,6 +62,12 @@ jobs:
         env:
           CI: '1'
           PLAYWRIGHT_JSON_OUTPUT_NAME: /tmp/pw-results.json
+          ORKLLM_TEST_ADMIN_USER: ${{ secrets.ORKLLM_TEST_ADMIN_USER }}
+          ORKLLM_TEST_ADMIN_PASS: ${{ secrets.ORKLLM_TEST_ADMIN_PASS }}
+          ORKLLM_TEST_OIDC_ISSUER: ${{ secrets.ORKLLM_TEST_OIDC_ISSUER }}
+          ORKLLM_TEST_OIDC_CLIENT_ID: ${{ secrets.ORKLLM_TEST_OIDC_CLIENT_ID }}
+          ORKLLM_TEST_OIDC_CLIENT_SECRET: ${{ secrets.ORKLLM_TEST_OIDC_CLIENT_SECRET }}
+          ORKLLM_TEST_SAML_METADATA_URL: ${{ secrets.ORKLLM_TEST_SAML_METADATA_URL }}
 
       - name: Parse test results
         id: results

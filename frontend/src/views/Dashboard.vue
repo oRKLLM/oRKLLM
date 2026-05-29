@@ -1,7 +1,7 @@
 <template>
   <AppNav
     :app-version="appVersion"
-    :username="username"
+    :user="user"
     :is-dark="isDark"
     @toggle-theme="toggleTheme"
     @logout="logout"
@@ -333,7 +333,7 @@ export default {
   name: 'Dashboard',
   components: { AppNav },
   data: () => ({
-    username: 'admin',
+    user: { username: 'admin', role: 'admin', authProvider: 'local' },
     metrics: { cpu: 0, npu: 0, ram: 0, temp: 0 },
     models: [],
     status: { isLoaded: false, model: null, isMock: false },
@@ -410,7 +410,8 @@ export default {
       try {
         const res = await fetch('/api/admin/auth-status');
         const data = await res.json();
-        if (data.username) this.username = data.username;
+        if (data.user) this.user = data.user;
+        else if (data.username) this.user = { username: data.username, role: 'admin', authProvider: 'local' };
       } catch (e) {}
     },
     async fetchModels() {

@@ -8,7 +8,29 @@
           <p class="text-subtitle-1 text-grey-darken-1">Access your administration console</p>
         </div>
 
-        <v-form ref="form" v-model="valid" @submit.prevent="submitLogin">
+        <!-- Federated sign-in button -->
+        <template v-if="providerName">
+          <v-btn
+            color="primary"
+            variant="flat"
+            block
+            size="large"
+            prepend-icon="mdi-login-variant"
+            class="mb-4 font-weight-bold"
+            @click="signInWithProvider"
+          >
+            Sign in with {{ providerName }}
+          </v-btn>
+
+          <div v-if="!localAuthDisabled" class="d-flex align-center mb-4">
+            <v-divider></v-divider>
+            <span class="text-caption text-grey mx-3">or</span>
+            <v-divider></v-divider>
+          </div>
+        </template>
+
+        <!-- Local login form -->
+        <v-form v-if="!localAuthDisabled" ref="form" v-model="valid" @submit.prevent="submitLogin">
           <v-text-field
             v-model="username"
             label="Username"
@@ -67,8 +89,29 @@ export default {
     password: '',
     loading: false,
     errorMessage: '',
+    providerName: null,
+    localAuthDisabled: false,
+    oidcEnabled: false,
+    samlEnabled: false,
   }),
+  async mounted() {
+    try {
+      const res = await fetch('/api/admin/auth-status');
+      const data = await res.json();
+      this.oidcEnabled = data.oidcEnabled || false;
+      this.samlEnabled = data.samlEnabled || false;
+      this.providerName = data.providerName || null;
+      this.localAuthDisabled = data.localAuthDisabled || false;
+    } catch (e) {}
+  },
   methods: {
+    signInWithProvider() {
+      if (this.oidcEnabled) {
+        window.location.href = '/api/admin/oidc/authorize';
+      } else if (this.samlEnabled) {
+        window.location.href = '/api/admin/saml/login';
+      }
+    },
     async submitLogin() {
       if (!this.valid) return;
       this.loading = true;
@@ -101,11 +144,22 @@ export default {
 </script>
 
 <style scoped>
+.bg-slate-page {
+  background-color: #0B0F19 !important;
+}
+.v-theme--customLightTheme .bg-slate-page {
+  background: #F1F5F9 !important;
+}
+
 .glass-card {
   background: rgba(17, 24, 39, 0.7) !important;
   backdrop-filter: blur(16px);
   border: 1px solid rgba(139, 92, 246, 0.2);
   border-radius: 16px !important;
+}
+.v-theme--customLightTheme .glass-card {
+  background: rgba(255, 255, 255, 0.85) !important;
+  border: 1px solid rgba(124, 58, 237, 0.2) !important;
 }
 
 .text-gradient {

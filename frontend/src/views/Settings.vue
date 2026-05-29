@@ -1,7 +1,7 @@
 <template>
   <AppNav
     :app-version="appVersion"
-    :username="username"
+    :user="user"
     :is-dark="isDark"
     @toggle-theme="toggleTheme"
     @logout="logout"
@@ -53,7 +53,7 @@
           <v-icon color="primary" size="18" class="mr-2">mdi-shield-account-outline</v-icon>
           Authentication
         </div>
-        <div class="setting-label mb-2">Signed in as <span class="font-weight-bold text-white">{{ username }}</span></div>
+        <div class="setting-label mb-2">Signed in as <span class="font-weight-bold text-white">{{ user.username }}</span></div>
         <v-divider class="my-4"></v-divider>
         <div class="text-subtitle-2 font-weight-medium mb-3">Change Password</div>
         <v-row>
@@ -306,7 +306,7 @@ export default {
   name: 'Settings',
   components: { AppNav },
   data: () => ({
-    username: 'admin',
+    user: { username: 'admin', role: 'admin', authProvider: 'local' },
     serverInfo: {},
     settings: {
       idleTimeoutMinutes: 5,
@@ -348,7 +348,8 @@ export default {
       try {
         const res = await fetch('/api/admin/auth-status');
         const data = await res.json();
-        if (data.username) this.username = data.username;
+        if (data.user) this.user = data.user;
+        else if (data.username) this.user = { username: data.username, role: 'admin', authProvider: 'local' };
       } catch (e) {}
     },
     async fetchSettings() {

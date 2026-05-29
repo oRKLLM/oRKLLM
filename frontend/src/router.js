@@ -7,6 +7,7 @@ import Models from './views/Models.vue';
 import Logs from './views/Logs.vue';
 import Bench from './views/Bench.vue';
 import Chat from './views/Chat.vue';
+import SiteManagement from './views/SiteManagement.vue';
 
 const routes = [
   {
@@ -49,6 +50,12 @@ const routes = [
     name: 'Chat',
     component: Chat,
   },
+  {
+    path: '/site-management',
+    name: 'SiteManagement',
+    component: SiteManagement,
+    meta: { requireRole: 'admin' },
+  },
 ];
 
 const router = createRouter({
@@ -76,6 +83,13 @@ router.beforeEach(async (to, from, next) => {
     } else {
       if (to.name === 'Login' || to.name === 'Setup') {
         next({ name: 'Dashboard' });
+      } else if (to.meta.requireRole) {
+        // Role-based access check
+        if (auth.user?.role !== to.meta.requireRole && auth.user?.role !== 'admin') {
+          next({ name: 'Dashboard' });
+        } else {
+          next();
+        }
       } else {
         next();
       }
