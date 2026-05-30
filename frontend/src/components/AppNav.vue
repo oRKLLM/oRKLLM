@@ -4,7 +4,8 @@
     <v-icon color="primary" class="mr-2" size="32">mdi-chip</v-icon>
     <v-app-bar-title class="d-flex align-center gap-2">
       <span class="font-weight-bold text-h5 text-gradient">oRKLLM</span>
-      <v-chip size="x-small" variant="outlined" color="primary" class="font-weight-regular text-caption mt-1">v{{ appVersion }}</v-chip>
+      <!-- Version chip hidden on mobile — shown in user drawer instead -->
+      <v-chip size="x-small" variant="outlined" color="primary" class="font-weight-regular text-caption mt-1 d-none d-sm-flex">v{{ appVersion }}</v-chip>
     </v-app-bar-title>
 
     <v-spacer></v-spacer>
@@ -104,6 +105,10 @@
         @click="$emit('logout')"
         class="text-error"
       ></v-list-item>
+      <v-divider class="mt-1"></v-divider>
+      <div class="px-4 py-2 text-center">
+        <span class="text-caption text-grey">v{{ appVersion }}</span>
+      </div>
     </v-list>
   </v-navigation-drawer>
 </template>
