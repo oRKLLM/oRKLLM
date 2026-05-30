@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import {
   dbGetAuthProviderConfig,
-  dbGetUserBySubject, dbGetUserById, dbCreateUser, dbUpdateUser,
+  dbGetUserBySubject, dbGetUserById, dbGetUserByUsername, dbCreateUser, dbUpdateUser,
   dbLogAudit,
 } from '../db.js';
 import { v4 as uuidv4 } from 'uuid';
