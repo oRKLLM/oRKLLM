@@ -1,3 +1,10 @@
+# [0.7.0-alpha.4](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.3...v0.7.0-alpha.4) (2026-05-30)
+
+
+### Features
+
+* **proxy:** support comma-separated list of trusted proxy IPs/CIDRs ([014447a](https://github.com/mafischer/oRKLLM/commit/014447a8dd0a2463d87dc1fd782b83144fb04866))
+
 # [0.7.0-alpha.3](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.2...v0.7.0-alpha.3) (2026-05-30)
 
 
