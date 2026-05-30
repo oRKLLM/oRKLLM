@@ -43,25 +43,18 @@ async function loginAs(page, username = ADMIN_USER, password = ADMIN_PASS) {
   }
 
   if (url.includes('/login')) {
-    // Ensure local auth is not disabled before attempting login
-    await page.evaluate(async () => {
-      await fetch('/api/admin/global-settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ localAuthDisabled: false }),
-      }).catch(() => {});
-    });
     // Login via API directly — avoids Vuetify form validation timing issues
     // and SSO button conflicts when a provider is configured
-    const result = await page.evaluate(async ({ u, p }) => {
+    const { ok, status, body } = await page.evaluate(async ({ u, p }) => {
       const res = await fetch('/api/admin/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: u, password: p }),
       });
-      return res.ok;
+      const text = await res.text().catch(() => '');
+      return { ok: res.ok, status: res.status, body: text };
     }, { u: username, p: password });
-    if (!result) throw new Error(`Login failed for user: ${username}`);
+    if (!ok) throw new Error(`Login failed (HTTP ${status}) for user: ${username} — response: ${body}`);
     await page.goto('/');
     await expect(page).toHaveURL(/http:\/\/127.0.0.1:18000\/?$/, { timeout: 8000 });
     return;
