@@ -190,11 +190,31 @@ npm run dev:server
 # Full E2E suite (mock mode, no board required)
 npm test
 
-# SSO integration tests against real Keycloak (local LAN only)
-ORKLLM_TEST_LIVE=1 npx playwright test --grep "SSO"
+# SSO integration tests using local Keycloak container (same as CI)
+npm run test:sso        # starts Keycloak + runs SSO tests
+npm run test:sso:down   # tear down Keycloak when done
 ```
 
-CI runs the full suite including OIDC SSO via a `mock-oauth2-server` service container.
+CI runs the full suite including OIDC SSO via a containerised Keycloak instance with a pre-configured `orkllm` realm.
+
+### Test environment variables
+
+Set these in `.env` locally (gitignored) or as GitHub Actions secrets/variables. The `.env` file is loaded automatically by Playwright.
+
+| Variable | Where | Description |
+| :--- | :--- | :--- |
+| `ORKLLM_TEST_ADMIN_USER` | Secret | Admin username created during test setup |
+| `ORKLLM_TEST_ADMIN_PASS` | Secret | Admin password |
+| `ORKLLM_TEST_OIDC_ISSUER` | Secret | Real Keycloak issuer URL (for `ORKLLM_TEST_LIVE=1`) |
+| `ORKLLM_TEST_OIDC_CLIENT_ID` | Secret | OIDC client ID (`orkllm-oidc`) |
+| `ORKLLM_TEST_SAML_METADATA_URL` | Secret | Real Keycloak SAML metadata URL |
+| `ORKLLM_TEST_OIDC_USER` | Secret | Keycloak test user (`testuser`) |
+| `ORKLLM_TEST_OIDC_USER_PASS` | Secret | Keycloak test user password |
+| `ORKLLM_TEST_OIDC_ADMIN_USER` | Secret | Keycloak admin test user (`testadminuser`) |
+| `ORKLLM_TEST_OIDC_ADMIN_PASS` | Secret | Keycloak admin test user password |
+| `ORKLLM_TEST_MOCK_OIDC_URL` | Auto-set | Issuer URL of CI Keycloak container (`http://localhost:8080/realms/orkllm`) |
+| `ORKLLM_TEST_LIVE` | Variable | Set to `1` to run SSO tests against real Keycloak on LAN |
+| `ORKLLM_TEST_LIVE_URL` | Variable | Live server URL (e.g. `https://orkllm.fischerapps.com`) |
 
 ---
 
