@@ -105,7 +105,10 @@ export default async function authRoutes(fastify, options) {
       const checks = { expectedState: storedState, nonce: request.cookies.oidc_nonce };
       if (isPublicClient && codeVerifier) checks.pkceCodeVerifier = codeVerifier;
 
-      const currentUrl = new URL(`${request.protocol}://${request.hostname}${request.url}`);
+      // Reconstruct the callback URL using the registered redirectUri (preserves port)
+      const callbackPath = request.url; // e.g. /auth/oidc/callback?code=...&state=...
+      const redirectBase = new URL(c.redirectUri).origin; // e.g. http://127.0.0.1:18000
+      const currentUrl = new URL(redirectBase + callbackPath);
       const tokens = await oidc.authorizationCodeGrant(config, currentUrl, checks);
       tokenData = tokens.claims();
     } catch (e) {
