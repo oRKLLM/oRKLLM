@@ -67,6 +67,11 @@ jobs:
           ORKLLM_TEST_OIDC_ISSUER: ${{ secrets.ORKLLM_TEST_OIDC_ISSUER }}
           ORKLLM_TEST_OIDC_CLIENT_ID: ${{ secrets.ORKLLM_TEST_OIDC_CLIENT_ID }}
           ORKLLM_TEST_SAML_METADATA_URL: ${{ secrets.ORKLLM_TEST_SAML_METADATA_URL }}
+          ORKLLM_TEST_OIDC_USER: ${{ secrets.ORKLLM_TEST_OIDC_USER }}
+          ORKLLM_TEST_OIDC_USER_PASS: ${{ secrets.ORKLLM_TEST_OIDC_USER_PASS }}
+          ORKLLM_TEST_OIDC_ADMIN_USER: ${{ secrets.ORKLLM_TEST_OIDC_ADMIN_USER }}
+          ORKLLM_TEST_OIDC_ADMIN_PASS: ${{ secrets.ORKLLM_TEST_OIDC_ADMIN_PASS }}
+          ORKLLM_TEST_LIVE: ${{ secrets.ORKLLM_TEST_LIVE }}
 
       - name: Parse test results
         id: results
