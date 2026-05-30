@@ -19,7 +19,8 @@ function accountBtn(page) {
 }
 
 function drawer(page) {
-  return page.locator('.v-navigation-drawer');
+  // Target user drawer specifically — has logout item, location right
+  return page.locator('.v-navigation-drawer--right');
 }
 
 test('Navbar: shows oRKLLM brand without Console suffix', async ({ page }) => {
