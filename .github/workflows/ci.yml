@@ -24,29 +24,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Start Keycloak with test realm
+      - name: Start Keycloak and configure nginx in background
         run: |
-          # Same docker-compose.test.yml used locally and in CI
+          # Start Keycloak immediately — it boots while Node setup runs in parallel
           docker compose -f docker-compose.test.yml up -d
 
-          echo "Waiting for Keycloak to become healthy (up to 120s)..."
-          for i in $(seq 1 60); do
-            STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$(docker compose -f docker-compose.test.yml ps -q keycloak)" 2>/dev/null)
-            [ "$STATUS" = "healthy" ] && echo "Keycloak healthy after ${i}x2s" && break
-            sleep 2
-          done
-
-          # Confirm realm and client loaded
-          curl -sf http://localhost:8080/realms/master/.well-known/openid-configuration \
-            | python3 -c "import sys,json; d=json.load(sys.stdin); print('issuer:', d['issuer'])"
-
-      - name: Configure /etc/hosts and nginx for SSO tests
-        run: |
-          # Map orkllm.fischerapps.com to localhost so OIDC redirect URI resolves
+          # Configure /etc/hosts and nginx concurrently (no dependency on Keycloak)
           echo "127.0.0.1 orkllm.fischerapps.com" | sudo tee -a /etc/hosts
-
-          # nginx on port 80 → oRKLLM test server on 18000
-          # Allows http://orkllm.fischerapps.com/auth/oidc/callback as redirect URI
           sudo apt-get install -y -q nginx
           sudo tee /etc/nginx/sites-available/orkllm > /dev/null << 'NGINX'
           server {
@@ -96,6 +80,21 @@ jobs:
       - name: Install Playwright system deps (cached hit)
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: npx playwright install-deps chromium
+
+      - name: Wait for Keycloak to be healthy
+        run: |
+          # Block here — Keycloak has been starting since the first step while
+          # Node setup ran. By now it is likely already healthy.
+          echo "Waiting for Keycloak (started in background)..."
+          for i in $(seq 1 60); do
+            STATUS=$(docker inspect --format='{{.State.Health.Status}}' \
+              "$(docker compose -f docker-compose.test.yml ps -q keycloak)" 2>/dev/null)
+            [ "$STATUS" = "healthy" ] && echo "Keycloak healthy after ${i}x2s" && break
+            [ $i -eq 60 ] && echo "Keycloak did not become healthy" && exit 1
+            sleep 2
+          done
+          curl -sf http://localhost:8080/realms/master/.well-known/openid-configuration \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); print('issuer:', d['issuer'])"
 
       - name: Run E2E tests
         id: playwright
