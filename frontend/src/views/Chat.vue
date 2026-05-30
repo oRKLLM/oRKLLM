@@ -7,8 +7,8 @@
     @logout="logout"
   />
 
-  <v-main class="bg-slate-page" style="height: 100vh; display: flex; flex-direction: column;">
-    <div class="d-flex flex-column fill-height pa-4 gap-3" style="height: calc(100vh - 64px); overflow: hidden;">
+  <v-main class="bg-slate-page chat-main">
+    <div class="chat-layout">
 
       <!-- Toolbar row -->
       <div class="d-flex align-center gap-3 flex-shrink-0">
@@ -81,10 +81,10 @@
         </v-expansion-panel>
       </v-expansion-panels>
 
-      <!-- Messages area -->
-      <v-card class="glass-card flex-grow-1 d-flex flex-column overflow-hidden" style="height: 0;">
+      <!-- Messages area — scrollable -->
+      <div class="chat-messages-wrapper glass-card">
         <div
-          class="chat-messages-container pa-5 flex-grow-1 overflow-y-auto"
+          class="chat-messages-container pa-4 pa-sm-5"
           ref="chatContainer"
         >
           <div
@@ -133,10 +133,10 @@
             <div class="text-caption">Select a model above and type a message below to begin.</div>
           </div>
         </div>
+      </div>
 
-        <!-- Input area -->
-        <v-divider></v-divider>
-        <div class="pa-4 bg-slate-input flex-shrink-0">
+      <!-- Input area — fixed at bottom, outside scroll -->
+      <div class="chat-input-bar bg-slate-input">
           <v-row class="align-end" no-gutters>
             <v-col class="pr-3">
               <v-textarea
@@ -183,7 +183,6 @@
             No model loaded. Select and load a model to start chatting.
           </div>
         </div>
-      </v-card>
 
     </div>
   </v-main>
@@ -425,6 +424,49 @@ export default {
 </script>
 
 <style scoped>
+/* Chat page fills the viewport height, input pinned to bottom */
+.chat-main {
+  height: 100dvh !important;   /* dvh = dynamic viewport, respects mobile browser chrome */
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+}
+
+.chat-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 12px 12px 0;
+  gap: 12px;
+  overflow: hidden;
+}
+
+/* Toolbar + expansion panels are flex-shrink-0 by default */
+
+/* Messages wrapper scrolls, input bar does not */
+.chat-messages-wrapper {
+  flex: 1 1 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.chat-messages-container {
+  flex: 1 1 0;
+  overflow-y: auto;
+  background: rgba(10, 15, 30, 0.3);
+}
+.v-theme--customLightTheme .chat-messages-container {
+  background: rgba(241, 245, 249, 0.5);
+}
+
+/* Input bar stays fixed at the very bottom */
+.chat-input-bar {
+  flex-shrink: 0;
+  border-top: 1px solid rgba(139, 92, 246, 0.1);
+}
+
 .bg-slate-page {
   background: #0B0F19 !important;
 }
@@ -441,13 +483,6 @@ export default {
 .v-theme--customLightTheme .glass-card {
   background: rgba(255, 255, 255, 0.85) !important;
   border: 1px solid rgba(124, 58, 237, 0.2) !important;
-}
-
-.chat-messages-container {
-  background: rgba(10, 15, 30, 0.3);
-}
-.v-theme--customLightTheme .chat-messages-container {
-  background: rgba(241, 245, 249, 0.5);
 }
 
 .message-bubble {
