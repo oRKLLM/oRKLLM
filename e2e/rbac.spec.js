@@ -245,7 +245,7 @@ test('auth-status API returns full user object', async ({ page }) => {
 // Test 10: Configure real Keycloak OIDC (skipped if OIDC_CLIENT_SECRET not set)
 // ---------------------------------------------------------------------------
 test('Admin can save Keycloak OIDC configuration', async ({ page }) => {
-  test.skip(!OIDC_CLIENT_SECRET, 'ORKLLM_TEST_OIDC_CLIENT_SECRET not set — skipping Keycloak OIDC config test');
+  test.skip(!OIDC_ISSUER || !OIDC_CLIENT_ID, 'ORKLLM_TEST_OIDC_ISSUER or ORKLLM_TEST_OIDC_CLIENT_ID not set — skipping Keycloak OIDC config test');
 
   await loginAs(page);
   await page.goto('/site-management');
