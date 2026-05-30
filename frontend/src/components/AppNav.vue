@@ -1,12 +1,19 @@
 <template>
   <!-- Navbar -->
   <v-app-bar flat class="glass-nav px-4" density="comfortable">
-    <v-icon color="primary" class="mr-2" size="32">mdi-chip</v-icon>
-    <v-app-bar-title class="d-flex align-center gap-2">
-      <span class="font-weight-bold text-h5 text-gradient">oRKLLM</span>
-      <!-- Version chip hidden on mobile — shown in user drawer instead -->
-      <v-chip size="x-small" variant="outlined" color="primary" class="font-weight-regular text-caption mt-1 d-none d-sm-flex">v{{ appVersion }}</v-chip>
-    </v-app-bar-title>
+    <!-- Logo: tappable on mobile to open nav drawer, plain on desktop -->
+    <div
+      class="d-flex align-center gap-2 cursor-pointer"
+      :class="{ 'mr-2': true }"
+      @click="$vuetify.display.smAndUp ? null : (mobileNavOpen = true)"
+    >
+      <v-icon color="primary" size="32">mdi-chip</v-icon>
+      <v-app-bar-title class="d-flex align-center gap-2 pa-0">
+        <span class="font-weight-bold text-h5 text-gradient">oRKLLM</span>
+        <!-- Version chip hidden on mobile — shown in user drawer instead -->
+        <v-chip size="x-small" variant="outlined" color="primary" class="font-weight-regular text-caption mt-1 d-none d-sm-flex">v{{ appVersion }}</v-chip>
+      </v-app-bar-title>
+    </div>
 
     <v-spacer></v-spacer>
 
@@ -28,11 +35,6 @@
     </div>
 
     <v-spacer class="d-none d-sm-flex"></v-spacer>
-
-    <!-- Mobile nav icon (hamburger, shown on xs only) -->
-    <v-btn icon variant="text" size="36" class="d-flex d-sm-none mr-1" @click="mobileNavOpen = true">
-      <v-icon size="22">mdi-menu</v-icon>
-    </v-btn>
 
     <v-btn icon color="primary" variant="tonal" size="36" @click="drawerOpen = true">
       <v-icon size="20">mdi-account</v-icon>
