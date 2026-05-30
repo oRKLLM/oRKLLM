@@ -469,14 +469,17 @@ async function ssoLogin(page, username, password) {
   await page.locator('[name=password], #password').fill(password);
   await page.locator('button[type=submit], #kc-login').click();
 
-  // After Keycloak redirects back, wait for oRKLLM to respond — don't assert
-  // a specific URL since the redirect origin is dynamically configured.
-  // Instead poll auth-status until authenticated (proves the full OIDC flow worked).
+  // Wait for Keycloak to redirect back to oRKLLM (either orkllm.fischerapps.com or 127.0.0.1:18000)
+  // then navigate to the test server root so the session cookie is accessible via baseURL
+  await page.waitForURL(/orkllm\.fischerapps\.com|127\.0\.0\.1:18000/, { timeout: 20000 });
+
+  // Navigate to test server root to ensure fetch uses the right origin with the session cookie
+  await page.goto('http://127.0.0.1:18000/');
   await page.waitForFunction(async () => {
     const res = await fetch('/api/admin/auth-status');
     const d = await res.json();
     return d.status === 'authenticated';
-  }, { timeout: 20000, polling: 500 });
+  }, { timeout: 10000, polling: 500 });
 }
 
 test('SSO: regular user logs in via OIDC and gets user role', async ({ page }) => {
