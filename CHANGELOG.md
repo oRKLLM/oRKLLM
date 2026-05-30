@@ -1,3 +1,10 @@
+# [0.7.0-alpha.3](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.2...v0.7.0-alpha.3) (2026-05-30)
+
+
+### Features
+
+* **release:** add APT distribution channels (stable/beta/alpha) ([d205864](https://github.com/mafischer/oRKLLM/commit/d205864df08292fe2f3a0ee3839b33e6fa1a7fc9))
+
 # [0.7.0-alpha.2](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.1...v0.7.0-alpha.2) (2026-05-30)
 
 
