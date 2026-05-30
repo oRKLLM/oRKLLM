@@ -463,17 +463,20 @@ async function ssoLogin(page, username, password) {
   await expect(ssoBtn).toBeVisible({ timeout: 5000 });
   await ssoBtn.click();
 
-  // Keycloak login form (same form in CI container and real Keycloak)
+  // Wait for Keycloak login form (works for both CI container and real Keycloak)
   await expect(page).toHaveURL(/localhost:8080|auth-lab\.fischerapps\.com/, { timeout: 20000 });
   await page.locator('[name=username], #username').fill(username);
   await page.locator('[name=password], #password').fill(password);
   await page.locator('button[type=submit], #kc-login').click();
 
-  // Redirect back via nginx → oRKLLM test server
-  await expect(page).toHaveURL(
-    /orkllm\.fischerapps\.com\/?$|127\.0\.0\.1:18000\/?$/,
-    { timeout: 20000 }
-  );
+  // After Keycloak redirects back, wait for oRKLLM to respond — don't assert
+  // a specific URL since the redirect origin is dynamically configured.
+  // Instead poll auth-status until authenticated (proves the full OIDC flow worked).
+  await page.waitForFunction(async () => {
+    const res = await fetch('/api/admin/auth-status');
+    const d = await res.json();
+    return d.status === 'authenticated';
+  }, { timeout: 20000, polling: 500 });
 }
 
 test('SSO: regular user logs in via OIDC and gets user role', async ({ page }) => {
