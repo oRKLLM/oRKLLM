@@ -25,7 +25,7 @@ jobs:
         ports:
           - 8080:8080
         options: >-
-          --health-cmd "curl -sf http://localhost:8080/default/.well-known/openid-configuration"
+          --health-cmd "curl -sf http://localhost:8080/isalive"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
