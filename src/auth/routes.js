@@ -128,10 +128,15 @@ export default async function authRoutes(fastify, options) {
     let user = dbGetUserBySubject('oidc', subject);
     if (!user) {
       if (!c.autoProvision) return reply.redirect(`/?oidc_error=${encodeURIComponent('User not provisioned. Contact your administrator.')}`);
-      // If username already taken (e.g. a local user with same name), claim it by updating auth_subject
+      // If username already taken, link the OIDC identity to that account
       const existingByUsername = dbGetUserByUsername(username);
       if (existingByUsername) {
-        dbUpdateUser(existingByUsername.id, { last_login_at: Date.now(), email: email ?? existingByUsername.email });
+        dbUpdateUser(existingByUsername.id, {
+          last_login_at: Date.now(),
+          email: email ?? existingByUsername.email,
+          auth_provider: 'oidc',
+          auth_subject: subject,
+        });
         user = dbGetUserById(existingByUsername.id);
       } else {
         const id = uuidv4();

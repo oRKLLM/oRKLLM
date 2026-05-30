@@ -340,7 +340,7 @@ export function dbListUsers() {
 }
 
 export function dbUpdateUser(id, fields) {
-  const allowed = ['role', 'is_active', 'email', 'last_login_at', 'password_hash', 'password_salt'];
+  const allowed = ['role', 'is_active', 'email', 'last_login_at', 'password_hash', 'password_salt', 'auth_provider', 'auth_subject'];
   const keys = Object.keys(fields).filter(k => allowed.includes(k));
   if (!keys.length) return;
   const sets = keys.map(k => `${k} = ?`).join(', ');
