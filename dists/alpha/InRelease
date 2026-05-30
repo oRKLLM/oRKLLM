@@ -1,0 +1,35 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Origin: oRKLLM
+Label: oRKLLM Alpha (development)
+Suite: alpha
+Codename: alpha
+Architectures: arm64
+Components: main
+Description: oRKLLM APT Repository — OpenAI-compatible LLM inference for Rockchip NPU
+Date: Sat, 30 May 2026 05:56:58 +0000
+MD5Sum:
+ 09df5b05ad5ad27c07a8a815914edc95 758 main/binary-arm64/Packages
+ 64a96fc7b5cb93ee8e0ac18849ebd224 581 main/binary-arm64/Packages.bz2
+ c6ffc4329a659b7e1c22d0e15bab2e51 530 main/binary-arm64/Packages.gz
+SHA256:
+ 32c899f97ab1e4b4745538ffa215d30b60f20cab746d562fa42707b8543841ac 758 main/binary-arm64/Packages
+ 7dacf673c916909a99fb90204a2c09ebe449d9948b5105a6624f64588f7c4515 581 main/binary-arm64/Packages.bz2
+ 40b92ea4d24eb40f30cba88ffb42f7d26e5e432a2deeb1ce0430db692a7ed5d7 530 main/binary-arm64/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+
+iQIzBAEBCgAdFiEEjp2Wca5u0JcYtaE/MGfg+E4PQEUFAmoafCoACgkQMGfg+E4P
+QEUHsw//UcYzh8sMbvQ+9xUdJj7e18SmYKDKOG1VhWJIGkXL7biglgos/71gpP2C
+epRAJGiZQlyqjDJZRvZz5fLGbWeKN/V3r2jLHZzBJVi+VzPEKVnBWwDO4EGIaTdA
+yT2dWSHxSe5bDWw9gTF/sAxBuJljXLzZbMhV9i0JGdsYKlCrnY4ycueXbl+jAIv/
+0+e7fcKdJ+++7hF7Ve0TLUrVFKpaWfCDmi4vJDtR8BtFuyXvPP7zbtm4pguMX8F3
+6v00gaJxLzWtJQvNxFflCaURsldg7p+3ZQe38TgxUUEsPrblCMgdcOsjkpavJbMY
+Ki+7ATOJsNkhhil+bYRQ7oHe5kKbpLULq/knOaCupMJYHGh4d2O4efSgyNlJlFHF
+s0qZ1l++nkNDE85fbCbhTAcpRo2fnNYZxuFJ1VLBKP+KoWuayaXGQymBKOz10rxE
+5F4nBnDfv2E5SJKuzOz5jfcTHuEirFOmEoJYlgph05E/GWB7trm/rLD7xcz3NTgP
+MNDSWjGjM4qNNTtEFL0IbtJS1FrEL3pB1fcy6ReHcr03hepvl6/ATTxRWuX3nJpv
+uL7NqjEHZtWtc1EPZCEPcl6p22gEonHi4L+iCRPoo4m4DPEWU/qKRwQ2QoywYlBD
+amyCCj3ibvi4/9s9BZFS7PyNOkN7qq8pbTVn7jglAEmh7iUhoRI=
+=dYIA
+-----END PGP SIGNATURE-----
