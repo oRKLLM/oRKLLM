@@ -16,6 +16,8 @@ export default defineConfig({
     baseURL: 'http://127.0.0.1:18000',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
+    // Accept self-signed certs when following OIDC redirects to nginx in CI
+    ignoreHTTPSErrors: !!process.env.ORKLLM_TEST_MOCK_OIDC_URL,
   },
   projects: [
     {

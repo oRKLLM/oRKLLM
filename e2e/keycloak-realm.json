@@ -40,10 +40,8 @@
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
       "redirectUris": [
-        "http://orkllm.fischerapps.com/auth/oidc/callback",
-        "http://localhost/auth/oidc/callback",
-        "http://127.0.0.1/auth/oidc/callback",
-        "http://orkllm.fischerapps.com:18000/auth/oidc/callback"
+        "https://orkllm.fischerapps.com/auth/oidc/callback",
+        "http://orkllm.fischerapps.com/auth/oidc/callback"
       ],
       "webOrigins": ["*"],
       "attributes": {

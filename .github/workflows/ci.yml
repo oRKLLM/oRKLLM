@@ -46,18 +46,28 @@ jobs:
           # Start Keycloak with the pre-built optimized image — boots in ~5s
           docker compose -f docker-compose.test.yml up -d
 
-          # Configure /etc/hosts + nginx so orkllm.fischerapps.com:80 → oRKLLM:18000
-          # Both run in parallel — nginx is done before Keycloak is healthy
+          # Configure /etc/hosts + nginx (HTTP + HTTPS) → oRKLLM:18000
           echo "127.0.0.1 orkllm.fischerapps.com" | sudo tee -a /etc/hosts
           sudo apt-get install -y -q nginx
+
+          # Self-signed cert for HTTPS (Keycloak accepts it for redirect URIs)
+          sudo openssl req -x509 -nodes -days 1 -newkey rsa:2048 \
+            -keyout /etc/ssl/private/orkllm-test.key \
+            -out /etc/ssl/certs/orkllm-test.crt \
+            -subj "/CN=orkllm.fischerapps.com"
+
           sudo tee /etc/nginx/sites-available/orkllm > /dev/null << 'NGINX'
           server {
             listen 80;
+            listen 443 ssl;
             server_name orkllm.fischerapps.com;
+            ssl_certificate     /etc/ssl/certs/orkllm-test.crt;
+            ssl_certificate_key /etc/ssl/private/orkllm-test.key;
             location / {
               proxy_pass http://127.0.0.1:18000;
               proxy_set_header Host $host;
               proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
               proxy_http_version 1.1;
               proxy_set_header Upgrade $http_upgrade;
               proxy_set_header Connection "upgrade";
@@ -134,8 +144,8 @@ jobs:
           ORKLLM_TEST_LIVE_URL: ${{ vars.ORKLLM_TEST_LIVE_URL }}
           # Keycloak CI container issuer URL for SSO integration tests
           ORKLLM_TEST_MOCK_OIDC_URL: http://localhost:8080/realms/orkllm
-          # nginx proxy base (HTTP, port 80) — protocol derived from this, not LIVE_BASE_URL
-          ORKLLM_TEST_REDIRECT_BASE: http://orkllm.fischerapps.com
+          # Redirect base derived from LIVE_BASE_URL — no hardcoded protocol
+          ORKLLM_TEST_REDIRECT_BASE: ${{ vars.ORKLLM_TEST_LIVE_URL }}
 
       - name: Parse test results
         id: results

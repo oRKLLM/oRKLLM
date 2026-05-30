@@ -469,28 +469,15 @@ async function ssoLogin(page, username, password) {
   await page.locator('[name=password], #password').fill(password);
   await page.locator('button[type=submit], #kc-login').click();
 
-  // Wait for Keycloak to redirect back to oRKLLM via the configured redirect base
+  // Wait for Keycloak to redirect back to oRKLLM (https or http depending on nginx config)
   await page.waitForURL(/orkllm\.fischerapps\.com|127\.0\.0\.1:18000/, { timeout: 20000 });
 
-  // Log current URL and any errors for debugging SSO flow
-  console.log('[SSO] After redirect, URL:', page.url());
-
-  // Poll auth-status — fetch is relative to current page origin
-  let authStatus = 'unknown';
-  try {
-    await page.waitForFunction(async () => {
-      const res = await fetch('/api/admin/auth-status');
-      const d = await res.json();
-      return d.status === 'authenticated';
-    }, { timeout: 10000, polling: 500 });
-  } catch (e) {
-    // Log final URL and auth-status for debugging before re-throwing
-    authStatus = await page.evaluate(() =>
-      fetch('/api/admin/auth-status').then(r => r.json()).then(d => d.status).catch(() => 'fetch-error')
-    );
-    console.log('[SSO] Auth-status after timeout:', authStatus, '| URL:', page.url());
-    throw e;
-  }
+  // Poll auth-status — session cookie is on current page's origin
+  await page.waitForFunction(async () => {
+    const res = await fetch('/api/admin/auth-status');
+    const d = await res.json();
+    return d.status === 'authenticated';
+  }, { timeout: 10000, polling: 500 });
 }
 
 test('SSO: regular user logs in via OIDC and gets user role', async ({ page }) => {
