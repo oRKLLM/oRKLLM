@@ -98,6 +98,62 @@ test('Trusted proxy: X-Forwarded-For is honoured when trustedProxy is set', asyn
   });
 });
 
+test('Trusted proxy: comma-separated IPs are saved and returned verbatim', async ({ page }) => {
+  await loginAs(page, ADMIN_USER, ADMIN_PASS);
+
+  const multiProxy = '10.0.0.1, 10.0.0.2';
+  await page.evaluate(async (value) => {
+    await fetch('/api/admin/global-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trustedProxy: value }),
+    });
+  }, multiProxy);
+
+  const cfg = await page.evaluate(async () => {
+    const res = await fetch('/api/admin/global-settings');
+    return res.json();
+  });
+  expect(cfg.settings.trustedProxy).toBe(multiProxy);
+
+  // Cleanup
+  await page.evaluate(async () => {
+    await fetch('/api/admin/global-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trustedProxy: '' }),
+    });
+  });
+});
+
+test('Trusted proxy: comma-separated CIDRs are saved and returned verbatim', async ({ page }) => {
+  await loginAs(page, ADMIN_USER, ADMIN_PASS);
+
+  const cidrList = '10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16';
+  await page.evaluate(async (value) => {
+    await fetch('/api/admin/global-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trustedProxy: value }),
+    });
+  }, cidrList);
+
+  const cfg = await page.evaluate(async () => {
+    const res = await fetch('/api/admin/global-settings');
+    return res.json();
+  });
+  expect(cfg.settings.trustedProxy).toBe(cidrList);
+
+  // Cleanup
+  await page.evaluate(async () => {
+    await fetch('/api/admin/global-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trustedProxy: '' }),
+    });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Test 1: Site Management link visible only for admin
 // ---------------------------------------------------------------------------

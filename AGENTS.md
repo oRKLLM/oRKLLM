@@ -141,8 +141,9 @@ graph TD
 | `frontend/src/views/Chat.vue` | Full streaming chat against OpenAI-compatible API |
 | `frontend/src/views/SiteManagement.vue` | Admin-only: user CRUD, OIDC/SAML config, audit log |
 | `frontend/src/views/Login.vue` | Login page; shows SSO button when OIDC/SAML configured |
-| `e2e/orkllm.spec.js` | Playwright E2E suite (21 tests — core flow) |
-| `e2e/rbac.spec.js` | Playwright E2E suite (33 tests — RBAC, trusted proxy, mock OIDC SSO, Keycloak integration) |
+| `e2e/orkllm.spec.js` | Playwright E2E suite (14 tests — core flow) |
+| `e2e/rbac.spec.js` | Playwright E2E suite (17 tests — RBAC, trusted proxy (single + multi-IP/CIDR), mock OIDC SSO, Keycloak integration) |
+| `e2e/regression.spec.js` | Playwright E2E suite (10 tests — UI regression: navbar, theme, user drawer) |
 
 ---
 
@@ -195,9 +196,9 @@ oRKLLM/
 │           └── Setup.vue
 └── e2e/
     ├── global-setup.js     # Resets server state between test runs
-    ├── orkllm.spec.js      # 12 feature tests
-    ├── rbac.spec.js        # RBAC, auth provider, Keycloak integration tests
-    └── regression.spec.js  # UI regression tests
+    ├── orkllm.spec.js      # 14 feature tests (core flow)
+    ├── rbac.spec.js        # 17 tests — RBAC, trusted proxy, SSO
+    └── regression.spec.js  # 10 UI regression tests
 ```
 
 ---
@@ -251,7 +252,7 @@ Tests cover:
 - **Model lifecycle** — scan, load, mock chat stream with prefill/rate metrics
 - **Log terminal** — real-time WebSocket log capture
 - **RBAC** — Site Management visible for admin, user/provider CRUD, SSO button on login
-- **Trusted proxy** — `trustedProxy` setting saved and returned correctly
+- **Trusted proxy** — `trustedProxy` setting saved and returned correctly; comma-separated IP list and CIDR list round-trip correctly
 - **Mock OIDC SSO** (CI) — full OIDC authorize → login → callback flow via `mock-oauth2-server`
 - **Real Keycloak SSO** (local, `ORKLLM_TEST_LIVE=1`) — full flow against `auth-lab.fischerapps.com`
 
