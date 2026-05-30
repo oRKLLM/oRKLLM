@@ -538,5 +538,14 @@ test('SSO: admin user gets admin role via /orkllm/admin group mapping', async ({
       });
       await fetch('/api/admin/auth-provider', { method: 'DELETE' });
     }, [ADMIN_USER, ADMIN_PASS]);
+    // Navigate to login to confirm clean state before regression tests run
+    await page.goto('/login');
+    await page.waitForTimeout(500);
+    // Confirm no SSO button (provider deleted)
+    const ssoGone = await page.locator('button').filter({ hasText: /Keycloak|Sign in with/i }).count();
+    if (ssoGone > 0) {
+      // Force delete via direct API call with fresh page context
+      await page.evaluate(() => fetch('/api/admin/auth-provider', { method: 'DELETE' }));
+    }
   }
 });
