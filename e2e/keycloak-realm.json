@@ -1,0 +1,66 @@
+{
+  "realm": "master",
+  "enabled": true,
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "bruteForceProtected": false,
+  "groups": [
+    { "name": "orkllm", "path": "/orkllm", "subGroups": [
+      { "name": "admin", "path": "/orkllm/admin" }
+    ]}
+  ],
+  "users": [
+    {
+      "username": "testuser",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "testuser@mock.test",
+      "credentials": [{ "type": "password", "value": "testuser123", "temporary": false }],
+      "groups": ["/orkllm"],
+      "attributes": {}
+    },
+    {
+      "username": "testadminuser",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "testadminuser@mock.test",
+      "credentials": [{ "type": "password", "value": "testadminuser123", "temporary": false }],
+      "groups": ["/orkllm", "/orkllm/admin"],
+      "attributes": {}
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "orkllm-oidc",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://orkllm.fischerapps.com/auth/oidc/callback",
+        "http://localhost/auth/oidc/callback",
+        "http://127.0.0.1/auth/oidc/callback",
+        "http://orkllm.fischerapps.com:18000/auth/oidc/callback"
+      ],
+      "webOrigins": ["*"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "groups",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ]
+}

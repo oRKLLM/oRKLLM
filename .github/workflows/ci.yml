@@ -19,21 +19,32 @@ jobs:
       tests_passed: ${{ steps.results.outputs.passed }}
       tests_total:  ${{ steps.results.outputs.total }}
 
-    services:
-      mock-oidc:
-        image: ghcr.io/navikt/mock-oauth2-server:2.1.10
-        ports:
-          - 8080:8080
-        options: >-
-          --health-cmd "curl -sf http://localhost:8080/isalive"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-          --health-start-period 10s
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Start Keycloak with test realm
+        run: |
+          # Start Keycloak in dev mode with our realm pre-loaded
+          docker run -d --name keycloak \
+            -p 8080:8080 \
+            -e KEYCLOAK_ADMIN=admin \
+            -e KEYCLOAK_ADMIN_PASSWORD=admin \
+            -v "${{ github.workspace }}/e2e/keycloak-realm.json:/opt/keycloak/data/import/realm.json" \
+            quay.io/keycloak/keycloak:26.6 \
+            start-dev --import-realm
+
+          echo "Waiting for Keycloak to start (up to 120s)..."
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8080/realms/master/.well-known/openid-configuration > /dev/null 2>&1 \
+              && echo "Keycloak ready after ${i}x2s" && break
+            sleep 2
+          done
+
+          # Confirm realm and client loaded
+          curl -sf http://localhost:8080/realms/master/.well-known/openid-configuration \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); print('issuer:', d['issuer'])"
 
       - name: Configure /etc/hosts and nginx for SSO tests
         run: |
@@ -111,8 +122,8 @@ jobs:
           ORKLLM_TEST_OIDC_ADMIN_PASS: ${{ secrets.ORKLLM_TEST_OIDC_ADMIN_PASS }}
           ORKLLM_TEST_LIVE: ${{ vars.ORKLLM_TEST_LIVE }}
           ORKLLM_TEST_LIVE_URL: ${{ vars.ORKLLM_TEST_LIVE_URL }}
-          # Mock OIDC server for SSO integration tests (runs as service container)
-          ORKLLM_TEST_MOCK_OIDC_URL: http://localhost:8080
+          # Keycloak test instance for SSO integration tests (started as Docker container)
+          ORKLLM_TEST_MOCK_OIDC_URL: http://localhost:8080/realms/master
 
       - name: Parse test results
         id: results
