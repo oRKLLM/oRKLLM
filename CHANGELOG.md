@@ -1,3 +1,20 @@
+# [0.7.0-alpha.2](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.1...v0.7.0-alpha.2) (2026-05-30)
+
+
+### Bug Fixes
+
+* **chat:** pin input bar to bottom, only message history scrolls ([08315bc](https://github.com/mafischer/oRKLLM/commit/08315bccfebc2a4cd8594221ed4131c4ff497d91))
+* **tests:** use .v-navigation-drawer--right to select user drawer ([2c07c9f](https://github.com/mafischer/oRKLLM/commit/2c07c9f3d3e3391917d2a260ad735455d3bbc10b))
+* **ui:** hamburger opens drawer, oRKLLM text navigates to dashboard on mobile ([e0ef600](https://github.com/mafischer/oRKLLM/commit/e0ef600215ac4771eee6c92ea60a5caf294398ec))
+* **ui:** hide version chip in mobile navbar, show in user drawer footer ([e13df1e](https://github.com/mafischer/oRKLLM/commit/e13df1e2efdacd2a56609e3e4c3afd4f37524a90))
+* **ui:** logo opens mobile nav drawer instead of separate hamburger button ([46b337b](https://github.com/mafischer/oRKLLM/commit/46b337bc6ba6c005980640da548a1f9ec2711116))
+* **ui:** responsive navbar for mobile screens ([d91a14f](https://github.com/mafischer/oRKLLM/commit/d91a14fbb76b78034f35160a67a1f5e90dcf720f))
+
+
+### Features
+
+* **bench:** add model selector dropdown like Chat page ([d5bbaf1](https://github.com/mafischer/oRKLLM/commit/d5bbaf152b16715ab20ef6c9d77c8004bad69835))
+
 # [0.7.0-alpha.1](https://github.com/mafischer/oRKLLM/compare/v0.6.0...v0.7.0-alpha.1) (2026-05-30)
 
 
