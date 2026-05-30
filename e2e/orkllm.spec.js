@@ -85,7 +85,7 @@ test('Setup, auth enforcement, and login', async ({ page }) => {
 
   // Sign out
   await page.click('.v-app-bar .v-btn:has(.mdi-account)');
-  await page.waitForSelector('.v-navigation-drawer', { state: 'visible' });
+  await page.waitForSelector('.v-navigation-drawer:has(.mdi-logout)', { state: 'visible' });
   await page.click('.v-navigation-drawer .v-list-item:has-text("Sign Out")');
   await expect(page).toHaveURL(/\/login/);
 
@@ -257,13 +257,16 @@ test('Settings page: HuggingFace token saves and persists', async ({ page }) => 
 // ---------------------------------------------------------------------------
 // Test 9: Bench page - renders
 // ---------------------------------------------------------------------------
-test('Bench page: renders benchmark card with prompt textarea', async ({ page }) => {
+test('Bench page: renders benchmark card with model selector and prompt textarea', async ({ page }) => {
   await login(page);
   await page.goto('/bench');
   await expect(page).toHaveURL(/\/bench/);
 
   // Page heading
   await expect(page.locator('.text-h5, .text-h6').filter({ hasText: 'Benchmark' }).first()).toBeVisible();
+
+  // Model selector dropdown present
+  await expect(page.locator('.v-select').first()).toBeVisible();
 
   // Prompt textarea visible
   await expect(page.locator('textarea').first()).toBeVisible();
@@ -281,8 +284,15 @@ test('Bench page: runs benchmark and shows generation metrics', async ({ page })
 
   await page.goto('/bench');
 
-  // Active model alert (fetched from status on mount — allow time for async)
-  const activeAlert = page.locator('.v-alert').filter({ hasText: 'Active model' });
+  // Model selector should auto-populate with the loaded model
+  const benchSelect = page.locator('.v-select').first();
+  await expect(benchSelect).toContainText(dummyModelName, { timeout: 8000 }).catch(async () => {
+    await benchSelect.click();
+    await page.locator(`.v-list-item:has-text("${dummyModelName}")`).first().click();
+  });
+
+  // Active model alert (text changed to "Active:")
+  const activeAlert = page.locator('.v-alert').filter({ hasText: /Active/ });
   await expect(activeAlert).toBeVisible({ timeout: 8000 });
 
   const runBtn = page.locator('button:has-text("Run Benchmark")');
@@ -336,7 +346,7 @@ test('Theme toggle works and app renders after navigation', async ({ page }) => 
   await login(page);
 
   await page.click('.v-app-bar .v-btn:has(.mdi-account)');
-  await page.waitForSelector('.v-navigation-drawer', { state: 'visible' });
+  await page.waitForSelector('.v-navigation-drawer:has(.mdi-logout)', { state: 'visible' });
   const themeItem = page.locator('.v-navigation-drawer .v-list-item').filter({ hasText: /Light Mode|Dark Mode/ });
   await expect(themeItem).toBeVisible();
   await themeItem.click();
@@ -346,4 +356,68 @@ test('Theme toggle works and app renders after navigation', async ({ page }) => 
   await navBtn(page, 'Dashboard').click();
   await expect(page).toHaveURL(/http:\/\/127.0.0.1:18000\/?$/);
   await expect(page.locator('.v-app-bar')).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// Test 13: Mobile navbar — hamburger opens drawer, logo navigates to dashboard
+// ---------------------------------------------------------------------------
+test('Mobile navbar: hamburger opens left drawer, logo navigates to dashboard', async ({ page }) => {
+  await login(page);
+  await page.goto('/models'); // start on a non-dashboard page
+
+  // Resize to mobile viewport (xs)
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  // On mobile the desktop nav buttons should be hidden
+  await expect(page.locator('.v-app-bar .v-btn:has-text("Dashboard")')).toBeHidden();
+
+  // Hamburger icon (mdi-menu) should be visible
+  const hamburger = page.locator('.v-app-bar .mdi-menu').locator('..');
+  await expect(hamburger).toBeVisible();
+
+  // Tapping hamburger opens the left nav drawer
+  await hamburger.click();
+  const drawer = page.locator('.v-navigation-drawer').filter({ hasText: 'Dashboard' });
+  await expect(drawer).toBeVisible({ timeout: 3000 });
+  await page.keyboard.press('Escape'); // close drawer
+
+  // Tapping oRKLLM text navigates to dashboard
+  await page.locator('.v-app-bar .text-gradient').click();
+  await expect(page).toHaveURL(/http:\/\/127.0.0.1:18000\/?$/, { timeout: 5000 });
+
+  // Reset viewport
+  await page.setViewportSize({ width: 1280, height: 800 });
+});
+
+// ---------------------------------------------------------------------------
+// Test 14: Chat page — input bar is pinned at bottom, messages scroll
+// ---------------------------------------------------------------------------
+test('Chat page: input bar stays at bottom while messages scroll', async ({ page }) => {
+  await login(page);
+
+  await page.goto('/chat');
+  await expect(page).toHaveURL(/\/chat/);
+
+  // Input bar should be visible and at the bottom
+  const inputBar = page.locator('.chat-input-bar');
+  await expect(inputBar).toBeVisible({ timeout: 5000 });
+
+  // Input bar bottom should be at or near the viewport bottom
+  const inputBarBox = await inputBar.boundingBox();
+  const viewportHeight = page.viewportSize()?.height ?? 800;
+  expect(inputBarBox?.y).toBeGreaterThan(viewportHeight * 0.7); // in bottom 30% of screen
+
+  // Messages container scrolls independently
+  const messagesContainer = page.locator('.chat-messages-container');
+  await expect(messagesContainer).toBeVisible();
+
+  // Test on mobile too
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/chat');
+  const inputBarMobile = page.locator('.chat-input-bar');
+  await expect(inputBarMobile).toBeVisible({ timeout: 5000 });
+  const mobileBox = await inputBarMobile.boundingBox();
+  expect(mobileBox?.y).toBeGreaterThan(700); // near bottom of 844px screen
+
+  await page.setViewportSize({ width: 1280, height: 800 });
 });

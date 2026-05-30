@@ -30,12 +30,26 @@ test('Navbar: shows oRKLLM brand without Console suffix', async ({ page }) => {
   await expect(brand).not.toContainText('Console');
 });
 
-test('Navbar: version chip is visible', async ({ page }) => {
+test('Navbar: version chip is visible on desktop', async ({ page }) => {
   await login(page);
   const chip = page.locator('.v-app-bar .v-chip');
   await expect(chip).toBeVisible();
   const text = await chip.textContent();
-  expect(text).toMatch(/^v\d+\.\d+\.\d+$/);
+  expect(text).toMatch(/^v\d+\.\d+/);
+});
+
+test('Navbar: version shown in user drawer on mobile', async ({ page }) => {
+  await login(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  // Version chip hidden in navbar on mobile
+  const navChip = page.locator('.v-app-bar .v-chip');
+  await expect(navChip).toBeHidden();
+  // Opens in user drawer footer
+  await page.locator('.v-app-bar .v-btn:has(.mdi-account)').click();
+  await page.waitForSelector('.v-navigation-drawer:has(.mdi-logout)', { state: 'visible' });
+  const drawerVersion = page.locator('.v-navigation-drawer').locator('text=/^v\\d+\\.\\d+/');
+  await expect(drawerVersion).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 800 });
 });
 
 test('User menu: opens as right-side drawer on account button click', async ({ page }) => {

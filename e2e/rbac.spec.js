@@ -105,7 +105,7 @@ test('Site Management link visible for admin in user drawer', async ({ page }) =
   await loginAs(page, ADMIN_USER, ADMIN_PASS);
 
   await page.click('.v-app-bar .v-btn:has(.mdi-account)');
-  await page.waitForSelector('.v-navigation-drawer', { state: 'visible' });
+  await page.waitForSelector('.v-navigation-drawer:has(.mdi-logout)', { state: 'visible' });
 
   await expect(page.locator('.v-navigation-drawer .v-list-item:has-text("Site Management")')).toBeVisible();
 });
@@ -253,7 +253,7 @@ test('Login page shows SSO button when provider is configured', async ({ page })
 
   // Sign out and check login page
   await page.click('.v-app-bar .v-btn:has(.mdi-account)');
-  await page.waitForSelector('.v-navigation-drawer', { state: 'visible' });
+  await page.waitForSelector('.v-navigation-drawer:has(.mdi-logout)', { state: 'visible' });
   await page.click('.v-navigation-drawer .v-list-item:has-text("Sign Out")');
   await expect(page).toHaveURL(/\/login/);
 
@@ -399,7 +399,7 @@ test('User drawer shows role and auth provider info', async ({ page }) => {
   await loginAs(page, ADMIN_USER, ADMIN_PASS);
 
   await page.click('.v-app-bar .v-btn:has(.mdi-account)');
-  await page.waitForSelector('.v-navigation-drawer', { state: 'visible' });
+  await page.waitForSelector('.v-navigation-drawer:has(.mdi-logout)', { state: 'visible' });
 
   // Username shown
   await expect(page.locator('.v-navigation-drawer').locator(`text=${ADMIN_USER}`)).toBeVisible();
