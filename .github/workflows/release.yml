@@ -171,16 +171,25 @@ jobs:
           DEB=$(ls dist/*.deb 2>/dev/null | head -1)
           [ -z "$DEB" ] && { echo "No deb built — skipping APT publish"; exit 0; }
 
+          # Derive APT channel from the triggering branch
+          case "${{ github.ref_name }}" in
+            main)  CHANNEL=stable ;;
+            beta)  CHANNEL=beta   ;;
+            alpha) CHANNEL=alpha  ;;
+            *)     CHANNEL=alpha  ;;
+          esac
+          echo "Publishing to APT channel: $CHANNEL"
+
           sudo apt-get install -y -q dpkg-dev
 
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import
 
           git worktree add /tmp/apt-repo gh-pages
 
-          bash scripts/update-apt-repo.sh "$DEB" /tmp/apt-repo
+          bash scripts/update-apt-repo.sh "$DEB" /tmp/apt-repo "$CHANNEL"
 
           cd /tmp/apt-repo
           git add .
           git diff --staged --quiet && { echo "No changes to APT repo"; exit 0; }
-          git commit -m "chore: update APT repo for $(basename $DEB)"
+          git commit -m "chore: update APT repo ($CHANNEL) for $(basename $DEB)"
           git push --force origin gh-pages

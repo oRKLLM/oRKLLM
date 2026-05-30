@@ -1,35 +1,54 @@
 #!/usr/bin/env bash
 # Updates the gh-pages APT repository with a new .deb file.
-# Usage: update-apt-repo.sh <path-to-deb> <repo-root>
+# Usage: update-apt-repo.sh <path-to-deb> <repo-root> [channel]
+#   channel: stable (default) | beta | alpha
 set -euo pipefail
 
-DEB="${1:?Usage: update-apt-repo.sh <path-to-deb> <repo-root>}"
+DEB="${1:?Usage: update-apt-repo.sh <path-to-deb> <repo-root> [channel]}"
 REPO_ROOT="${2:-.}"
+CHANNEL="${3:-stable}"
 DEBNAME=$(basename "$DEB")
 
-mkdir -p "$REPO_ROOT/pool/main/o/orkllm"
-mkdir -p "$REPO_ROOT/dists/stable/main/binary-arm64"
+# Validate channel
+case "$CHANNEL" in
+  stable|beta|alpha) ;;
+  *) echo "ERROR: invalid channel '$CHANNEL' — must be stable, beta, or alpha"; exit 1 ;;
+esac
 
-cp "$DEB" "$REPO_ROOT/pool/main/o/orkllm/$DEBNAME"
+POOL_DIR="pool/$CHANNEL/o/orkllm"
+DISTS_DIR="dists/$CHANNEL/main/binary-arm64"
 
-# Packages index — run from REPO_ROOT so Filename: paths are relative
+mkdir -p "$REPO_ROOT/$POOL_DIR"
+mkdir -p "$REPO_ROOT/$DISTS_DIR"
+
+cp "$DEB" "$REPO_ROOT/$POOL_DIR/$DEBNAME"
+
+# Packages index — scans only this channel's pool so packages don't bleed across channels
 cd "$REPO_ROOT"
-dpkg-scanpackages --arch arm64 pool/ \
-  > dists/stable/main/binary-arm64/Packages
-gzip  -k -f dists/stable/main/binary-arm64/Packages
-bzip2 -k -f dists/stable/main/binary-arm64/Packages
+dpkg-scanpackages --arch arm64 "$POOL_DIR" \
+  > "$DISTS_DIR/Packages"
+gzip  -k -f "$DISTS_DIR/Packages"
+bzip2 -k -f "$DISTS_DIR/Packages"
 
 # Release file
-cd "$REPO_ROOT/dists/stable"
+cd "$REPO_ROOT/dists/$CHANNEL"
+
+SUITE_DESC="oRKLLM APT Repository — OpenAI-compatible LLM inference for Rockchip NPU"
+case "$CHANNEL" in
+  stable) LABEL="oRKLLM Stable" ;;
+  beta)   LABEL="oRKLLM Beta (pre-release)" ;;
+  alpha)  LABEL="oRKLLM Alpha (development)" ;;
+esac
+
 {
   cat <<EOF
 Origin: oRKLLM
-Label: oRKLLM
-Suite: stable
-Codename: stable
+Label: $LABEL
+Suite: $CHANNEL
+Codename: $CHANNEL
 Architectures: arm64
 Components: main
-Description: oRKLLM APT Repository - OpenAI-compatible LLM inference for Rockchip NPU
+Description: $SUITE_DESC
 Date: $(date -Ru)
 EOF
   echo "MD5Sum:"
@@ -45,4 +64,4 @@ EOF
 gpg --batch --yes --armor --detach-sign  --output Release.gpg Release
 gpg --batch --yes --armor --clearsign    --output InRelease   Release
 
-echo "==> APT repo updated with $DEBNAME"
+echo "==> APT repo updated: channel=$CHANNEL pkg=$DEBNAME"

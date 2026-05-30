@@ -96,12 +96,20 @@ Pre-built `.deb` packages for ARM64 are available via the oRKLLM APT repository 
 
 ### Option A — APT repository (recommended)
 
+Three channels are available:
+
+| Channel | Branch | Description |
+| :--- | :--- | :--- |
+| `stable` | `main` | Production releases — recommended for most users |
+| `beta` | `beta` | Release candidates promoted from alpha after 48 h with no bug reports |
+| `alpha` | `alpha` | Cutting-edge development builds |
+
 ```bash
 # Trust the oRKLLM signing key
 curl -fsSL https://mafischer.github.io/oRKLLM/orkllm.gpg \
   | sudo gpg --dearmor -o /usr/share/keyrings/orkllm.gpg
 
-# Add the repository
+# Add the repository — replace 'stable' with 'beta' or 'alpha' to follow pre-releases
 echo "deb [arch=arm64 signed-by=/usr/share/keyrings/orkllm.gpg] \
   https://mafischer.github.io/oRKLLM stable main" \
   | sudo tee /etc/apt/sources.list.d/orkllm.list
