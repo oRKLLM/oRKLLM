@@ -23,8 +23,8 @@ const OIDC_ADMIN_PASS = process.env.ORKLLM_TEST_OIDC_ADMIN_PASS || '';
 
 // SSO tests target the live server since Keycloak only allows the production redirect URI.
 // These tests are skipped when run against localhost.
-const LIVE_BASE_URL = 'https://orkllm.fischerapps.com';
-const IS_LIVE = process.env.ORKLLM_TEST_LIVE === '1';
+const LIVE_BASE_URL = process.env.ORKLLM_TEST_LIVE_URL || '';
+const IS_LIVE = process.env.ORKLLM_TEST_LIVE === '1' && !!LIVE_BASE_URL;
 
 async function loginAs(page, username = ADMIN_USER, password = ADMIN_PASS) {
   await page.goto('/');
