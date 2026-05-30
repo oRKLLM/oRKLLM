@@ -18,6 +18,36 @@ The main objective of **oRKLLM** is to turn low-power Rockchip SBCs (Single Boar
 
 ---
 
+## 1a. Development Philosophy
+
+oRKLLM is a **Node.js / JavaScript project end-to-end**. All tooling decisions should reflect that.
+
+### Language preference
+
+- **Always prefer Node.js / JavaScript** for scripting, data processing, CI steps, test helpers, and one-off utilities.
+- Use `node -e "..."` or inline `node << 'EOF' ... EOF` in shell scripts and CI workflows.
+- **Never default to Python** unless it is the only viable option (e.g. `rkllm-toolkit` model conversion, which is a Python-only SDK). If you reach for `python3`, stop and ask whether Node.js can do it instead.
+
+Examples of what this means in practice:
+
+| Task | ✅ Correct | ❌ Avoid |
+| :--- | :--- | :--- |
+| Parse JSON in CI | `node -e "const d=JSON.parse(...)"` | `python3 -c "import json..."` |
+| HTTP request in CI | `node -e "require('https').request(...)"` | `python3 -c "import urllib..."` |
+| File processing | Node.js script in `scripts/` | ad-hoc Python script |
+| Test helpers | `.mjs` file, imported by Playwright | Python subprocess |
+| Data munging | `jq` for simple cases, Node.js for complex | Python |
+
+### Toolchain
+
+- **Runtime**: Node.js (backend, scripts, CI inline code)
+- **Frontend**: Vue 3 + Vuetify 3, built with Vite
+- **Tests**: Playwright (E2E), no unit test framework currently
+- **CI scripting**: Bash + `node -e` / `node << 'EOF'`, never Python
+- **Exception**: `rkllm-toolkit` model conversion on the build host (10.3.0.241) requires Python — that is the only sanctioned Python use
+
+---
+
 ## 2. Implemented Stack
 
 The project was re-engineered from a Python/FastAPI concept to a fully Node.js stack:
