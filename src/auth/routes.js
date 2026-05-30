@@ -109,7 +109,7 @@ export default async function authRoutes(fastify, options) {
       const tokens = await oidc.authorizationCodeGrant(config, currentUrl, checks);
       tokenData = tokens.claims();
     } catch (e) {
-      console.error('[OIDC] Token exchange failed:', e.message);
+      console.error('[OIDC] Token exchange failed:', e.message, e.cause?.error, e.cause?.error_description);
       return reply.redirect(`/?oidc_error=${encodeURIComponent('Authentication failed: ' + e.message)}`);
     }
 
