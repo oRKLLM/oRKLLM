@@ -1,3 +1,5 @@
+@README.md
+
 # oRKLLM — Agent Instructions & Architecture
 
 oRKLLM is an OpenAI API-compatible local LLM inference server and admin application designed for Rockchip NPU-powered platforms (specifically the **RK3576** found in the NanoPi M5 and **RK3588** series).

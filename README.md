@@ -217,6 +217,20 @@ Set these in `.env` locally (gitignored) or as GitHub Actions secrets/variables.
 | `ORKLLM_TEST_LIVE` | Variable | Set to `1` to run SSO tests against real Keycloak on LAN |
 | `ORKLLM_TEST_LIVE_URL` | Variable | Live server URL (e.g. `https://orkllm.fischerapps.com`) |
 
+### Debugging failed CI tests
+
+When E2E tests fail in CI, Playwright uploads screenshots and error context as an artifact named `playwright-report` (retained 7 days).
+
+**Download via CLI:**
+```bash
+gh run download <run-id> --name playwright-report -D /tmp/report
+# Find the run ID with: gh run list --limit 5
+```
+
+**Download via browser:** GitHub Actions run → **Summary** → **Artifacts** section at the bottom → download `playwright-report.zip`.
+
+Each failed test has a `test-failed-1.png` screenshot and an `error-context.md` with the stack trace, making it easy to see exactly what the browser showed at the point of failure.
+
 ---
 
 ## 🤝 Credits & Acknowledgements
