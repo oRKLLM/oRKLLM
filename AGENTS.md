@@ -266,6 +266,19 @@ Tests cover:
 Identity provider credentials are read from environment variables. Set them in `.env` locally
 (gitignored) or as GitHub Actions secrets/variables. See `.env` for variable names.
 
+### Why tests run sequentially (`workers: 1`)
+
+The three spec files share a single server with stateful resources (model loaded in NPU, auth sessions, OIDC config). Running in parallel would cause races — e.g. two tests loading different models simultaneously, or one test's OIDC config leaking into another's login flow.
+
+The ordering is also intentional: `orkllm.spec.js` creates the admin account that `rbac.spec.js` depends on.
+
+To enable parallel workers you would need:
+- Per-worker isolated servers (different ports + DB paths)
+- Each spec file fully self-contained with its own setup/teardown
+- No cross-spec state dependencies
+
+This is a significant refactor not currently worth the complexity given ~40s total runtime.
+
 ---
 
 ## 7a. Authentication & RBAC
