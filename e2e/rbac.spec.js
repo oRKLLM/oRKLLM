@@ -44,15 +44,18 @@ async function loginAs(page, username = ADMIN_USER, password = ADMIN_PASS) {
   }
 
   if (url.includes('/login')) {
-    const usernameField = page.locator('input[type="text"]');
-    const passwordField = page.locator('input[type="password"]').first();
-    await expect(usernameField).toBeVisible({ timeout: 3000 });
-    await usernameField.fill(username);
-    await page.keyboard.press('Tab'); // trigger validation
-    await passwordField.fill(password);
-    await page.keyboard.press('Tab');
-    // Submit directly via keyboard to bypass button disabled state during validation
-    await passwordField.press('Enter');
+    // Login via API directly — avoids Vuetify form validation timing issues
+    // and SSO button conflicts when a provider is configured
+    const result = await page.evaluate(async ({ u, p }) => {
+      const res = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: u, password: p }),
+      });
+      return res.ok;
+    }, { u: username, p: password });
+    if (!result) throw new Error(`Login failed for user: ${username}`);
+    await page.goto('/');
     await expect(page).toHaveURL(/http:\/\/127.0.0.1:18000\/?$/, { timeout: 8000 });
     return;
   }
@@ -229,9 +232,15 @@ test('Login page shows SSO button when provider is configured', async ({ page })
     page.locator('button:has-text("TestIdP")').or(page.locator('button:has-text("Sign in with")')).first()
   ).toBeVisible({ timeout: 5000 });
 
-  // Clean up — remove provider (log back in first)
+  // Clean up — log back in then remove provider
+  // Local form is still available since localAuthDisabled is false
   await loginAs(page, ADMIN_USER, ADMIN_PASS);
   await page.evaluate(async () => { await fetch('/api/admin/auth-provider', { method: 'DELETE' }); });
+
+  // Verify provider is gone so subsequent tests see a clean login page
+  await page.goto('/login');
+  await page.reload();
+  await expect(page.locator('button:has-text("TestIdP")')).toHaveCount(0, { timeout: 3000 });
 });
 
 // ---------------------------------------------------------------------------
@@ -280,7 +289,7 @@ test('Admin can save Keycloak OIDC configuration', async ({ page }) => {
           usernameClaim: 'preferred_username',
           emailClaim: 'email',
           groupsClaim: 'groups',
-          groupRoleMap: [{ group: 'orkllm-admins', role: 'admin' }],
+          groupRoleMap: [{ group: '/orkllm/admin', role: 'admin' }],
         },
       }),
     });
@@ -337,7 +346,7 @@ test('Admin can save Keycloak SAML configuration', async ({ page }) => {
           samlUsernamePath: 'username',
           samlEmailPath: 'email',
           samlGroupsPath: 'groups',
-          groupRoleMap: [{ group: 'orkllm-admins', role: 'admin' }],
+          groupRoleMap: [{ group: '/orkllm/admin', role: 'admin' }],
         },
       }),
     });
@@ -440,7 +449,7 @@ test('SSO: Keycloak admin user gets admin role via group mapping', async ({ brow
     expect(status.status).toBe('authenticated');
     expect(status.user.authProvider).toBe('oidc');
     expect(status.user.username).toBe(OIDC_ADMIN_USER);
-    expect(status.user.role).toBe('admin'); // testadminuser should be in orkllm-admins group
+    expect(status.user.role).toBe('admin'); // testadminuser should be in /orkllm/admin group
   } finally {
     await ctx.close();
   }
