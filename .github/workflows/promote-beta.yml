@@ -1,0 +1,122 @@
+name: Promote Beta
+
+on:
+  # Check twice daily whether beta is ready to promote
+  schedule:
+    - cron: '0 */12 * * *'
+
+  # Allow manual trigger for immediate promotion
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Promote immediately without waiting 2 days'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: read
+  pull-requests: write
+
+jobs:
+  check-and-promote:
+    name: Check Beta Stability
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Check if beta branch exists and has content ahead of main
+        id: check
+        run: |
+          git fetch origin beta main 2>/dev/null || { echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; }
+
+          AHEAD=$(git rev-list origin/main..origin/beta --count)
+          if [ "$AHEAD" -eq 0 ]; then
+            echo "Beta is already merged into main — nothing to promote"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ahead=$AHEAD" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Check how long beta has been stable
+        id: age
+        if: steps.check.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          FORCE="${{ github.event.inputs.force }}"
+
+          # Get timestamp of last push to beta
+          LAST_PUSH=$(git log origin/beta -1 --format="%ct")
+          NOW=$(date +%s)
+          AGE_HOURS=$(( (NOW - LAST_PUSH) / 3600 ))
+          AGE_DAYS=$(( AGE_HOURS / 24 ))
+
+          echo "Beta last updated ${AGE_HOURS}h ago (${AGE_DAYS} days)"
+          echo "age_hours=$AGE_HOURS" >> "$GITHUB_OUTPUT"
+
+          if [ "$FORCE" = "true" ]; then
+            echo "Force flag set — skipping age check"
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          elif [ "$AGE_HOURS" -lt 48 ]; then
+            echo "Beta is only ${AGE_HOURS}h old — waiting for 48h stability window"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check for open bug issues
+        id: bugs
+        if: steps.check.outputs.skip == 'false' && steps.age.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          # Count open issues labelled 'bug' created/updated in the last 7 days
+          BUG_COUNT=$(gh issue list \
+            --label bug \
+            --state open \
+            --json number \
+            --jq 'length' 2>/dev/null || echo 0)
+
+          echo "Open bug issues: $BUG_COUNT"
+          echo "bug_count=$BUG_COUNT" >> "$GITHUB_OUTPUT"
+
+          if [ "$BUG_COUNT" -gt 0 ]; then
+            echo "promote=false" >> "$GITHUB_OUTPUT"
+            echo "⚠️ Holding promotion — $BUG_COUNT open bug issue(s) found"
+          else
+            echo "promote=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Promote beta → main
+        if: steps.check.outputs.skip == 'false' && steps.age.outputs.ready == 'true' && steps.bugs.outputs.promote == 'true'
+        run: |
+          git checkout main
+          git pull origin main
+          git merge --no-ff origin/beta -m "chore(release): promote beta to main"
+          git push origin main
+          echo "✅ Beta promoted to main"
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ steps.check.outputs.skip }}" = "true" ]; then
+            echo "### ⏭️ Nothing to promote — beta is up to date with main" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${{ steps.age.outputs.ready }}" = "false" ]; then
+            echo "### ⏳ Beta not ready — only ${{ steps.age.outputs.age_hours }}h old (need 48h)" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${{ steps.bugs.outputs.promote }}" = "false" ]; then
+            echo "### 🐛 Promotion blocked — ${{ steps.bugs.outputs.bug_count }} open bug issue(s)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### ✅ Beta promoted to main" >> "$GITHUB_STEP_SUMMARY"
+          fi
