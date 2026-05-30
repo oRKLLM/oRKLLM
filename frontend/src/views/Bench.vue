@@ -10,28 +10,35 @@
   <v-main class="bg-slate-page fill-height">
     <v-container fluid class="pt-6 px-6" style="max-width: 860px;">
 
-      <div class="text-h5 font-weight-bold mb-1">Benchmark</div>
-      <div class="text-caption text-grey mb-5">Measure inference throughput on the active model.</div>
+      <div class="d-flex align-center justify-space-between mb-5 flex-wrap gap-3">
+        <div>
+          <div class="text-h5 font-weight-bold mb-1">Benchmark</div>
+          <div class="text-caption text-grey">Measure inference throughput on the selected model.</div>
+        </div>
+        <!-- Model selector — same pattern as Chat -->
+        <v-select
+          v-model="selectedModel"
+          :items="modelItems"
+          density="compact"
+          hide-details
+          variant="outlined"
+          style="min-width: 240px; max-width: 360px;"
+          placeholder="Select a model..."
+          :loading="loadingModel"
+          @update:modelValue="onModelChange"
+        ></v-select>
+      </div>
 
-      <!-- Status banner -->
+      <!-- Status banner — only shows if a model is active -->
       <v-alert
-        v-if="!status.isLoaded"
-        type="warning"
-        variant="tonal"
-        border="start"
-        class="mb-5"
-      >
-        No model is currently loaded. Load a model from the <strong>Models</strong> page to run a benchmark.
-      </v-alert>
-      <v-alert
-        v-else
+        v-if="status.isLoaded"
         type="success"
         variant="tonal"
         border="start"
         class="mb-5"
         density="comfortable"
       >
-        <div class="font-weight-bold">Active model: {{ status.model }}</div>
+        <div class="font-weight-bold">Active: {{ status.model }}</div>
         <div class="text-caption">Platform: {{ status.isMock ? 'Mock Engine' : 'Rockchip NPU' }}</div>
       </v-alert>
 
@@ -71,7 +78,7 @@
           variant="flat"
           size="large"
           :loading="running"
-          :disabled="!status.isLoaded"
+          :disabled="!status.isLoaded || !selectedModel"
           prepend-icon="mdi-play"
           @click="runBenchmark"
         >
@@ -154,6 +161,9 @@ export default {
   data: () => ({
     user: { username: 'admin', role: 'admin', authProvider: 'local' },
     status: { isLoaded: false, model: null, isMock: false },
+    models: [],
+    selectedModel: null,
+    loadingModel: false,
     benchPrompt: DEFAULT_PROMPT,
     maxTokens: 512,
     running: false,
@@ -166,11 +176,15 @@ export default {
   computed: {
     isDark() {
       return this.themeName === 'customDarkTheme';
+    },
+    modelItems() {
+      return this.models.map(m => ({ title: m.id, value: m.id }));
     }
   },
-  mounted() {
+  async mounted() {
     this.fetchAuth();
-    this.fetchStatus();
+    await this.fetchModels();
+    await this.fetchStatus();
   },
   methods: {
     async fetchAuth() {
@@ -181,12 +195,47 @@ export default {
         else if (data.username) this.user = { username: data.username, role: 'admin', authProvider: 'local' };
       } catch (e) {}
     },
+    async fetchModels() {
+      try {
+        const res = await fetch('/v1/models');
+        const data = await res.json();
+        this.models = data.data || [];
+      } catch (e) {}
+    },
     async fetchStatus() {
       try {
         const res = await fetch('/api/admin/status');
         const data = await res.json();
         this.status = data;
+        if (data.isLoaded && data.model && !this.selectedModel) {
+          this.selectedModel = data.model;
+        }
       } catch (e) {}
+    },
+    async onModelChange(modelId) {
+      if (!modelId || modelId === this.status.model) {
+        this.selectedModel = modelId;
+        return;
+      }
+      this.loadingModel = true;
+      try {
+        const res = await fetch('/api/admin/load', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: modelId })
+        });
+        if (res.ok) {
+          await this.fetchStatus();
+        } else {
+          const data = await res.json();
+          alert(data.error || 'Failed to load model');
+          this.selectedModel = this.status.model;
+        }
+      } catch (e) {
+        alert('Network error');
+      } finally {
+        this.loadingModel = false;
+      }
     },
     async runBenchmark() {
       if (!this.status.isLoaded || this.running) return;
