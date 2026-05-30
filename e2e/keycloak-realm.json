@@ -4,6 +4,7 @@
   "registrationAllowed": false,
   "resetPasswordAllowed": false,
   "bruteForceProtected": false,
+  "requiredActions": [],
   "groups": [
     { "name": "orkllm", "path": "/orkllm", "subGroups": [
       { "name": "admin", "path": "/orkllm/admin" }
@@ -17,6 +18,7 @@
       "email": "testuser@mock.test",
       "credentials": [{ "type": "password", "value": "testuser123", "temporary": false }],
       "groups": ["/orkllm"],
+      "requiredActions": [],
       "attributes": {}
     },
     {
@@ -26,6 +28,7 @@
       "email": "testadminuser@mock.test",
       "credentials": [{ "type": "password", "value": "testadminuser123", "temporary": false }],
       "groups": ["/orkllm", "/orkllm/admin"],
+      "requiredActions": [],
       "attributes": {}
     }
   ],

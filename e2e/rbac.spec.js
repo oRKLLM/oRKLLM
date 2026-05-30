@@ -482,19 +482,25 @@ test('SSO: regular user logs in via OIDC and gets user role', async ({ page }) =
 
   await loginAs(page);
   await page.evaluate(async () => fetch('/api/admin/auth-provider', { method: 'DELETE' }));
-  await configureOidc(page, KC_ISSUER);
-  await page.evaluate(() => fetch('/api/admin/logout', { method: 'POST' }));
-  await ssoLogin(page, KC_USER, KC_USER_PASS);
 
-  const status = await page.evaluate(() =>
-    fetch('/api/admin/auth-status').then(r => r.json())
-  );
-  expect(status.status).toBe('authenticated');
-  expect(status.user.authProvider).toBe('oidc');
-  expect(status.user.role).toBe('user');
+  try {
+    await configureOidc(page, KC_ISSUER);
+    await page.evaluate(() => fetch('/api/admin/logout', { method: 'POST' }));
+    await ssoLogin(page, KC_USER, KC_USER_PASS);
 
-  await loginAs(page);
-  await page.evaluate(() => fetch('/api/admin/auth-provider', { method: 'DELETE' }));
+    const status = await page.evaluate(() =>
+      fetch('/api/admin/auth-status').then(r => r.json())
+    );
+    expect(status.status).toBe('authenticated');
+    expect(status.user.authProvider).toBe('oidc');
+    expect(status.user.role).toBe('user');
+  } finally {
+    // Always restore local auth — prevents cascading failures if SSO test fails
+    await page.evaluate(async () => {
+      await fetch('/api/admin/auth-provider', { method: 'DELETE' });
+    });
+    await loginAs(page); // re-establish local session for cleanup
+  }
 });
 
 test('SSO: admin user gets admin role via /orkllm/admin group mapping', async ({ page }) => {
@@ -503,17 +509,22 @@ test('SSO: admin user gets admin role via /orkllm/admin group mapping', async ({
 
   await loginAs(page);
   await page.evaluate(async () => fetch('/api/admin/auth-provider', { method: 'DELETE' }));
-  await configureOidc(page, KC_ISSUER);
-  await page.evaluate(() => fetch('/api/admin/logout', { method: 'POST' }));
-  await ssoLogin(page, KC_ADMIN_USER, KC_ADMIN_PASS);
 
-  const status = await page.evaluate(() =>
-    fetch('/api/admin/auth-status').then(r => r.json())
-  );
-  expect(status.status).toBe('authenticated');
-  expect(status.user.authProvider).toBe('oidc');
-  expect(status.user.role).toBe('admin');
+  try {
+    await configureOidc(page, KC_ISSUER);
+    await page.evaluate(() => fetch('/api/admin/logout', { method: 'POST' }));
+    await ssoLogin(page, KC_ADMIN_USER, KC_ADMIN_PASS);
 
-  await loginAs(page);
-  await page.evaluate(() => fetch('/api/admin/auth-provider', { method: 'DELETE' }));
+    const status = await page.evaluate(() =>
+      fetch('/api/admin/auth-status').then(r => r.json())
+    );
+    expect(status.status).toBe('authenticated');
+    expect(status.user.authProvider).toBe('oidc');
+    expect(status.user.role).toBe('admin');
+  } finally {
+    await page.evaluate(async () => {
+      await fetch('/api/admin/auth-provider', { method: 'DELETE' });
+    });
+    await loginAs(page);
+  }
 });

@@ -18,3 +18,7 @@ export default async function globalSetup() {
     if (fs.existsSync(p)) fs.rmSync(p);
   }
 }
+
+// Note: global-setup intentionally does NOT clear auth-provider config via API
+// because the server isn't started yet at this point.
+// Each SSO test uses try/finally to guarantee cleanup after itself.
