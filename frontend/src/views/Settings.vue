@@ -49,19 +49,20 @@
         <div class="text-subtitle-2 font-weight-medium mb-1">Trusted Proxy</div>
         <div class="text-caption text-grey mb-3">
           Trust <code>X-Forwarded-For</code> / <code>X-Forwarded-Proto</code> headers from a reverse proxy (nginx, Cloudflare, etc.).
-          Use <code>true</code> to trust all proxies, or enter a specific IP/CIDR (e.g. <code>10.0.0.0/8</code>).
+          Use <code>true</code> to trust all proxies, or enter one or more IPs, CIDRs, or hostnames separated by commas
+          (e.g. <code>10.0.0.1, 10.0.0.2</code> or <code>10.0.0.0/8, 172.16.0.0/12</code>).
           Required when running behind nginx for OIDC/SAML redirect URIs to use the correct scheme.
           Takes effect on next server restart.
         </div>
         <v-text-field
           v-model="settings.trustedProxy"
           label="Trusted Proxy"
-          placeholder="false (disabled) | true (all) | 10.0.0.0/8"
+          placeholder="false (disabled) | true (all) | 10.0.0.1, 10.0.0.2 | 10.0.0.0/8"
           variant="outlined"
           density="compact"
           hide-details
           class="font-mono"
-          style="max-width: 360px;"
+          style="max-width: 560px;"
         ></v-text-field>
       </v-card>
 

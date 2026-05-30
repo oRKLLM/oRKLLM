@@ -49,13 +49,20 @@ process.stderr.write = function (chunk, encoding, callback) {
 // Configurable via ORKLLM_TRUSTED_PROXY env var or stored setting
 import { dbGetSetting } from './db.js';
 
+function parseTrustedProxy(value) {
+  if (!value) return false;
+  if (value === 'true') return true;
+  // Support comma-separated list of IPs/CIDRs/hostnames (like a SAN list)
+  const parts = value.split(',').map(s => s.trim()).filter(Boolean);
+  return parts.length === 1 ? parts[0] : parts;
+}
+
 function getTrustedProxy() {
   const env = process.env.ORKLLM_TRUSTED_PROXY;
-  if (env) return env === 'true' ? true : env; // 'true' = trust all, or specific IP/CIDR
+  if (env) return parseTrustedProxy(env);
   try {
     const stored = dbGetSetting('trusted_proxy');
-    if (stored === 'true') return true;
-    if (stored) return stored;
+    if (stored) return parseTrustedProxy(stored);
   } catch {}
   return false;
 }

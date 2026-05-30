@@ -188,7 +188,7 @@ npm run dev:server
 | `ORKLLM_LIB_PATH` | `/usr/lib/librkllmrt.so` | Path to Rockchip RKLLM runtime |
 | `ORKLLM_MODELS_DIR` | `./models` | Directory scanned for `.rkllm` files |
 | `ORKLLM_DB_PATH` | `~/.config/orkllm/auth.db` | SQLite database path |
-| `ORKLLM_TRUSTED_PROXY` | *(unset)* | `true` or CIDR to trust `X-Forwarded-*` headers |
+| `ORKLLM_TRUSTED_PROXY` | *(unset)* | `true` (all), a single IP/CIDR, or comma-separated IPs/CIDRs to trust `X-Forwarded-*` headers |
 
 ---
 
