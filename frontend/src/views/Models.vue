@@ -102,6 +102,17 @@
                     </v-btn>
                     <v-btn
                       v-if="status.model === model.id"
+                      :color="status.pinned ? 'warning' : 'default'"
+                      size="small"
+                      variant="tonal"
+                      :title="status.pinned ? 'Unpin model (re-enable idle timeout)' : 'Pin model (prevent auto-unload)'"
+                      @click="togglePin"
+                    >
+                      <v-icon size="16" class="mr-1">{{ status.pinned ? 'mdi-pin' : 'mdi-pin-outline' }}</v-icon>
+                      {{ status.pinned ? 'Pinned' : 'Pin' }}
+                    </v-btn>
+                    <v-btn
+                      v-if="status.model === model.id"
                       color="error"
                       size="small"
                       variant="flat"
@@ -530,7 +541,7 @@ export default {
     user: { username: 'admin', role: 'admin', authProvider: 'local' },
     tab: 'manager',
     models: [],
-    status: { isLoaded: false, model: null, isMock: false },
+    status: { isLoaded: false, model: null, isMock: false, pinned: false },
     loadingModelId: null,
     scanningModels: false,
     timeoutSlider: 5,
@@ -750,6 +761,15 @@ export default {
         alert('Network connection error');
       } finally {
         this.loadingModelId = null;
+      }
+    },
+    async togglePin() {
+      const endpoint = this.status.pinned ? '/api/admin/unpin' : '/api/admin/pin';
+      try {
+        const res = await fetch(endpoint, { method: 'POST' });
+        if (res.ok) await this.fetchStatus();
+      } catch (e) {
+        alert('Network connection error');
       }
     },
     async unloadModel(modelId) {

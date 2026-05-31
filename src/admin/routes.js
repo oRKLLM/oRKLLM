@@ -265,6 +265,19 @@ export default async function adminRoutes(fastify, options) {
     }
   });
 
+  // POST /api/admin/pin — prevent active model from idle-unloading
+  fastify.post('/pin', async (request, reply) => {
+    if (!pool.isLoaded) return reply.status(409).send({ error: 'No model loaded' });
+    pool.setPin(true);
+    return { success: true, pinned: true, model: pool.getStatus().model };
+  });
+
+  // POST /api/admin/unpin — re-enable idle timeout for active model
+  fastify.post('/unpin', async (request, reply) => {
+    pool.setPin(false);
+    return { success: true, pinned: false, model: pool.getStatus().model };
+  });
+
   // POST /api/admin/timeout
   fastify.post('/timeout', async (request, reply) => {
     const { timeout } = request.body || {};

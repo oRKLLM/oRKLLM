@@ -14,16 +14,29 @@ class EnginePool {
     this.activeModel = null; // { name, path, options, isMock }
     this.isLoaded = false;
     this.loadingPromise = null;
-    this.activeGeneration = null; 
+    this.activeGeneration = null;
     this.idleTimer = null;
-    
+    this.pinned = false; // when true, idle timer never fires
+
     // Load idle timeout from DB or default to 5 minutes
     const savedTimeout = dbGetSetting('idle_timeout_minutes');
     const timeoutVal = savedTimeout !== null ? parseInt(savedTimeout) : 5;
     this.idleTimeoutMs = timeoutVal * 60 * 1000;
-    
+
     this.queue = [];
     this.processingQueue = false;
+  }
+
+  setPin(pinned) {
+    this.pinned = pinned;
+    if (!pinned) {
+      this.resetIdleTimer(); // restart idle countdown when unpinned
+    } else {
+      if (this.idleTimer) {
+        clearTimeout(this.idleTimer);
+        this.idleTimer = null;
+      }
+    }
   }
 
   setIdleTimeout(minutes) {
@@ -41,7 +54,7 @@ class EnginePool {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;
     }
-    if (this.idleTimeoutMs > 0 && this.isLoaded && !this.activeGeneration) {
+    if (this.idleTimeoutMs > 0 && this.isLoaded && !this.activeGeneration && !this.pinned) {
       this.idleTimer = setTimeout(() => {
         console.log(`[EnginePool] Idle timeout reached. Unloading active model: ${this.activeModel?.name}`);
         this.unload();
@@ -148,6 +161,7 @@ class EnginePool {
 
     this.activeModel = null;
     this.isLoaded = false;
+    this.pinned = false;
   }
 
   async generate(modelName, prompt, options, onToken, cachePaths = {}) {
@@ -242,7 +256,8 @@ class EnginePool {
       isLoaded: this.isLoaded,
       model: this.activeModel ? this.activeModel.name : null,
       isMock: this.activeModel ? this.activeModel.isMock : false,
-      options: this.activeModel ? this.activeModel.options : null
+      options: this.activeModel ? this.activeModel.options : null,
+      pinned: this.pinned
     };
   }
 }
