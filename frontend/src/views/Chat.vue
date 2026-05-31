@@ -491,10 +491,12 @@ export default {
 }
 
 .bg-surface-variant {
-  background-color: #1F2937 !important;
+  background-color: #1E3048 !important;
+  color: #E8EDF5 !important;
 }
 .v-theme--customLightTheme .bg-surface-variant {
-  background-color: #E2E8F0 !important;
+  background-color: #D9E2EF !important;
+  color: #111827 !important;
 }
 
 .bg-slate-input {
