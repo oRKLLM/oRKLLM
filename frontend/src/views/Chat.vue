@@ -70,6 +70,18 @@
             @update:modelValue="onModelChange"
           ></v-select>
 
+          <!-- History button — mobile only -->
+          <v-btn
+            class="d-sm-none"
+            icon
+            variant="text"
+            size="small"
+            title="Conversation history"
+            @click="mobileHistoryOpen = true"
+          >
+            <v-icon>mdi-history</v-icon>
+          </v-btn>
+
           <!-- New Chat button -->
           <v-btn
             variant="tonal"
@@ -225,6 +237,41 @@
 
       </div>
     </div>
+
+    <!-- Mobile conversation history bottom sheet -->
+    <v-bottom-sheet v-model="mobileHistoryOpen" max-height="70vh">
+      <v-card class="rounded-t-xl">
+        <v-card-title class="d-flex align-center pa-4 pb-2">
+          <v-icon color="primary" class="mr-2">mdi-history</v-icon>
+          <span class="text-body-1 font-weight-bold">Conversation History</span>
+          <v-spacer></v-spacer>
+          <v-btn icon size="small" variant="text" @click="mobileHistoryOpen = false">
+            <v-icon>mdi-close</v-icon>
+          </v-btn>
+        </v-card-title>
+        <v-divider></v-divider>
+        <v-list class="overflow-y-auto" style="max-height: calc(70vh - 64px);">
+          <v-list-item v-if="conversations.length === 0" class="text-grey text-caption">
+            No conversations yet for this model.
+          </v-list-item>
+          <v-list-item
+            v-for="conv in conversations"
+            :key="conv.id"
+            :active="activeConversationId === conv.id"
+            active-color="primary"
+            @click="loadConversation(conv.id); mobileHistoryOpen = false"
+          >
+            <v-list-item-title class="text-body-2">{{ conv.title }}</v-list-item-title>
+            <v-list-item-subtitle class="text-caption">{{ formatDate(conv.updated_at) }}</v-list-item-subtitle>
+            <template #append>
+              <v-btn icon size="x-small" variant="text" color="error" @click.stop="deleteConversation(conv.id)">
+                <v-icon size="16">mdi-delete-outline</v-icon>
+              </v-btn>
+            </template>
+          </v-list-item>
+        </v-list>
+      </v-card>
+    </v-bottom-sheet>
   </v-main>
 </template>
 
@@ -257,6 +304,7 @@ export default {
     themeName: localStorage.getItem('orkllm-theme') || 'customDarkTheme',
     // Conversation persistence
     sidebarOpen: true,
+    mobileHistoryOpen: false,
     conversations: [],
     activeConversationId: null,
   }),
