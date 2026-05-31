@@ -148,7 +148,7 @@
                 rows="1"
                 auto-grow
                 max-rows="6"
-                :disabled="!activeModel || generating"
+                :disabled="!activeModel"
                 @keydown.enter.exact.prevent="sendMessage"
                 @keydown.enter.shift.exact="() => {}"
               ></v-textarea>
@@ -160,7 +160,7 @@
                   icon
                   variant="flat"
                   size="large"
-                  :disabled="!inputText.trim() || !activeModel || generating"
+                  :disabled="!inputText.trim() || !activeModel"
                   @click="sendMessage"
                 >
                   <v-icon>mdi-send</v-icon>
@@ -211,6 +211,7 @@ export default {
       max_tokens: 1024
     },
     generating: false,
+    messageQueue: [],
     abortController: null,
     appVersion: __APP_VERSION__,
     themeName: localStorage.getItem('orkllm-theme') || 'customDarkTheme'
@@ -286,11 +287,18 @@ export default {
       this.chatHistory = [];
       this.inputText = '';
     },
-    async sendMessage() {
-      const text = this.inputText.trim();
-      if (!text || !this.activeModel || this.generating) return;
+    async sendMessage(queuedText = null) {
+      const text = queuedText ?? this.inputText.trim();
+      if (!text || !this.activeModel) return;
+      if (queuedText === null) this.inputText = '';
 
-      this.inputText = '';
+      if (this.generating) {
+        this.messageQueue.push(text);
+        this.chatHistory.push({ role: 'user', content: text });
+        this.scrollToBottom();
+        return;
+      }
+
       this.chatHistory.push({ role: 'user', content: text });
       this.scrollToBottom();
 
@@ -374,6 +382,10 @@ export default {
         this.generating = false;
         this.abortController = null;
         this.scrollToBottom();
+        if (this.messageQueue.length > 0) {
+          const next = this.messageQueue.shift();
+          this.$nextTick(() => this.sendMessage(next));
+        }
       }
     },
     abortGeneration() {
