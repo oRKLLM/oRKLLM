@@ -1,3 +1,16 @@
+# [0.7.0-alpha.7](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.6...v0.7.0-alpha.7) (2026-05-31)
+
+
+### Bug Fixes
+
+* **chat:** anchor layout to fixed viewport to prevent mobile browser chrome shifting ([36c9d68](https://github.com/mafischer/oRKLLM/commit/36c9d686d35d9a4d2f84e551060a7250a3a7e338))
+* **chat:** pass no args to sendMessage from DOM events to avoid Event being treated as queued text ([f27a24d](https://github.com/mafischer/oRKLLM/commit/f27a24d929b2961e410ef08a617e0006ecd5f8ff))
+
+
+### Features
+
+* **chat:** allow typing and queueing messages during generation ([f5dc89c](https://github.com/mafischer/oRKLLM/commit/f5dc89c45ce53b7451ee583d5659df28ceb9b2b4))
+
 # [0.7.0-alpha.6](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.5...v0.7.0-alpha.6) (2026-05-31)
 
 
