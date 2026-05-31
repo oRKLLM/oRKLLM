@@ -1,3 +1,10 @@
+# [0.7.0-alpha.11](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.10...v0.7.0-alpha.11) (2026-05-31)
+
+
+### Bug Fixes
+
+* **chat:** persist partial assistant response on page navigation using sendBeacon ([d9dfba7](https://github.com/mafischer/oRKLLM/commit/d9dfba738fd2818904a7eb682f471365649e45e0))
+
 # [0.7.0-alpha.10](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.9...v0.7.0-alpha.10) (2026-05-31)
 
 
