@@ -1,3 +1,10 @@
+# [0.7.0-alpha.10](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.9...v0.7.0-alpha.10) (2026-05-31)
+
+
+### Features
+
+* **chat:** add mobile history access via bottom sheet ([1c04205](https://github.com/mafischer/oRKLLM/commit/1c042059c22d8f3efbff07955992e4914dad2760))
+
 # [0.7.0-alpha.9](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.8...v0.7.0-alpha.9) (2026-05-31)
 
 
