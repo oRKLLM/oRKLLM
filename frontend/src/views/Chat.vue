@@ -141,7 +141,7 @@
             <v-col class="pr-3">
               <v-textarea
                 v-model="inputText"
-                placeholder="Type a message... (Shift+Enter for newline, Enter to send)"
+                placeholder="Message… (Shift+Enter for newline)"
                 variant="outlined"
                 density="comfortable"
                 hide-details
