@@ -479,14 +479,17 @@ test('Chat: conversation can be deleted from sidebar', async ({ page }) => {
   await page.keyboard.press('Enter');
   await expect(page.locator('.message-bubble').last()).toContainText('simulated response', { timeout: 10000 });
 
-  // Sidebar item should exist
-  await expect(page.locator('.sidebar-item').first()).toBeVisible({ timeout: 5000 });
+  // The new conversation should be first in the sidebar
+  const targetItem = page.locator('.sidebar-item').filter({ hasText: 'Delete test message' });
+  await expect(targetItem).toBeVisible({ timeout: 5000 });
+  const countBefore = await page.locator('.sidebar-item').count();
 
-  // Delete the conversation via the delete button
-  await page.locator('.sidebar-item').first().locator('.mdi-delete-outline').click();
+  // Delete via its delete button
+  await targetItem.locator('.mdi-delete-outline').click();
 
-  // Sidebar item and chat history should both be gone
-  await expect(page.locator('.sidebar-item')).toHaveCount(0, { timeout: 5000 });
+  // Item is gone and total count decreased by 1
+  await expect(targetItem).toHaveCount(0, { timeout: 5000 });
+  await expect(page.locator('.sidebar-item')).toHaveCount(countBefore - 1, { timeout: 5000 });
   await expect(page.locator('.message-bubble')).toHaveCount(0);
 
   await unloadModel(page);
