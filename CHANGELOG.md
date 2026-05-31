@@ -1,3 +1,10 @@
+# [0.7.0-alpha.5](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.4...v0.7.0-alpha.5) (2026-05-31)
+
+
+### Bug Fixes
+
+* **chat:** shorten input placeholder to fit mobile layout ([76e9d3c](https://github.com/mafischer/oRKLLM/commit/76e9d3c6275acf6c8966fa179438fbfdc35195b0))
+
 # [0.7.0-alpha.4](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.3...v0.7.0-alpha.4) (2026-05-30)
 
 
