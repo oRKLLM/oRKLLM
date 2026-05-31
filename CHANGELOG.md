@@ -1,3 +1,10 @@
+# [0.7.0-alpha.8](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.7...v0.7.0-alpha.8) (2026-05-31)
+
+
+### Features
+
+* **models:** add pin toggle to prevent active model from idle-unloading ([a67726e](https://github.com/mafischer/oRKLLM/commit/a67726e90749bd40bb63a33c96779bad63d539f8))
+
 # [0.7.0-alpha.7](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.6...v0.7.0-alpha.7) (2026-05-31)
 
 
