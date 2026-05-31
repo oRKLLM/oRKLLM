@@ -1,3 +1,10 @@
+# [0.7.0-alpha.6](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.5...v0.7.0-alpha.6) (2026-05-31)
+
+
+### Bug Fixes
+
+* **chat:** improve LLM response bubble contrast in dark and light themes ([a793047](https://github.com/mafischer/oRKLLM/commit/a793047bc14754c471dee17dce29c3aee6afdb03))
+
 # [0.7.0-alpha.5](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.4...v0.7.0-alpha.5) (2026-05-31)
 
 
