@@ -421,3 +421,73 @@ test('Chat page: input bar stays at bottom while messages scroll', async ({ page
 
   await page.setViewportSize({ width: 1280, height: 800 });
 });
+
+// ---------------------------------------------------------------------------
+// Test 15: Chat conversation persistence — history sidebar and round-trip
+// ---------------------------------------------------------------------------
+test('Chat: conversation is persisted and appears in sidebar', async ({ page }) => {
+  await login(page);
+  await loadModel(page);
+  await page.goto('/chat');
+  await expect(page).toHaveURL(/\/chat/);
+
+  // Sidebar should be visible on desktop
+  await expect(page.locator('.chat-sidebar')).toBeVisible({ timeout: 5000 });
+
+  // Start a fresh conversation
+  await page.locator('.chat-layout button:has(.mdi-plus)').click();
+
+  const chatInput = page.locator('textarea').first();
+  await expect(chatInput).toBeEnabled({ timeout: 5000 });
+
+  // Send a message — this creates a new conversation
+  await chatInput.fill('Persistence test message');
+  await page.keyboard.press('Enter');
+
+  // Wait for assistant response
+  await expect(page.locator('.message-bubble').last()).toContainText('simulated response', { timeout: 10000 });
+
+  // Sidebar should now list the conversation titled from the first message
+  await expect(page.locator('.sidebar-item').first()).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('.sidebar-item').first()).toContainText('Persistence test message');
+
+  // New chat clears the active view
+  await page.locator('.chat-layout button:has(.mdi-plus)').click();
+  await expect(page.locator('.message-bubble')).toHaveCount(0);
+
+  // Clicking the sidebar item reloads the conversation
+  await page.locator('.sidebar-item').first().click();
+  await expect(page.locator('.message-bubble').first()).toBeVisible({ timeout: 5000 });
+
+  await unloadModel(page);
+});
+
+// ---------------------------------------------------------------------------
+// Test 16: Chat conversation — delete from sidebar
+// ---------------------------------------------------------------------------
+test('Chat: conversation can be deleted from sidebar', async ({ page }) => {
+  await login(page);
+  await loadModel(page);
+  await page.goto('/chat');
+
+  // Start fresh
+  await page.locator('.chat-layout button:has(.mdi-plus)').click();
+
+  const chatInput = page.locator('textarea').first();
+  await expect(chatInput).toBeEnabled({ timeout: 5000 });
+  await chatInput.fill('Delete test message');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.message-bubble').last()).toContainText('simulated response', { timeout: 10000 });
+
+  // Sidebar item should exist
+  await expect(page.locator('.sidebar-item').first()).toBeVisible({ timeout: 5000 });
+
+  // Delete the conversation via the delete button
+  await page.locator('.sidebar-item').first().locator('.mdi-delete-outline').click();
+
+  // Sidebar item and chat history should both be gone
+  await expect(page.locator('.sidebar-item')).toHaveCount(0, { timeout: 5000 });
+  await expect(page.locator('.message-bubble')).toHaveCount(0);
+
+  await unloadModel(page);
+});

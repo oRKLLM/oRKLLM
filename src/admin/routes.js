@@ -599,4 +599,8 @@ export default async function adminRoutes(fastify, options) {
     dbDeleteModelSettings(modelId);
     return { success: true };
   });
+
+  // ── Conversation history ─────────────────────────────────────────────────
+  const { default: conversationRoutes } = await import('./conversations.js');
+  await fastify.register(conversationRoutes);
 }

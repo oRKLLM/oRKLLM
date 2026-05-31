@@ -131,6 +131,31 @@ const MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 3,
+    description: 'Chat history: conversations and messages tables',
+    up(d) {
+      d.exec(`
+        CREATE TABLE IF NOT EXISTS conversations (
+          id TEXT PRIMARY KEY,
+          model TEXT NOT NULL,
+          title TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_conversations_model ON conversations(model, updated_at DESC);
+        CREATE TABLE IF NOT EXISTS messages (
+          id TEXT PRIMARY KEY,
+          conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+          role TEXT NOT NULL,
+          content TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at ASC);
+        PRAGMA foreign_keys = ON;
+      `);
+    },
+  },
 ];
 
 const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
@@ -389,4 +414,57 @@ export function dbGetAuditLog(limit = 200) {
   return withReconnect(d => d.prepare(
     'SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ?'
   ).all(limit));
+}
+
+// --- Conversations ---
+
+export function dbCreateConversation({ id, model, title }) {
+  const now = Date.now();
+  return withReconnect(d => d.prepare(
+    'INSERT INTO conversations (id, model, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+  ).run(id, model, title, now, now));
+}
+
+export function dbListConversations(model) {
+  return withReconnect(d => d.prepare(
+    'SELECT id, model, title, created_at, updated_at FROM conversations WHERE model = ? ORDER BY updated_at DESC'
+  ).all(model));
+}
+
+export function dbGetConversation(id) {
+  return withReconnect(d => d.prepare(
+    'SELECT * FROM conversations WHERE id = ?'
+  ).get(id));
+}
+
+export function dbTouchConversation(id) {
+  return withReconnect(d => d.prepare(
+    'UPDATE conversations SET updated_at = ? WHERE id = ?'
+  ).run(Date.now(), id));
+}
+
+export function dbUpdateConversationTitle(id, title) {
+  return withReconnect(d => d.prepare(
+    'UPDATE conversations SET title = ? WHERE id = ?'
+  ).run(title, id));
+}
+
+export function dbDeleteConversation(id) {
+  return withReconnect(d => d.prepare(
+    'DELETE FROM conversations WHERE id = ?'
+  ).run(id));
+}
+
+// --- Messages ---
+
+export function dbAddMessage({ id, conversationId, role, content }) {
+  return withReconnect(d => d.prepare(
+    'INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)'
+  ).run(id, conversationId, role, content, Date.now()));
+}
+
+export function dbGetMessages(conversationId) {
+  return withReconnect(d => d.prepare(
+    'SELECT id, role, content, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC'
+  ).all(conversationId));
 }
