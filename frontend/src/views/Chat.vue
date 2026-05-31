@@ -436,9 +436,16 @@ export default {
 </script>
 
 <style scoped>
-/* Chat page fills the viewport height, input pinned to bottom */
+/* Chat page fills the viewport height, input pinned to bottom.
+   position:fixed anchors to the layout viewport so the bottom edge
+   never shifts when the mobile browser address bar animates. */
 .chat-main {
-  height: 100dvh !important;   /* dvh = dynamic viewport, respects mobile browser chrome */
+  position: fixed !important;
+  top: var(--v-layout-top, 64px) !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  padding: 0 !important;
   display: flex !important;
   flex-direction: column !important;
   overflow: hidden !important;
