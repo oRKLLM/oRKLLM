@@ -1,3 +1,15 @@
+# [0.7.0-alpha.9](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.8...v0.7.0-alpha.9) (2026-05-31)
+
+
+### Bug Fixes
+
+* **tests:** scope sidebar delete assertion to specific item not total count ([14c24ec](https://github.com/mafischer/oRKLLM/commit/14c24ecb2eb59b8e8f6b998813a9f47adf58fd3c))
+
+
+### Features
+
+* **chat:** persist conversations grouped by model with history sidebar ([cee56cb](https://github.com/mafischer/oRKLLM/commit/cee56cb34b09f2117bfedb44a96d5be027def46a))
+
 # [0.7.0-alpha.8](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.7...v0.7.0-alpha.8) (2026-05-31)
 
 
