@@ -149,7 +149,7 @@
                 auto-grow
                 max-rows="6"
                 :disabled="!activeModel"
-                @keydown.enter.exact.prevent="sendMessage"
+                @keydown.enter.exact.prevent="() => sendMessage()"
                 @keydown.enter.shift.exact="() => {}"
               ></v-textarea>
             </v-col>
@@ -161,7 +161,7 @@
                   variant="flat"
                   size="large"
                   :disabled="!inputText.trim() || !activeModel"
-                  @click="sendMessage"
+                  @click="() => sendMessage()"
                 >
                   <v-icon>mdi-send</v-icon>
                 </v-btn>
