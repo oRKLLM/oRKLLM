@@ -321,6 +321,19 @@ export default {
     await this.fetchModels();
     await this.fetchStatus();
   },
+  beforeUnmount() {
+    // Page navigation during inference — save whatever was generated so far.
+    // sendBeacon fires even as the page unloads; a normal fetch would be cancelled.
+    if (!this.activeConversationId) return;
+    const lastMsg = this.chatHistory[this.chatHistory.length - 1];
+    if (lastMsg?.role === 'assistant' && lastMsg.content) {
+      navigator.sendBeacon(
+        `/api/admin/conversations/${this.activeConversationId}/messages`,
+        new Blob([JSON.stringify({ role: 'assistant', content: lastMsg.content })],
+          { type: 'application/json' })
+      );
+    }
+  },
   methods: {
     async fetchAuth() {
       try {
@@ -426,12 +439,15 @@ export default {
     async persistMessage(role, content) {
       if (!this.activeConversationId) return;
       try {
-        await fetch(`/api/admin/conversations/${this.activeConversationId}/messages`, {
+        const res = await fetch(`/api/admin/conversations/${this.activeConversationId}/messages`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ role, content })
         });
-      } catch (e) {}
+        if (!res.ok) console.error('[chat] persistMessage failed:', res.status, await res.text());
+      } catch (e) {
+        console.error('[chat] persistMessage error:', e.message);
+      }
     },
     newChat() {
       this.chatHistory = [];

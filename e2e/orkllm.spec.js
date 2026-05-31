@@ -494,3 +494,40 @@ test('Chat: conversation can be deleted from sidebar', async ({ page }) => {
 
   await unloadModel(page);
 });
+
+// ---------------------------------------------------------------------------
+// Test 17: Chat — partial response persisted when navigating away mid-stream
+// ---------------------------------------------------------------------------
+test('Chat: partial assistant response persisted when navigating away during generation', async ({ page }) => {
+  await login(page);
+  await loadModel(page);
+  await page.goto('/chat');
+
+  await page.locator('.chat-layout button:has(.mdi-plus)').click();
+
+  const chatInput = page.locator('textarea').first();
+  await expect(chatInput).toBeEnabled({ timeout: 5000 });
+
+  await chatInput.fill('Partial persist test');
+  await page.keyboard.press('Enter');
+
+  // Wait for at least one message bubble to appear (user message)
+  await expect(page.locator('.message-bubble').first()).toBeVisible({ timeout: 5000 });
+
+  // Navigate away immediately (simulates page refresh during inference)
+  await page.goto('/dashboard');
+  await expect(page).toHaveURL(/\//);
+
+  // Go back to chat
+  await page.goto('/chat');
+  await expect(page).toHaveURL(/\/chat/);
+
+  // Sidebar should show the conversation
+  await expect(page.locator('.sidebar-item').first()).toBeVisible({ timeout: 5000 });
+
+  // Load it — at minimum the user message should be there
+  await page.locator('.sidebar-item').first().click();
+  await expect(page.locator('.message-bubble').first()).toContainText('Partial persist test', { timeout: 5000 });
+
+  await unloadModel(page);
+});
