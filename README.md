@@ -55,7 +55,7 @@ Inspired by [jundot/oMLX](https://github.com/jundot/omlx) (which does the same f
 * **Prefix KV Cache**: Tiered SSD hot/cold LRU cache saves KV state between conversation turns, skipping re-prefill of repeated prefixes. Sliding context window prevents NPU OOM on long conversations.
 * **Process-Isolated Execution**: Inference engine runs in a dedicated child process. Model unload/swap terminates the process, guaranteeing full NPU driver memory cleanup.
 * **Smart Resource Management**: Single active model lock, auto-swap, configurable idle timeout, pin-to-keep-loaded.
-* **Runtime Version Auto-Matching**: Place versioned `librkllmrt-aarch64-vX.Y.Z.so` files in `ORKLLM_RUNTIMES_DIR`. oRKLLM reads the embedded version from each `.so` (via `strings`), matches it against the version parsed from the model filename, and retries all candidates in order until one succeeds — caching the winner per model. Pre-built runtimes available at [mafischer/rkllm-runtimes](https://github.com/mafischer/rkllm-runtimes).
+* **Runtime Version Auto-Matching & Auto-Download**: oRKLLM reads the embedded version from each `librkllmrt.so` (via `strings`), matches it against the version in the model filename, and retries all candidates until one succeeds — caching the winner per model. On first setup, opt in to automatically download all versioned runtimes from [mafischer/rkllm-runtimes](https://github.com/mafischer/rkllm-runtimes) (Apache 2.0). Opted-out users are prompted with a disclaimer dialog in the UI; API callers receive HTTP 422 `RUNTIME_MISSING` with the required version. Toggle in Settings after setup.
 * **APT Distribution Channels**: Three channels — `stable` (main), `beta`, `alpha` — with separate `dists/<channel>/` directories on gh-pages. Users pin to their preferred channel.
 * **Trusted Proxy**: Supports `true`, single IP/CIDR, or comma-separated list (SAN-style) passed directly to Fastify's `trustProxy`.
 * **Database Migrations**: PRAGMA user_version migration runner — schema changes (v1–v3) apply automatically on startup, safe across upgrades from any previous version.
@@ -91,7 +91,7 @@ graph TD
 | **Frontend** | Vue 3 + Vuetify 3 SPA, built with Vite, route-based code splitting |
 | **Database** | SQLite via `node:sqlite` (Node ≥22.5) or `better-sqlite3` (Node 20) |
 | **Auth** | Local PBKDF2 + OIDC (PKCE) + SAML 2.0 |
-| **Testing** | Playwright E2E (49 tests across 3 spec files), mock OIDC service container in CI |
+| **Testing** | Playwright E2E (54 tests across 3 spec files), mock OIDC service container in CI |
 
 ---
 

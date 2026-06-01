@@ -122,6 +122,7 @@ graph TD
 | `src/worker.js` | Process-isolated inference worker; receives `load`/`run`/`unload` IPC commands from pool |
 | `src/pool.js` | Single-active-model lock, auto-swap, idle timeout, pin-to-keep-loaded; runtime version auto-discovery (`getAvailableRuntimes`, `readSoVersion`, `runtimeCandidates`, `_tryLoad`); caches winning lib path in model_settings |
 | `src/admin/conversations.js` | 6 REST endpoints for conversation CRUD + message append (`/api/admin/conversations/…`) |
+| `src/runtime_sync.js` | Downloads aarch64 `librkllmrt.so` versions from `mafischer/rkllm-runtimes` mirror into `RUNTIMES_DIR`; skips non-ARM64-Linux; called on startup, on model load failure, and via `POST /api/admin/runtimes/sync` |
 | `src/monitor.js` | Polls CPU, RAM, SoC Temp, NPU load, GPU load (Mali), disk utilization; Rockchip-native on ARM64 Linux, simulated elsewhere |
 | `src/stats.js` | Records prefill/generation tokens and latencies in SQLite |
 | `src/db.js` | SQLite + PRAGMA user_version migration runner; 2 versioned migrations; all table accessors |
@@ -142,7 +143,7 @@ graph TD
 | `frontend/src/views/Chat.vue` | Full streaming chat against OpenAI-compatible API |
 | `frontend/src/views/SiteManagement.vue` | Admin-only: user CRUD, OIDC/SAML config, audit log |
 | `frontend/src/views/Login.vue` | Login page; shows SSO button when OIDC/SAML configured |
-| `e2e/orkllm.spec.js` | Playwright E2E suite (20 tests — core flow, chat history, pin persistence, runtime version API) |
+| `e2e/orkllm.spec.js` | Playwright E2E suite (25 tests — core flow, chat history, pin persistence, runtime version, auto-download) |
 | `e2e/rbac.spec.js` | Playwright E2E suite (17 tests — RBAC, trusted proxy (single + multi-IP/CIDR), mock OIDC SSO, Keycloak integration) |
 | `e2e/regression.spec.js` | Playwright E2E suite (12 tests — UI regression: navbar, theme, user drawer, drawer toggles) |
 
@@ -173,6 +174,7 @@ oRKLLM/
 │   ├── mock_engine.js
 │   ├── monitor.js
 │   ├── pool.js
+│   ├── runtime_sync.js
 │   ├── server.js
 │   ├── stats.js
 │   └── worker.js
@@ -198,9 +200,9 @@ oRKLLM/
 │           └── Setup.vue
 └── e2e/
     ├── global-setup.js     # Resets server state between test runs
-    ├── orkllm.spec.js      # 20 feature tests (core flow, chat history, runtime version)
+    ├── orkllm.spec.js      # 25 feature tests (core flow, chat history, runtime, auto-download)
     ├── rbac.spec.js        # 17 tests — RBAC, trusted proxy, SSO
-    └── regression.spec.js  # 10 UI regression tests
+    └── regression.spec.js  # 12 UI regression tests
 ```
 
 ---
@@ -256,6 +258,7 @@ Tests cover:
 - **Log terminal** — real-time WebSocket log capture
 - **RBAC** — Site Management visible for admin, user/provider CRUD, SSO button on login
 - **Trusted proxy** — `trustedProxy` setting saved and returned correctly; comma-separated IP list and CIDR list round-trip correctly
+- **Runtime auto-download** — `autoDownloadRuntimes` setting toggled and persisted; `/v1/models` returns `runtimeVersion` per model; `/api/admin/runtimes/download` accepts a version; Setup page has opt-in checkbox; Settings page has toggle
 - **Mock OIDC SSO** (CI) — full OIDC authorize → login → callback flow via `mock-oauth2-server`
 - **Real Keycloak SSO** (local, `ORKLLM_TEST_LIVE=1`) — full flow against `auth-lab.fischerapps.com`
 
@@ -516,6 +519,7 @@ echo "==> Done! Admin console: http://10.6.0.14:8000/admin"
 | Phase 16: Conversation History | ✅ Done | SQLite v3 migration; conversations + messages tables; collapsible sidebar (desktop) / bottom-sheet (mobile); `sendBeacon` on unload for partial responses |
 | Phase 17: Pin Model | ✅ Done | Pin persists to DB (`pinned_model` setting); auto-load on startup with RAM check (1.2× model size); clears on unload |
 | Phase 18: Runtime Version Matching | ✅ Done | `RUNTIMES_DIR` holds versioned `.so` files; `readSoVersion()` extracts version via `strings`; `runtimeCandidates()` orders by cached winner → filename match → all others → system fallback; `GET /api/admin/runtimes` exposes available runtimes; rkllm-runtimes mirror at `mafischer/rkllm-runtimes` |
+| Phase 19: Runtime Auto-Download | ✅ Done | Setup opt-in checkbox (default on); `runtime_sync.js` downloads aarch64 `.so` files from mirror on startup; targeted sync when model load fails with unknown version; opt-out shows disclaimer dialog in UI; API returns HTTP 422 `RUNTIME_MISSING` with `runtimeVersion`; `autoDownloadRuntimes` setting in Settings page |
 
 ---
 

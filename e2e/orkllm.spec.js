@@ -614,3 +614,112 @@ test('Model settings store workingLibPath after successful load', async ({ page 
 
   await unloadModel(page);
 });
+
+// ---------------------------------------------------------------------------
+// Test 21: /v1/models exposes runtimeVersion per model
+// ---------------------------------------------------------------------------
+test('Models list includes runtimeVersion field', async ({ page }) => {
+  await login(page);
+
+  const data = await page.evaluate(async () => {
+    const r = await fetch('/v1/models');
+    return r.json();
+  });
+
+  expect(Array.isArray(data.data)).toBe(true);
+  // Every model object has a runtimeVersion property (may be null for unnamed models)
+  for (const model of data.data) {
+    expect(model).toHaveProperty('runtimeVersion');
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Test 22: autoDownloadRuntimes exposed in global-settings
+// ---------------------------------------------------------------------------
+test('Global settings exposes autoDownloadRuntimes', async ({ page }) => {
+  await login(page);
+
+  const data = await page.evaluate(async () => {
+    const r = await fetch('/api/admin/global-settings');
+    return r.json();
+  });
+
+  expect(data.settings).toHaveProperty('autoDownloadRuntimes');
+  expect(typeof data.settings.autoDownloadRuntimes).toBe('boolean');
+});
+
+// ---------------------------------------------------------------------------
+// Test 23: autoDownloadRuntimes can be toggled via global-settings POST
+// ---------------------------------------------------------------------------
+test('autoDownloadRuntimes setting can be saved and read back', async ({ page }) => {
+  await login(page);
+
+  // Save false
+  await page.evaluate(async () => {
+    await fetch('/api/admin/global-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ autoDownloadRuntimes: false }),
+    });
+  });
+  const off = await page.evaluate(async () => {
+    const r = await fetch('/api/admin/global-settings');
+    return r.json();
+  });
+  expect(off.settings.autoDownloadRuntimes).toBe(false);
+
+  // Restore true
+  await page.evaluate(async () => {
+    await fetch('/api/admin/global-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ autoDownloadRuntimes: true }),
+    });
+  });
+  const on = await page.evaluate(async () => {
+    const r = await fetch('/api/admin/global-settings');
+    return r.json();
+  });
+  expect(on.settings.autoDownloadRuntimes).toBe(true);
+});
+
+// ---------------------------------------------------------------------------
+// Test 24: POST /api/admin/runtimes/download accepts a version
+// ---------------------------------------------------------------------------
+test('POST /api/admin/runtimes/download returns success for a version', async ({ page }) => {
+  await login(page);
+
+  const data = await page.evaluate(async () => {
+    const r = await fetch('/api/admin/runtimes/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version: 'v1.2.3' }),
+    });
+    return { status: r.status, body: await r.json() };
+  });
+
+  expect(data.status).toBe(200);
+  expect(data.body.success).toBe(true);
+});
+
+// ---------------------------------------------------------------------------
+// Test 25: Setup page has auto-download opt-in checkbox
+// ---------------------------------------------------------------------------
+test('Setup page has auto-download runtime opt-in checkbox', async ({ page }) => {
+  // The setup page is only shown before setup — check via direct navigation
+  // and look for the checkbox in the page source without completing setup
+  await page.goto('/setup');
+  // If setup already done, redirect to login or dashboard — skip test
+  if (!page.url().includes('/setup')) {
+    // Setup already completed, verify the checkbox exists in the component
+    // by checking the Settings page for the toggle instead
+    await page.goto('/login');
+    await page.locator('input[type="text"]').fill(process.env.ORKLLM_TEST_ADMIN_USER || 'admin');
+    await page.locator('input[type="password"]').fill(process.env.ORKLLM_TEST_ADMIN_PASS || '');
+    await page.click('button:has-text("Sign In")');
+    await page.goto('/settings');
+    await expect(page.locator('text=Auto-download rkllm runtimes')).toBeVisible({ timeout: 5000 });
+    return;
+  }
+  await expect(page.locator('text=Auto-download rkllm runtimes')).toBeVisible({ timeout: 5000 });
+});
