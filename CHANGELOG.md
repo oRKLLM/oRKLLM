@@ -1,3 +1,10 @@
+# [0.7.0-alpha.31](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.30...v0.7.0-alpha.31) (2026-06-01)
+
+
+### Bug Fixes
+
+* **monitor:** cache diskLayout() — refresh every 30s instead of every 1s WebSocket tick ([692db04](https://github.com/mafischer/oRKLLM/commit/692db049a03b5ef702f58b30057daa6d2186e775))
+
 # [0.7.0-alpha.30](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.29...v0.7.0-alpha.30) (2026-06-01)
 
 
