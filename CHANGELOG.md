@@ -1,3 +1,17 @@
+# [0.7.0-alpha.16](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.15...v0.7.0-alpha.16) (2026-06-01)
+
+
+### Bug Fixes
+
+* **tests:** update downloader tab test — HF token field moved to Settings ([a7c7030](https://github.com/mafischer/oRKLLM/commit/a7c7030f25f75e326fdb2532a88dfafccd8cc447))
+
+
+### Features
+
+* **downloader:** full download queue with progress, speed, file picker ([a8ab0df](https://github.com/mafischer/oRKLLM/commit/a8ab0df20467e4b1af25cb994360e58cf47cb212))
+* **downloader:** restore HF token field in download form for ad-hoc override ([2adb186](https://github.com/mafischer/oRKLLM/commit/2adb186d60727019afd7152700bf16fd9fa51413))
+* **nav:** add Contribute button to user drawer linking to GitHub ([fcb35b9](https://github.com/mafischer/oRKLLM/commit/fcb35b91ac4000e76b3ff76114eb3d9951f391f7))
+
 # [0.7.0-alpha.15](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.14...v0.7.0-alpha.15) (2026-06-01)
 
 
