@@ -296,6 +296,23 @@ curl -fsSL \
 
 ---
 
+## 🌿 Contributing & Branch Flow
+
+All development happens on the `alpha` branch. Promotions flow strictly forward — **never commit directly to `beta` or `main`.**
+
+```
+alpha  →  beta  →  main
+```
+
+| Action | Command |
+| :----- | :------ |
+| Promote to beta | `git push origin alpha:beta` |
+| Promote to main (stable release) | `git push origin beta:main` |
+
+These are fast-forward pushes — no checkout, no merge commit. `beta` is a 48-hour soak channel; if no bugs are filed it can be promoted to `main`. Never use `--no-ff` for promotions as it creates merge commits that break future fast-forwards.
+
+---
+
 ## 🤝 Credits & Acknowledgements
 
 * **[jundot/oMLX](https://github.com/jundot/omlx)**: Inspired the dashboard layout, metrics design, single-model lifecycle, and OpenAI compatibility structures.
