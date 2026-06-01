@@ -1,3 +1,16 @@
+# [0.7.0-alpha.29](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.28...v0.7.0-alpha.29) (2026-06-01)
+
+
+### Bug Fixes
+
+* **dashboard:** display cache sizes in GB when >= 1024 MB ([15f08a2](https://github.com/mafischer/oRKLLM/commit/15f08a22c6ef8d08516248b45490df72804ed3df))
+* **search:** show repo storage size with harddisk icon inline with downloads and likes ([df9c0a7](https://github.com/mafischer/oRKLLM/commit/df9c0a721ff9e502c9ba13c96b069ba3dc680554))
+
+
+### Features
+
+* **dashboard:** add disk table with device name, type, size and SMART status below telemetry gauges ([1f2dd1c](https://github.com/mafischer/oRKLLM/commit/1f2dd1cc88682f6998fe22341be4733f6e98fc5d))
+
 # [0.7.0-alpha.28](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.27...v0.7.0-alpha.28) (2026-06-01)
 
 
