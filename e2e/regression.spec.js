@@ -193,17 +193,18 @@ test('Hamburger: toggles mobile nav drawer open then closed', async ({ page }) =
   await page.setViewportSize({ width: 390, height: 844 });
   await login(page); // login after setting viewport so Vuetify picks up mobile breakpoint
 
-  const hamburger = page.locator('.v-app-bar .mdi-menu').locator('..');
+  // v-icon renders as <i class="mdi-menu ..."> — click directly with force
+  const hamburger = page.locator('.v-app-bar .mdi-menu');
   await expect(hamburger).toBeVisible({ timeout: 5000 });
 
   const navDrawer = page.locator('.v-navigation-drawer--left');
 
   // First tap — drawer opens (inert attribute removed)
-  await hamburger.click();
+  await hamburger.click({ force: true });
   await expect(navDrawer).not.toHaveAttribute('inert', { timeout: 3000 });
 
   // Second tap — drawer closes (inert attribute restored)
-  await hamburger.click();
+  await hamburger.click({ force: true });
   await expect(navDrawer).toHaveAttribute('inert', { timeout: 3000 });
 
   await page.setViewportSize({ width: 1280, height: 800 });

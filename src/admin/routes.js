@@ -187,7 +187,7 @@ export default async function adminRoutes(fastify, options) {
 
     // Kick off background runtime sync if opted in
     if (autoDownloadRuntimes) {
-      import('./runtime_sync.js')
+      import('../runtime_sync.js')
         .then(m => m.syncRuntimes())
         .catch(e => console.error('[Setup] Runtime sync failed:', e.message));
     }
@@ -380,7 +380,7 @@ export default async function adminRoutes(fastify, options) {
 
   // POST /api/admin/runtimes/sync — manually trigger runtime download
   fastify.post('/runtimes/sync', async (request, reply) => {
-    const { syncRuntimes } = await import('./runtime_sync.js');
+    const { syncRuntimes } = await import('../runtime_sync.js');
     syncRuntimes().catch(e => console.error('[RuntimeSync] Manual sync failed:', e.message));
     return { success: true, message: 'Runtime sync started in background' };
   });
@@ -389,7 +389,7 @@ export default async function adminRoutes(fastify, options) {
   fastify.post('/runtimes/download', async (request, reply) => {
     const { version } = request.body || {};
     if (!version) return reply.status(400).send({ error: 'version required' });
-    const { syncRuntimes } = await import('./runtime_sync.js');
+    const { syncRuntimes } = await import('../runtime_sync.js');
     syncRuntimes(version).catch(e => console.error('[RuntimeSync] Download failed:', e.message));
     return { success: true, message: `Downloading runtime ${version} in background` };
   });
