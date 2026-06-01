@@ -362,6 +362,7 @@ export default {
       cacheMaxContextTokens: 8192,
       trustedProxy: '',
       autoDownloadRuntimes: true,
+      savedAutoDownloadRuntimes: true,
     },
     cacheStats: null,
     clearingCache: false,
@@ -414,6 +415,7 @@ export default {
         this.settings.cacheMaxContextTokens = s.cacheMaxContextTokens ?? 8192;
         this.settings.trustedProxy          = s.trustedProxy ?? '';
         this.settings.autoDownloadRuntimes  = s.autoDownloadRuntimes ?? true;
+        this.savedAutoDownloadRuntimes       = this.settings.autoDownloadRuntimes;
         this.cacheStats = data.cacheStats || null;
       } catch (e) {}
     },
@@ -434,6 +436,9 @@ export default {
       }
     },
     async saveSettings() {
+      const wasAutoDownloadOff = !this.savedAutoDownloadRuntimes;
+      const isNowOn = this.settings.autoDownloadRuntimes;
+
       this.saving = true;
       try {
         const res = await fetch('/api/admin/global-settings', {
@@ -442,7 +447,12 @@ export default {
           body: JSON.stringify(this.settings)
         });
         if (res.ok) {
+          this.savedAutoDownloadRuntimes = this.settings.autoDownloadRuntimes;
           this.notify('Settings saved', 'success');
+          // Trigger immediate sync if auto-download was just enabled
+          if (wasAutoDownloadOff && isNowOn) {
+            fetch('/api/admin/runtimes/sync', { method: 'POST' }).catch(() => {});
+          }
         } else {
           const d = await res.json();
           this.notify(d.error || 'Failed to save settings', 'error');
