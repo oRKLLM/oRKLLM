@@ -377,11 +377,13 @@
                   <v-icon size="12" class="mr-1">mdi-download-outline</v-icon>{{ formatNum(model.downloads) }}
                   <span class="mx-2">·</span>
                   <v-icon size="12" class="mr-1">mdi-heart-outline</v-icon>{{ formatNum(model.likes) }}
-                  <template v-if="model.paramCount || model.storageBytes">
+                  <template v-if="model.storageBytes">
                     <span class="mx-2">·</span>
-                    <v-icon size="12" class="mr-1">mdi-weight</v-icon>
-                    <span v-if="model.paramCount">{{ formatParams(model.paramCount) }} params</span>
-                    <span v-else-if="model.storageBytes">{{ formatBytes(model.storageBytes) }}</span>
+                    <v-icon size="12" class="mr-1">mdi-harddisk</v-icon>{{ formatBytes(model.storageBytes) }}
+                  </template>
+                  <template v-if="model.paramCount">
+                    <span class="mx-2">·</span>
+                    <v-icon size="12" class="mr-1">mdi-weight</v-icon>{{ formatParams(model.paramCount) }} params
                   </template>
                   <span v-for="tag in model.tags.slice(0,3)" :key="tag" class="ml-2">
                     <v-chip size="x-small" variant="tonal">{{ tag }}</v-chip>
@@ -453,11 +455,13 @@
                     <v-icon size="12" class="mr-1">mdi-download-outline</v-icon>{{ formatNum(model.downloads) }}
                     <span class="mx-2">·</span>
                     <v-icon size="12" class="mr-1">mdi-heart-outline</v-icon>{{ formatNum(model.likes) }}
-                    <template v-if="model.paramCount || model.storageBytes">
+                    <template v-if="model.storageBytes">
                       <span class="mx-2">·</span>
-                      <v-icon size="12" class="mr-1">mdi-weight</v-icon>
-                      <span v-if="model.paramCount">{{ formatParams(model.paramCount) }} params</span>
-                      <span v-else-if="model.storageBytes">{{ formatBytes(model.storageBytes) }}</span>
+                      <v-icon size="12" class="mr-1">mdi-harddisk</v-icon>{{ formatBytes(model.storageBytes) }}
+                    </template>
+                    <template v-if="model.paramCount">
+                      <span class="mx-2">·</span>
+                      <v-icon size="12" class="mr-1">mdi-weight</v-icon>{{ formatParams(model.paramCount) }} params
                     </template>
                     <span v-for="tag in model.tags.slice(0,3)" :key="tag" class="ml-2">
                       <v-chip size="x-small" variant="tonal">{{ tag }}</v-chip>
