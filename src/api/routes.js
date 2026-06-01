@@ -1,8 +1,9 @@
 import fs from 'fs';
 import path from 'path';
-import { MODELS_DIR } from '../config.js';
+import { MODELS_DIR, parseRuntimeVersion } from '../config.js';
 import pool from '../pool.js';
 import { recordRequest } from '../stats.js';
+import { dbGetModelSettings, dbSetModelSettings } from '../db.js';
 import { cacheKey, getCachePath, putCachePath, tmpCachePath, isCacheEnabled, getMaxContextTokens } from '../cache.js';
 
 // Rough token estimate: ~4 chars per token
@@ -30,12 +31,23 @@ export default async function apiRoutes(fastify, options) {
       
       const data = rkllmFiles.map(file => {
         const stats = fs.statSync(path.join(MODELS_DIR, file));
+
+        // Persist parsed runtime version into model_settings if not already stored
+        const runtimeVersion = parseRuntimeVersion(file);
+        if (runtimeVersion) {
+          const existing = dbGetModelSettings(file) || {};
+          if (!existing.runtimeVersion) {
+            dbSetModelSettings(file, { ...existing, runtimeVersion });
+          }
+        }
+
         return {
           id: file,
           object: 'model',
           created: Math.floor(stats.birthtimeMs / 1000),
           owned_by: 'orkllm',
-          size: stats.size
+          size: stats.size,
+          runtimeVersion: runtimeVersion ?? (dbGetModelSettings(file)?.runtimeVersion ?? null),
         };
       });
 

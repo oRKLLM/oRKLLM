@@ -202,7 +202,11 @@ class EnginePool {
         }
       }
 
-      throw new Error(`No compatible rkllm runtime found for ${modelName}. Tried: ${candidates.join(', ')}`);
+      const versionHint = parsedVersion ? ` (requires runtime v${parsedVersion})` : '';
+      throw Object.assign(
+        new Error(`No compatible rkllm runtime found for ${modelName}${versionHint}. Tried: ${candidates.join(', ')}`),
+        { code: 'RUNTIME_MISSING', runtimeVersion: parsedVersion }
+      );
     })();
 
     try {

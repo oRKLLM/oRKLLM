@@ -528,6 +528,34 @@
 
       </v-tabs-window>
     </v-container>
+
+    <!-- Runtime download confirmation dialog -->
+    <v-dialog v-model="runtimeDialog" max-width="480" persistent>
+      <v-card class="glass-card pa-6">
+        <div class="text-h6 font-weight-bold mb-3 d-flex align-center gap-2">
+          <v-icon color="warning">mdi-download-circle-outline</v-icon>
+          Runtime Required
+        </div>
+        <p class="text-body-2 mb-3">
+          Model <strong>{{ runtimeDialogModel }}</strong> requires
+          <strong>rkllm runtime v{{ runtimeDialogVersion }}</strong>, which is not installed.
+        </p>
+        <p class="text-body-2 mb-3">
+          oRKLLM can download the pre-built <code>librkllmrt.so</code> binary from
+          <a href="https://github.com/mafischer/rkllm-runtimes" target="_blank" class="text-primary">mafischer/rkllm-runtimes</a>.
+          These binaries are redistributed under the <strong>Apache 2.0 License</strong> from Rockchip's upstream repository.
+        </p>
+        <p class="text-caption text-grey mb-4">
+          You can also enable auto-download in Settings to skip this prompt in future.
+        </p>
+        <div class="d-flex gap-3 justify-end">
+          <v-btn variant="text" @click="runtimeDialog = false">Cancel</v-btn>
+          <v-btn color="primary" variant="flat" :loading="runtimeDownloading" @click="downloadAndLoad">
+            Download &amp; Load
+          </v-btn>
+        </div>
+      </v-card>
+    </v-dialog>
   </v-main>
 </template>
 
@@ -545,6 +573,13 @@ export default {
     loadingModelId: null,
     scanningModels: false,
     timeoutSlider: 5,
+
+    // Runtime download prompt
+    runtimeDialog: false,
+    runtimeDialogModel: null,
+    runtimeDialogVersion: null,
+    runtimeDownloading: false,
+    autoDownloadRuntimes: true,
 
     // Per-model settings
     modelSettings: {},
@@ -658,9 +693,8 @@ export default {
         const res = await fetch('/api/admin/global-settings');
         if (!res.ok) return;
         const data = await res.json();
-        if (data.settings?.hfToken) {
-          this.dlHfToken = data.settings.hfToken;
-        }
+        if (data.settings?.hfToken) this.dlHfToken = data.settings.hfToken;
+        this.autoDownloadRuntimes = data.settings?.autoDownloadRuntimes ?? true;
       } catch (e) {}
     },
     async fetchAllModelSettings() {
@@ -743,6 +777,28 @@ export default {
       }
     },
     async loadModel(modelId) {
+      // If auto-download is off, check whether the required runtime is present
+      if (!this.autoDownloadRuntimes) {
+        const model = this.models.find(m => m.id === modelId);
+        const version = model?.runtimeVersion;
+        if (version) {
+          const runtimesRes = await fetch('/api/admin/runtimes').catch(() => null);
+          if (runtimesRes?.ok) {
+            const { runtimes, systemRuntime } = await runtimesRes.json();
+            const hasVersion = runtimes.some(r => r.version === version)
+              || systemRuntime?.version === version;
+            if (!hasVersion) {
+              this.runtimeDialogModel = modelId;
+              this.runtimeDialogVersion = version;
+              this.runtimeDialog = true;
+              return;
+            }
+          }
+        }
+      }
+      await this._doLoadModel(modelId);
+    },
+    async _doLoadModel(modelId) {
       this.loadingModelId = modelId;
       try {
         const saved = this.modelSettings[modelId] || {};
@@ -761,6 +817,25 @@ export default {
         alert('Network connection error');
       } finally {
         this.loadingModelId = null;
+      }
+    },
+    async downloadAndLoad() {
+      this.runtimeDownloading = true;
+      try {
+        await fetch('/api/admin/runtimes/download', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ version: this.runtimeDialogVersion }),
+        });
+        // Wait briefly for download to start, then attempt load
+        // (pool will retry after sync completes internally)
+        await new Promise(r => setTimeout(r, 1500));
+        this.runtimeDialog = false;
+        await this._doLoadModel(this.runtimeDialogModel);
+      } catch (e) {
+        alert('Download failed: ' + e.message);
+      } finally {
+        this.runtimeDownloading = false;
       }
     },
     async togglePin() {

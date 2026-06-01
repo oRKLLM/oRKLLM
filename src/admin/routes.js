@@ -275,6 +275,13 @@ export default async function adminRoutes(fastify, options) {
       const res = await pool.load(model, options || {});
       return { success: true, activeModel: res.activeModel };
     } catch (e) {
+      if (e.code === 'RUNTIME_MISSING') {
+        return reply.status(422).send({
+          error: e.message,
+          code: 'RUNTIME_MISSING',
+          runtimeVersion: e.runtimeVersion ?? null,
+        });
+      }
       return reply.status(500).send({ error: e.message });
     }
   });
@@ -376,6 +383,15 @@ export default async function adminRoutes(fastify, options) {
     const { syncRuntimes } = await import('./runtime_sync.js');
     syncRuntimes().catch(e => console.error('[RuntimeSync] Manual sync failed:', e.message));
     return { success: true, message: 'Runtime sync started in background' };
+  });
+
+  // POST /api/admin/runtimes/download — download a specific version
+  fastify.post('/runtimes/download', async (request, reply) => {
+    const { version } = request.body || {};
+    if (!version) return reply.status(400).send({ error: 'version required' });
+    const { syncRuntimes } = await import('./runtime_sync.js');
+    syncRuntimes(version).catch(e => console.error('[RuntimeSync] Download failed:', e.message));
+    return { success: true, message: `Downloading runtime ${version} in background` };
   });
 
   // DELETE /api/admin/cache — clear all prefix cache files
