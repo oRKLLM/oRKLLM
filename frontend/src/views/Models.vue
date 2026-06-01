@@ -352,7 +352,7 @@
               ></v-checkbox>
               <v-checkbox
                 v-model="searchPlatformOnly"
-                :label="detectedPlatform ? `${detectedPlatform.toUpperCase()} models only` : 'Filter by platform'"
+                :label="detectedPlatform ? `Compatible chipset (${detectedPlatform.toUpperCase()}) only` : 'Compatible chipset only'"
                 :disabled="!detectedPlatform"
                 density="compact"
                 hide-details
