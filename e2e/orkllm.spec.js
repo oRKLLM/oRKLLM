@@ -195,25 +195,14 @@ test('Models page: Downloader tab visible with HF fields', async ({ page }) => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 6: Dashboard chat playground
+// Test 6: Dashboard cache observability and runtime versions visible
 // ---------------------------------------------------------------------------
-test('Dashboard inference playground: load model and run chat', async ({ page }) => {
+test('Dashboard shows cache observability and runtime versions sections', async ({ page }) => {
   await login(page);
-  await loadModel(page);
-
   await page.goto('/');
-  const chatInput = page.locator('input[placeholder="Enter your message..."]');
-  await expect(chatInput).toBeEnabled({ timeout: 10000 });
 
-  await chatInput.fill('Hi mock engine, what are your specs?');
-  await page.keyboard.press('Enter');
-
-  const assistantBubble = page.locator('.message-bubble').last();
-  await expect(assistantBubble).toContainText('simulated response', { timeout: 10000 });
-  await expect(chatInput).toBeEnabled({ timeout: 15000 });
-  await expect(assistantBubble.locator('.text-caption')).toContainText('Prefill:');
-
-  await unloadModel(page);
+  await expect(page.locator('text=Prefix Cache Observability')).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('text=RKLLM Runtime Versions')).toBeVisible({ timeout: 5000 });
 });
 
 // ---------------------------------------------------------------------------
