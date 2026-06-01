@@ -1,3 +1,10 @@
+# [0.7.0-alpha.12](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.11...v0.7.0-alpha.12) (2026-06-01)
+
+
+### Bug Fixes
+
+* **chat:** prevent queued message duplicating in chat history ([a2aad1c](https://github.com/mafischer/oRKLLM/commit/a2aad1c9830a18f670c306a3531d38f307e0ec77))
+
 # [0.7.0-alpha.11](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.10...v0.7.0-alpha.11) (2026-05-31)
 
 
