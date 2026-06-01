@@ -26,14 +26,26 @@ export default async function apiRoutes(fastify, options) {
   // GET /v1/models
   fastify.get('/models', async (request, reply) => {
     try {
-      const files = fs.readdirSync(MODELS_DIR);
-      const rkllmFiles = files.filter(f => f.endsWith('.rkllm'));
-      
+      // Recursively collect .rkllm files, using paths relative to MODELS_DIR as IDs
+      function scanDir(dir, prefix = '') {
+        const results = [];
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          if (entry.isDirectory()) {
+            results.push(...scanDir(path.join(dir, entry.name), prefix ? `${prefix}/${entry.name}` : entry.name));
+          } else if (entry.name.endsWith('.rkllm')) {
+            results.push(prefix ? `${prefix}/${entry.name}` : entry.name);
+          }
+        }
+        return results;
+      }
+      const rkllmFiles = scanDir(MODELS_DIR);
+
       const data = rkllmFiles.map(file => {
         const stats = fs.statSync(path.join(MODELS_DIR, file));
+        const basename = path.basename(file);
 
         // Persist parsed runtime version into model_settings if not already stored
-        const runtimeVersion = parseRuntimeVersion(file);
+        const runtimeVersion = parseRuntimeVersion(basename);
         if (runtimeVersion) {
           const existing = dbGetModelSettings(file) || {};
           if (!existing.runtimeVersion) {

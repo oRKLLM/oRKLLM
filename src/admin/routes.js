@@ -510,19 +510,19 @@ export default async function adminRoutes(fastify, options) {
   // OIDC/SAML routes are at /auth/oidc/... and /auth/saml/... — see src/auth/routes.js
 
   // GET /api/admin/models/settings/:modelId
-  fastify.get('/models/settings/:modelId', async (request, reply) => {
-    const { modelId } = request.params;
-    if (!modelId || modelId.includes('/') || modelId.includes('..')) {
+  fastify.get('/models/settings/*', async (request, reply) => {
+    const modelId = request.params['*'];
+    if (!modelId || modelId.includes('..')) {
       return reply.status(400).send({ error: 'Invalid model ID' });
     }
     const settings = dbGetModelSettings(modelId);
     return { modelId, settings };
   });
 
-  // POST /api/admin/models/settings/:modelId
-  fastify.post('/models/settings/:modelId', async (request, reply) => {
-    const { modelId } = request.params;
-    if (!modelId || modelId.includes('/') || modelId.includes('..')) {
+  // POST /api/admin/models/settings/*
+  fastify.post('/models/settings/*', async (request, reply) => {
+    const modelId = request.params['*'];
+    if (!modelId || modelId.includes('..')) {
       return reply.status(400).send({ error: 'Invalid model ID' });
     }
     const settings = request.body || {};
@@ -768,13 +768,17 @@ export default async function adminRoutes(fastify, options) {
     return { success: true };
   });
 
-  // DELETE /api/admin/models/:modelId
-  fastify.delete('/models/:modelId', async (request, reply) => {
-    const { modelId } = request.params;
-    if (!modelId || modelId.includes('/') || modelId.includes('..') || !modelId.endsWith('.rkllm')) {
+  // DELETE /api/admin/models/* — supports subdirectory paths e.g. RepoName/model.rkllm
+  fastify.delete('/models/*', async (request, reply) => {
+    const modelId = request.params['*'];
+    if (!modelId || modelId.includes('..') || !modelId.endsWith('.rkllm')) {
       return reply.status(400).send({ error: 'Invalid model ID' });
     }
-    const modelPath = path.join(MODELS_DIR, modelId);
+    // Path traversal guard: resolved path must be inside MODELS_DIR
+    const modelPath = path.resolve(MODELS_DIR, modelId);
+    if (!modelPath.startsWith(path.resolve(MODELS_DIR) + path.sep)) {
+      return reply.status(400).send({ error: 'Invalid model path' });
+    }
     if (!fs.existsSync(modelPath)) {
       return reply.status(404).send({ error: 'Model file not found' });
     }
