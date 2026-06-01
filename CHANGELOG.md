@@ -1,3 +1,16 @@
+# [0.7.0-alpha.24](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.23...v0.7.0-alpha.24) (2026-06-01)
+
+
+### Bug Fixes
+
+* **pool:** improve error messages when rkllm_init fails — platform mismatch vs version mismatch ([624ecd2](https://github.com/mafischer/oRKLLM/commit/624ecd22ad2480c2b4746e814156e1a61778590e))
+* **search:** single generic 'Compatible chipset' filter with dynamic platform name ([e08b3f7](https://github.com/mafischer/oRKLLM/commit/e08b3f7e5c2c6037f3dfa5ba7ae179241c7359f7))
+
+
+### Features
+
+* **search:** auto-detect SoC platform and add to HF search query ([2846349](https://github.com/mafischer/oRKLLM/commit/28463497d8dd645175c18d7de78565df5bf24037))
+
 # [0.7.0-alpha.23](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.22...v0.7.0-alpha.23) (2026-06-01)
 
 
