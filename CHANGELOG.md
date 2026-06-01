@@ -1,3 +1,15 @@
+# [0.7.0-alpha.17](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.16...v0.7.0-alpha.17) (2026-06-01)
+
+
+### Bug Fixes
+
+* **security:** upgrade @fastify/static to 9.1.3; opt into Node.js 24 for actions ([dca14ef](https://github.com/mafischer/oRKLLM/commit/dca14efe9c367127c7c58db73caeab2ea04fe1ad))
+
+
+### Features
+
+* **github:** bug report issue template with version field ([061fe2f](https://github.com/mafischer/oRKLLM/commit/061fe2fa7c4429cf07eafebfc72109d4396f2521))
+
 # [0.7.0-alpha.16](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.15...v0.7.0-alpha.16) (2026-06-01)
 
 
