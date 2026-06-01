@@ -107,9 +107,12 @@ test('Setup, auth enforcement, and login', async ({ page }) => {
 test('Dashboard shows telemetry and navbar does not overlap content', async ({ page }) => {
   await login(page);
 
-  await expect(page.locator('text=CPU Utilization')).toBeVisible();
-  await expect(page.locator('text=NPU Utilization')).toBeVisible();
-  await expect(page.locator('text=RAM Utilization')).toBeVisible();
+  await expect(page.locator('text=CPU')).toBeVisible();
+  await expect(page.locator('text=NPU')).toBeVisible();
+  await expect(page.locator('text=GPU')).toBeVisible();
+  await expect(page.locator('text=RAM')).toBeVisible();
+  await expect(page.locator('text=Disk')).toBeVisible();
+  await expect(page.locator('text=Temp')).toBeVisible();
 
   for (const label of ['Dashboard', 'Models', 'Settings', 'Logs', 'Bench', 'Chat']) {
     await expect(navBtn(page, label)).toBeVisible();

@@ -65,56 +65,82 @@
             </div>
 
             <v-row class="text-center">
-              <v-col cols="6" class="py-2">
+              <v-col cols="4" class="py-2">
                 <v-progress-circular
                   :model-value="metrics.cpu"
-                  :size="90"
-                  :width="8"
+                  :size="80"
+                  :width="7"
                   color="blue"
                   class="font-weight-bold mb-1"
                 >
-                  <span class="text-body-2 font-weight-bold">{{ metrics.cpu }}%</span>
+                  <span class="text-caption font-weight-bold">{{ metrics.cpu }}%</span>
                 </v-progress-circular>
-                <div class="text-caption text-grey">CPU Utilization</div>
+                <div class="text-caption text-grey">CPU</div>
               </v-col>
 
-              <v-col cols="6" class="py-2">
+              <v-col cols="4" class="py-2">
                 <v-progress-circular
                   :model-value="metrics.npu"
-                  :size="90"
-                  :width="8"
+                  :size="80"
+                  :width="7"
                   color="primary"
                   class="font-weight-bold mb-1"
                 >
-                  <span class="text-body-2 font-weight-bold">{{ metrics.npu }}%</span>
+                  <span class="text-caption font-weight-bold">{{ metrics.npu }}%</span>
                 </v-progress-circular>
-                <div class="text-caption text-grey">NPU Utilization</div>
+                <div class="text-caption text-grey">NPU</div>
               </v-col>
 
-              <v-col cols="6" class="py-2">
+              <v-col cols="4" class="py-2">
+                <v-progress-circular
+                  :model-value="metrics.gpu"
+                  :size="80"
+                  :width="7"
+                  color="orange"
+                  class="font-weight-bold mb-1"
+                >
+                  <span class="text-caption font-weight-bold">{{ metrics.gpu }}%</span>
+                </v-progress-circular>
+                <div class="text-caption text-grey">GPU</div>
+              </v-col>
+
+              <v-col cols="4" class="py-2">
                 <v-progress-circular
                   :model-value="metrics.ram"
-                  :size="90"
-                  :width="8"
+                  :size="80"
+                  :width="7"
                   color="teal"
                   class="font-weight-bold mb-1"
                 >
-                  <span class="text-body-2 font-weight-bold">{{ metrics.ram }}%</span>
+                  <span class="text-caption font-weight-bold">{{ metrics.ram }}%</span>
                 </v-progress-circular>
-                <div class="text-caption text-grey">RAM Utilization</div>
+                <div class="text-caption text-grey">RAM</div>
               </v-col>
 
-              <v-col cols="6" class="py-2">
+              <v-col cols="4" class="py-2">
+                <v-progress-circular
+                  :model-value="metrics.disk"
+                  :size="80"
+                  :width="7"
+                  color="amber"
+                  class="font-weight-bold mb-1"
+                >
+                  <span class="text-caption font-weight-bold">{{ metrics.disk }}%</span>
+                </v-progress-circular>
+                <div class="text-caption text-grey">Disk</div>
+              </v-col>
+
+              <v-col cols="4" class="py-2">
                 <v-progress-circular
                   :model-value="metrics.temp"
-                  :size="90"
-                  :width="8"
+                  :size="80"
+                  :width="7"
                   color="rose"
                   class="font-weight-bold mb-1"
                 >
-                  <span class="text-body-2 font-weight-bold">{{ metrics.temp }}°C</span>
+                  <span class="text-caption font-weight-bold">{{ metrics.temp }}°C</span>
                 </v-progress-circular>
-                <div class="text-caption text-grey">SoC Temperature</div>
+                <div class="text-caption text-grey">Temp</div>
               </v-col>
             </v-row>
           </v-card>
@@ -334,7 +360,7 @@ export default {
   components: { AppNav },
   data: () => ({
     user: { username: 'admin', role: 'admin', authProvider: 'local' },
-    metrics: { cpu: 0, npu: 0, ram: 0, temp: 0 },
+    metrics: { cpu: 0, npu: 0, gpu: 0, ram: 0, disk: 0, temp: 0 },
     models: [],
     status: { isLoaded: false, model: null, isMock: false },
     loadingModelId: null,
@@ -538,7 +564,9 @@ export default {
           const data = JSON.parse(event.data);
           this.metrics.cpu = data.cpu;
           this.metrics.npu = data.npu;
+          this.metrics.gpu = data.gpu ?? 0;
           this.metrics.ram = data.ram.percentage;
+          this.metrics.disk = data.disk?.percentage ?? 0;
           this.metrics.temp = data.temperature;
           if (data.stats) {
             this.stats = data.stats;

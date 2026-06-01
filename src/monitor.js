@@ -75,14 +75,58 @@ export async function getSystemMetrics() {
       // ignore
     }
   }
-  
+
   // Mock NPU load fallback based on active generation
   if (npuLoad === 0) {
     if (pool.activeGeneration) {
-      npuLoad = Math.floor(68 + Math.random() * 24); // 68% - 92%
+      npuLoad = Math.floor(68 + Math.random() * 24);
     } else {
       npuLoad = 0;
     }
+  }
+
+  // 5. GPU Load (Mali — Rockchip SoCs expose utilization under /sys/kernel/debug/mali*)
+  let gpuLoad = 0;
+  if (isLinux) {
+    try {
+      // Mali GPU on RK3576/RK3588: /sys/kernel/debug/mali0/utilization_pp or gpu_utilization
+      const maliPaths = [
+        '/sys/kernel/debug/mali0/gpu_utilization',
+        '/sys/kernel/debug/mali0/utilization_pp',
+        '/sys/class/misc/mali0/device/utilization',
+      ];
+      for (const p of maliPaths) {
+        if (fs.existsSync(p)) {
+          const raw = fs.readFileSync(p, 'utf-8').trim();
+          const m = raw.match(/(\d+)/);
+          if (m) { gpuLoad = parseInt(m[1]); break; }
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  // Mock GPU fallback — low idle load, spikes with CPU
+  if (gpuLoad === 0 && !isLinux) {
+    gpuLoad = Math.floor(cpuLoad * 0.3 + Math.random() * 5);
+  }
+
+  // 6. Disk Utilization (root filesystem)
+  let diskTotal = 0;
+  let diskUsed = 0;
+  let diskPercentage = 0;
+  try {
+    const fsData = await si.fsSize();
+    // Pick the root mount or the largest filesystem
+    const root = fsData.find(f => f.mount === '/') || fsData.sort((a, b) => b.size - a.size)[0];
+    if (root) {
+      diskTotal = root.size;
+      diskUsed = root.used;
+      diskPercentage = root.size > 0 ? Math.round((root.used / root.size) * 100) : 0;
+    }
+  } catch (e) {
+    // ignore
   }
 
   return {
@@ -93,6 +137,12 @@ export async function getSystemMetrics() {
       percentage: totalMem > 0 ? Math.round((usedMem / totalMem) * 100) : 0
     },
     temperature: Math.round(temperature * 10) / 10,
-    npu: npuLoad
+    npu: npuLoad,
+    gpu: Math.round(gpuLoad),
+    disk: {
+      total: diskTotal,
+      used: diskUsed,
+      percentage: diskPercentage,
+    },
   };
 }

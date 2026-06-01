@@ -122,7 +122,7 @@ graph TD
 | `src/worker.js` | Process-isolated inference worker; receives `load`/`run`/`unload` IPC commands from pool |
 | `src/pool.js` | Single-active-model lock, auto-swap, idle timeout, pin-to-keep-loaded (persisted to DB); auto-loads pinned model on startup with RAM check |
 | `src/admin/conversations.js` | 6 REST endpoints for conversation CRUD + message append (`/api/admin/conversations/…`) |
-| `src/monitor.js` | Polls CPU, RAM, SoC Temp, NPU load; Rockchip-native on ARM64 Linux, simulated elsewhere |
+| `src/monitor.js` | Polls CPU, RAM, SoC Temp, NPU load, GPU load (Mali), disk utilization; Rockchip-native on ARM64 Linux, simulated elsewhere |
 | `src/stats.js` | Records prefill/generation tokens and latencies in SQLite |
 | `src/db.js` | SQLite + PRAGMA user_version migration runner; 2 versioned migrations; all table accessors |
 | `src/config.js` | Env-driven settings; multi-user credential helpers; PBKDF2-HMAC-SHA256 |
