@@ -1,3 +1,10 @@
+# [0.7.0-alpha.18](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.17...v0.7.0-alpha.18) (2026-06-01)
+
+
+### Bug Fixes
+
+* **downloader:** encode repo ID path segments separately to preserve slash separator ([ff472ba](https://github.com/mafischer/oRKLLM/commit/ff472baf7c736718735a46532b4d5180c26ca74a))
+
 # [0.7.0-alpha.17](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.16...v0.7.0-alpha.17) (2026-06-01)
 
 
