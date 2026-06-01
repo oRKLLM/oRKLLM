@@ -10,14 +10,14 @@
     >mdi-menu</v-icon>
     <v-icon color="primary" size="32" class="mr-2 d-none d-sm-flex">mdi-chip</v-icon>
 
-    <v-app-bar-title class="d-flex align-center gap-2">
+    <v-app-bar-title class="d-flex align-center" style="gap: 6px;">
       <!-- oRKLLM text always navigates to dashboard -->
       <span
         class="font-weight-bold text-h5 text-gradient cursor-pointer"
         @click="$router.push('/')"
       >oRKLLM</span>
-      <!-- Version chip hidden on mobile — shown in user drawer instead -->
-      <v-chip size="x-small" variant="outlined" color="primary" class="font-weight-regular text-caption mt-1 d-none d-sm-flex">v{{ appVersion }}</v-chip>
+      <!-- Version text hidden on mobile — shown in user drawer instead -->
+      <span class="text-grey d-none d-sm-flex" style="font-size: 0.65rem; line-height: 1; margin-top: 2px;">v{{ appVersion }}</span>
     </v-app-bar-title>
 
     <v-spacer></v-spacer>
