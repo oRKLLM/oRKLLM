@@ -465,13 +465,14 @@ export default {
     },
 
     // ── Inference ─────────────────────────────────────────────────────────
-    async sendMessage(queuedText = null) {
+    async sendMessage(queuedText = null, alreadyInChat = false) {
       const text = queuedText ?? this.inputText.trim();
       if (!text || !this.activeModel) return;
       if (queuedText === null) this.inputText = '';
 
       if (this.generating) {
-        this.messageQueue.push(text);
+        // Show message immediately in chat and queue it for sending after generation
+        this.messageQueue.push({ text, inChat: true });
         this.chatHistory.push({ role: 'user', content: text });
         this.scrollToBottom();
         return;
@@ -482,8 +483,11 @@ export default {
         await this.ensureConversation(text);
       } catch (e) {}
 
-      this.chatHistory.push({ role: 'user', content: text });
-      this.scrollToBottom();
+      // Only push to chatHistory if not already shown (queued messages are shown immediately)
+      if (!alreadyInChat) {
+        this.chatHistory.push({ role: 'user', content: text });
+        this.scrollToBottom();
+      }
       await this.persistMessage('user', text);
 
       this.generating = true;
@@ -567,8 +571,8 @@ export default {
         this.abortController = null;
         this.scrollToBottom();
         if (this.messageQueue.length > 0) {
-          const next = this.messageQueue.shift();
-          this.$nextTick(() => this.sendMessage(next));
+          const { text: next, inChat } = this.messageQueue.shift();
+          this.$nextTick(() => this.sendMessage(next, inChat));
         }
       }
     },
