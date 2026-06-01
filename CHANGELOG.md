@@ -1,3 +1,11 @@
+# [0.7.0-alpha.32](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.31...v0.7.0-alpha.32) (2026-06-01)
+
+
+### Features
+
+* **dashboard:** add TBW (total bytes written) to disk table from NVMe SMART data ([df6165f](https://github.com/mafischer/oRKLLM/commit/df6165f377101708d8b44a21f8015f2ab3b44ce5))
+* **deb:** add smartmontools dependency and PATH with /usr/sbin for SMART disk status ([790c14d](https://github.com/mafischer/oRKLLM/commit/790c14ded7d4d71400a9b9e1f837b80a56647704))
+
 # [0.7.0-alpha.31](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.30...v0.7.0-alpha.31) (2026-06-01)
 
 
