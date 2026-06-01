@@ -723,9 +723,15 @@ export default {
     this.fetchStatus();
     this.fetchAllModelSettings();
     this.fetchGlobalSettings();
+    this.refreshDownloadQueue();
   },
   beforeUnmount() {
     if (this.dlPollTimer) clearInterval(this.dlPollTimer);
+  },
+  watch: {
+    tab(val) {
+      if (val === 'downloader') this.refreshDownloadQueue();
+    },
   },
   methods: {
     async fetchAuth() {
@@ -1055,6 +1061,16 @@ export default {
       } catch (e) {
         alert('Network error: ' + e.message);
       }
+    },
+    async refreshDownloadQueue() {
+      try {
+        const res = await fetch('/api/admin/download/status');
+        if (!res.ok) return;
+        this.dlJobs = await res.json();
+        // Restart poller if there are active downloads
+        const anyActive = this.dlJobs.some(j => j.status === 'downloading');
+        if (anyActive) this.startPollDownloadStatus();
+      } catch (e) {}
     },
     startPollDownloadStatus() {
       if (this.dlPollTimer) return; // already polling
