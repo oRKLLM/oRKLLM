@@ -52,7 +52,7 @@
         </v-row>
       </v-card>
 
-      <v-row class="fill-height align-start">
+      <v-row class="align-start">
 
         <!-- Left Side: Telemetry & API Endpoints -->
         <v-col cols="12" md="4" class="d-flex flex-column gap-6">
@@ -196,152 +196,123 @@
 
         </v-col>
 
-        <!-- Right Side: Chat Playground -->
-        <v-col cols="12" md="8" class="d-flex flex-column gap-6 fill-height align-self-stretch">
+        <!-- Right Side: Cache Observability + Runtime Versions -->
+        <v-col cols="12" md="8" class="d-flex flex-column gap-6">
 
-          <!-- Chat Arena -->
-          <v-card class="glass-card d-flex flex-column flex-grow-1 flex-shrink-0" style="min-height: 480px; height: 0;">
-            <div class="text-h6 font-weight-bold px-5 py-4 border-bottom d-flex align-center justify-space-between">
-              <div class="d-flex align-center flex-shrink-0">
-                <v-icon start color="primary">mdi-chat-outline</v-icon>
-                Inference Playground
+          <!-- Prefix Cache Observability -->
+          <v-card class="glass-card pa-5">
+            <div class="d-flex align-center justify-space-between mb-4">
+              <div class="text-h6 font-weight-bold d-flex align-center">
+                <v-icon start color="primary">mdi-database-eye-outline</v-icon>
+                Prefix Cache Observability
               </div>
-              <div class="d-flex align-center gap-2 ml-4">
-                <v-select
-                  v-model="playgroundModel"
-                  :items="modelSelectItems"
-                  density="compact"
-                  hide-details
-                  variant="outlined"
-                  style="min-width: 200px; max-width: 340px;"
-                  placeholder="Select a model..."
-                  :loading="loadingModelId !== null"
-                  @update:modelValue="onPlaygroundModelChange"
-                ></v-select>
-                <v-btn size="small" color="grey" variant="text" @click="clearChat" icon>
-                  <v-icon size="18">mdi-trash-can-outline</v-icon>
+              <div class="d-flex gap-2">
+                <v-btn size="small" variant="tonal" color="error" prepend-icon="mdi-delete-sweep-outline"
+                  @click="clearCache" :disabled="!cacheStats.enabled">
+                  Clear Cache
                 </v-btn>
               </div>
             </div>
 
-            <!-- Chat messages -->
-            <div class="chat-messages-container pa-5 flex-grow-1 overflow-y-auto" ref="chatContainer">
-              <div
-                v-for="(msg, idx) in chatHistory"
-                :key="idx"
-                :class="['d-flex mb-4', msg.role === 'user' ? 'justify-end' : 'justify-start']"
-              >
-                <!-- Avatar Assistant -->
-                <v-avatar v-if="msg.role !== 'user'" color="primary" class="mr-3" size="36">
-                  <v-icon color="white">mdi-robot-outline</v-icon>
-                </v-avatar>
-
-                <div :class="['message-bubble pa-3 rounded-lg', msg.role === 'user' ? 'bg-primary text-white' : 'bg-surface-variant']" style="max-width: 80%;">
-                  <!-- Rich markdown-like formatting -->
-                  <div class="message-text" v-html="formatMessage(msg.content)"></div>
-
-                  <!-- Performance stats -->
-                  <div v-if="msg.perf" class="text-caption text-grey-lighten-1 mt-2 border-top-dashed pt-1">
-                    Prefill: {{ msg.perf.prefill_time_ms.toFixed(1) }}ms |
-                    Rate: {{ (msg.perf.generate_tokens / (msg.perf.generate_time_ms / 1000)).toFixed(1) }} t/s
-                  </div>
-                </div>
-
-                <!-- Avatar User -->
-                <v-avatar v-if="msg.role === 'user'" color="teal" class="ml-3" size="36">
-                  <v-icon color="white">mdi-account</v-icon>
-                </v-avatar>
-              </div>
-
-              <!-- Loader when generating -->
-              <div v-if="generating && chatHistory[chatHistory.length-1].role === 'user'" class="d-flex justify-start mb-4">
-                <v-avatar color="primary" class="mr-3" size="36">
-                  <v-icon color="white">mdi-robot-outline</v-icon>
-                </v-avatar>
-                <div class="message-bubble pa-3 rounded-lg bg-surface-variant d-flex align-center">
-                  <span class="pulse-dot"></span>
-                  <span class="pulse-dot delay-1"></span>
-                  <span class="pulse-dot delay-2"></span>
-                </div>
-              </div>
+            <div v-if="!cacheStats.enabled" class="text-caption text-grey">
+              Prefix cache is disabled. Enable it in Settings.
             </div>
 
-            <!-- Chat input and parameters -->
-            <v-divider></v-divider>
-            <div class="pa-4 bg-slate-input">
-              <v-row class="align-center">
-                <v-col cols="12" sm="8" class="pr-sm-2">
-                  <v-text-field
-                    v-model="promptInput"
-                    placeholder="Enter your message..."
-                    variant="outlined"
-                    density="comfortable"
-                    hide-details
-                    append-inner-icon="mdi-send"
-                    @click:append-inner="sendPrompt"
-                    @keyup.enter="sendPrompt"
-                    :disabled="!status.isLoaded || generating"
-                  ></v-text-field>
+            <template v-else>
+              <!-- Summary row -->
+              <v-row class="mb-4">
+                <v-col cols="6" sm="3">
+                  <div class="text-caption text-grey">Hot Cache</div>
+                  <div class="text-body-1 font-weight-bold">{{ cacheStats.hot?.sizeMB ?? 0 }} MB</div>
+                  <div class="text-caption text-grey">/ {{ cacheStats.hot?.limitMB ?? 0 }} MB · {{ cacheStats.hot?.entries ?? 0 }} entries</div>
                 </v-col>
-
-                <!-- Sliders for generation params -->
-                <v-col cols="12" sm="4" class="d-flex justify-end gap-2 mt-2 mt-sm-0">
-                  <v-menu :close-on-content-click="false" location="top">
-                    <template v-slot:activator="{ props }">
-                      <v-btn v-bind="props" variant="tonal" color="primary" prepend-icon="mdi-tune">
-                        Params
-                      </v-btn>
-                    </template>
-
-                    <v-card width="300" class="pa-4 glass-card">
-                      <div class="text-subtitle-2 font-weight-bold mb-3">Inference Parameters</div>
-                      <v-slider
-                        v-model="params.temperature"
-                        min="0.1"
-                        max="2.0"
-                        step="0.1"
-                        label="Temp"
-                        thumb-label
-                        density="compact"
-                        color="primary"
-                      ></v-slider>
-                      <v-slider
-                        v-model="params.top_p"
-                        min="0.1"
-                        max="1.0"
-                        step="0.05"
-                        label="Top P"
-                        thumb-label
-                        density="compact"
-                        color="primary"
-                      ></v-slider>
-                      <v-slider
-                        v-model="params.top_k"
-                        min="1"
-                        max="100"
-                        step="1"
-                        label="Top K"
-                        thumb-label
-                        density="compact"
-                        color="primary"
-                      ></v-slider>
-                      <v-slider
-                        v-model="params.max_tokens"
-                        min="32"
-                        max="2048"
-                        step="32"
-                        label="Max Tokens"
-                        thumb-label
-                        density="compact"
-                        color="primary"
-                      ></v-slider>
-                    </v-card>
-                  </v-menu>
-                  <v-btn v-if="generating" color="error" variant="flat" @click="abortInference">
-                    Abort
-                  </v-btn>
+                <v-col cols="6" sm="3">
+                  <div class="text-caption text-grey">Cold Cache</div>
+                  <div class="text-body-1 font-weight-bold">{{ cacheStats.cold?.sizeMB ?? 0 }} MB</div>
+                  <div class="text-caption text-grey">/ {{ cacheStats.cold?.limitMB ?? 0 }} MB · {{ cacheStats.cold?.entries ?? 0 }} entries</div>
+                </v-col>
+                <v-col cols="6" sm="3">
+                  <div class="text-caption text-grey">Cache Directory</div>
+                  <div class="text-caption font-mono text-truncate" style="max-width: 200px">{{ cacheStats.cacheDir || '—' }}</div>
+                </v-col>
+                <v-col cols="6" sm="3">
+                  <div class="text-caption text-grey">Total Entries</div>
+                  <div class="text-body-1 font-weight-bold">{{ (cacheStats.hot?.entries ?? 0) + (cacheStats.cold?.entries ?? 0) }}</div>
                 </v-col>
               </v-row>
+
+              <!-- Progress bars -->
+              <div class="mb-2">
+                <div class="d-flex justify-space-between mb-1">
+                  <span class="text-caption">Hot</span>
+                  <span class="text-caption">{{ cacheStats.hot?.sizeMB ?? 0 }} / {{ cacheStats.hot?.limitMB ?? 0 }} MB</span>
+                </div>
+                <v-progress-linear
+                  :model-value="cacheStats.hot?.limitMB ? (cacheStats.hot.sizeMB / cacheStats.hot.limitMB) * 100 : 0"
+                  color="primary" rounded height="5"
+                ></v-progress-linear>
+              </div>
+              <div>
+                <div class="d-flex justify-space-between mb-1">
+                  <span class="text-caption">Cold</span>
+                  <span class="text-caption">{{ cacheStats.cold?.sizeMB ?? 0 }} / {{ cacheStats.cold?.limitMB ?? 0 }} MB</span>
+                </div>
+                <v-progress-linear
+                  :model-value="cacheStats.cold?.limitMB ? (cacheStats.cold.sizeMB / cacheStats.cold.limitMB) * 100 : 0"
+                  color="teal" rounded height="5"
+                ></v-progress-linear>
+              </div>
+            </template>
+          </v-card>
+
+          <!-- RKLLM Runtime Versions -->
+          <v-card class="glass-card pa-5">
+            <div class="text-h6 font-weight-bold mb-4 d-flex align-center justify-space-between">
+              <div class="d-flex align-center">
+                <v-icon start color="primary">mdi-chip</v-icon>
+                RKLLM Runtime Versions
+              </div>
+              <v-btn size="small" variant="text" color="primary" prepend-icon="mdi-refresh"
+                @click="fetchRuntimes">Refresh</v-btn>
+            </div>
+
+            <!-- System runtime -->
+            <div class="mb-3">
+              <div class="text-caption text-grey mb-1">System Runtime ({{ runtimes.systemRuntime?.path || '—' }})</div>
+              <v-chip
+                :color="runtimes.systemRuntime?.version ? 'primary' : 'grey'"
+                variant="tonal"
+                size="small"
+              >
+                {{ runtimes.systemRuntime?.version ? `v${runtimes.systemRuntime.version}` : 'version unknown' }}
+              </v-chip>
+            </div>
+
+            <!-- Versioned runtimes table -->
+            <div v-if="runtimes.runtimes && runtimes.runtimes.length">
+              <div class="text-caption text-grey mb-2">Installed in {{ runtimes.runtimesDir }}</div>
+              <v-table density="compact" class="text-caption">
+                <thead>
+                  <tr>
+                    <th>File</th>
+                    <th>Version</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="r in runtimes.runtimes" :key="r.path">
+                    <td class="font-mono">{{ r.filename }}</td>
+                    <td>
+                      <v-chip size="x-small" color="primary" variant="tonal">
+                        {{ r.version ? `v${r.version}` : '—' }}
+                      </v-chip>
+                    </td>
+                  </tr>
+                </tbody>
+              </v-table>
+            </div>
+            <div v-else class="text-caption text-grey">
+              No versioned runtimes installed. Enable auto-download in Settings or place
+              <code>librkllmrt-aarch64-vX.Y.Z.so</code> files in the runtimes directory.
             </div>
           </v-card>
 
@@ -363,19 +334,9 @@ export default {
     metrics: { cpu: 0, npu: 0, gpu: 0, ram: 0, disk: 0, temp: 0 },
     models: [],
     status: { isLoaded: false, model: null, isMock: false },
-    loadingModelId: null,
-    promptInput: '',
-    chatHistory: [
-      { role: 'assistant', content: 'Welcome to the oRKLLM Inference playground! Please load a model from the Models page to start testing inference.' }
-    ],
-    params: {
-      temperature: 0.8,
-      top_p: 0.9,
-      top_k: 40,
-      max_tokens: 512
-    },
-    generating: false,
     metricsWs: null,
+    cacheStats: { enabled: false },
+    runtimes: { systemRuntime: null, runtimes: [], runtimesDir: '' },
 
     // oMLX inspired telemetry stats
     statsMode: 'session',
@@ -391,21 +352,12 @@ export default {
     // Per-model settings
     modelSettings: {},
 
-    // Playground model selector
-    playgroundModel: null,
-
     appVersion: __APP_VERSION__,
     themeName: localStorage.getItem('orkllm-theme') || 'customDarkTheme'
   }),
   computed: {
     isDark() {
       return this.themeName === 'customDarkTheme';
-    },
-    modelSelectItems() {
-      return this.models.map(m => ({
-        title: this.modelSettings[m.id]?.display_name || m.id,
-        value: m.id
-      }));
     },
     currentStats() {
       return this.statsMode === 'session' ? this.stats.session : this.stats.allTime;
@@ -427,6 +379,8 @@ export default {
     this.fetchStatus();
     this.initWebSockets();
     this.fetchAllModelSettings();
+    this.fetchCacheStats();
+    this.fetchRuntimes();
   },
   beforeUnmount() {
     if (this.metricsWs) this.metricsWs.close();
@@ -460,9 +414,6 @@ export default {
         }
         if (data.port) this.port = data.port;
         if (data.libPath) this.libPath = data.libPath;
-        if (data.model && this.playgroundModel !== data.model) {
-          this.playgroundModel = data.model;
-        }
       } catch (e) {}
     },
     async clearStats() {
@@ -503,37 +454,26 @@ export default {
         this.modelSettings = all;
       } catch (e) {}
     },
-    async onPlaygroundModelChange(modelId) {
-      if (modelId && modelId !== this.status.model) {
-        await this.loadModel(modelId);
-      }
-    },
-    async loadModel(modelId) {
-      this.loadingModelId = modelId;
+    async fetchCacheStats() {
       try {
-        const saved = this.modelSettings[modelId] || {};
-        const maxTokens = saved.max_new_tokens || this.params.max_tokens;
-        const res = await fetch('/api/admin/load', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: modelId, options: { max_new_tokens: maxTokens } })
-        });
-        if (res.ok) {
-          this.playgroundModel = modelId;
-          if (saved.temperature) this.params.temperature = saved.temperature;
-          if (saved.top_p) this.params.top_p = saved.top_p;
-          if (saved.top_k) this.params.top_k = saved.top_k;
-          if (saved.max_new_tokens) this.params.max_tokens = saved.max_new_tokens;
-          await this.fetchStatus();
-        } else {
-          const data = await res.json();
-          alert(data.error || 'Failed to load model');
-        }
-      } catch (e) {
-        alert('Network connection error');
-      } finally {
-        this.loadingModelId = null;
-      }
+        const res = await fetch('/api/admin/global-settings');
+        if (!res.ok) return;
+        const data = await res.json();
+        this.cacheStats = data.cacheStats || { enabled: false };
+      } catch (e) {}
+    },
+    async fetchRuntimes() {
+      try {
+        const res = await fetch('/api/admin/runtimes');
+        if (!res.ok) return;
+        this.runtimes = await res.json();
+      } catch (e) {}
+    },
+    async clearCache() {
+      try {
+        await fetch('/api/admin/cache', { method: 'DELETE' });
+        await this.fetchCacheStats();
+      } catch (e) {}
     },
     toggleTheme() {
       const next = this.isDark ? 'customLightTheme' : 'customDarkTheme';
@@ -577,113 +517,6 @@ export default {
         setTimeout(() => this.initWebSockets(), 5000);
       };
     },
-    clearChat() {
-      this.chatHistory = [
-        { role: 'assistant', content: 'Chat history cleared. You can start a new testing session.' }
-      ];
-    },
-    async sendPrompt() {
-      if (!this.promptInput.trim() || !this.status.isLoaded || this.generating) return;
-
-      const userPrompt = this.promptInput;
-      this.promptInput = '';
-      this.chatHistory.push({ role: 'user', content: userPrompt });
-
-      this.scrollToBottom();
-      this.generating = true;
-
-      this.chatHistory.push({ role: 'assistant', content: '' });
-      const assistantMessage = this.chatHistory[this.chatHistory.length - 1];
-
-      try {
-        const res = await fetch('/v1/chat/completions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: this.playgroundModel || this.status.model,
-            messages: this.chatHistory.slice(0, -1).map(c => ({ role: c.role, content: c.content })),
-            stream: true,
-            temperature: this.params.temperature,
-            top_p: this.params.top_p,
-            top_k: this.params.top_k,
-            max_tokens: this.params.max_tokens
-          })
-        });
-
-        if (!res.ok) {
-          const data = await res.json();
-          assistantMessage.content = `Error: ${data.error || 'Failed to generate completion'}`;
-          this.generating = false;
-          return;
-        }
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder('utf-8');
-        let buffer = '';
-
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop();
-
-          for (const line of lines) {
-            const cleanLine = line.trim();
-            if (!cleanLine.startsWith('data: ')) continue;
-
-            const dataStr = cleanLine.substring(6);
-            if (dataStr === '[DONE]') continue;
-
-            try {
-              const dataObj = JSON.parse(dataStr);
-              if (dataObj.choices && dataObj.choices[0].delta && dataObj.choices[0].delta.content) {
-                assistantMessage.content += dataObj.choices[0].delta.content;
-                this.scrollToBottom();
-              }
-              if (dataObj.perf) {
-                assistantMessage.perf = dataObj.perf;
-              }
-            } catch (err) {}
-          }
-        }
-      } catch (err) {
-        assistantMessage.content += `\n[Stream Error: ${err.message}]`;
-      } finally {
-        this.generating = false;
-        this.scrollToBottom();
-      }
-    },
-    async abortInference() {
-      try {
-        await fetch('/api/admin/unload', { method: 'POST' });
-        await this.fetchStatus();
-        this.generating = false;
-      } catch (e) {}
-    },
-    scrollToBottom() {
-      this.$nextTick(() => {
-        const chatEl = this.$refs.chatContainer;
-        if (chatEl) chatEl.scrollTop = chatEl.scrollHeight;
-      });
-    },
-    formatMessage(content) {
-      if (!content) return '';
-      let text = content
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-
-      text = text.replace(/```([\s\S]+?)```/g, (match, code) => {
-        return `<pre class="code-block pa-2 my-2 rounded font-mono text-caption">${code}</pre>`;
-      });
-      text = text.replace(/`([^`\n]+?)`/g, '<code class="inline-code px-1 rounded font-mono">$1</code>');
-      text = text.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
-      text = text.replace(/\n/g, '<br/>');
-
-      return text;
-    }
   }
 };
 </script>
