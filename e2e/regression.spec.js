@@ -188,3 +188,36 @@ test('User menu: Sign Out navigates to login page', async ({ page }) => {
   await d.locator('.v-list-item').filter({ hasText: 'Sign Out' }).click();
   await expect(page).toHaveURL(/\/login/);
 });
+
+test('Hamburger: toggles mobile nav drawer open then closed', async ({ page }) => {
+  await login(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  const hamburger = page.locator('.v-app-bar .mdi-menu').locator('..');
+
+  // First tap opens the drawer
+  await hamburger.click();
+  const navDrawer = page.locator('.v-navigation-drawer').filter({ hasText: 'Dashboard' });
+  await expect(navDrawer).toBeVisible({ timeout: 3000 });
+
+  // Second tap closes it
+  await hamburger.click();
+  await expect(navDrawer).toBeHidden({ timeout: 3000 });
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+});
+
+test('Account button: toggles user drawer open then closed', async ({ page }) => {
+  await login(page);
+
+  const btn = accountBtn(page);
+  const d = drawer(page);
+
+  // First click opens
+  await btn.click();
+  await expect(d).toBeVisible({ timeout: 3000 });
+
+  // Second click closes
+  await btn.click();
+  await expect(d).toBeHidden({ timeout: 3000 });
+});

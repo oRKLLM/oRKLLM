@@ -144,7 +144,7 @@ graph TD
 | `frontend/src/views/Login.vue` | Login page; shows SSO button when OIDC/SAML configured |
 | `e2e/orkllm.spec.js` | Playwright E2E suite (18 tests — core flow, chat history, pin persistence) |
 | `e2e/rbac.spec.js` | Playwright E2E suite (17 tests — RBAC, trusted proxy (single + multi-IP/CIDR), mock OIDC SSO, Keycloak integration) |
-| `e2e/regression.spec.js` | Playwright E2E suite (10 tests — UI regression: navbar, theme, user drawer) |
+| `e2e/regression.spec.js` | Playwright E2E suite (12 tests — UI regression: navbar, theme, user drawer, drawer toggles) |
 
 ---
 
