@@ -353,7 +353,6 @@
               <v-checkbox
                 v-model="searchPlatformOnly"
                 :label="detectedPlatform ? `Compatible chipset (${detectedPlatform.toUpperCase()}) only` : 'Compatible chipset only'"
-                :disabled="!detectedPlatform"
                 density="compact"
                 hide-details
                 color="primary"
@@ -1013,17 +1012,15 @@ export default {
       this.searchError = '';
       this.searchResults = [];
       try {
-        // Build augmented query: append rkllm and/or platform keywords
-        let q = this.searchQuery.trim();
-        if (this.searchPlatformOnly && this.detectedPlatform) {
-          q = `${q} ${this.detectedPlatform}`.trim();
-        }
         const params = new URLSearchParams({
-          q,
+          q: this.searchQuery.trim(),
           sort: this.searchSort,
           rkllm: this.searchRkllmOnly ? 'true' : 'false',
           limit: '25',
         });
+        if (this.searchPlatformOnly && this.detectedPlatform) {
+          params.set('platform', this.detectedPlatform);
+        }
         const res = await fetch(`/api/admin/hf/search?${params}`);
         const data = await res.json();
         if (!res.ok) { this.searchError = data.error || 'Search failed'; return; }

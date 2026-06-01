@@ -233,15 +233,12 @@ export default async function adminRoutes(fastify, options) {
     status.port = port;
     status.libPath = LIBRKLLMRT_PATH;
     status.schemaVersion = dbGetSchemaVersion();
-    // Detect SoC platform from NPU driver sysfs (Linux/ARM64 only)
+    // Detect SoC from /proc/device-tree/compatible which lists "rockchip,rk35XX" entries
     try {
       const { readFileSync } = await import('fs');
-      const ver = readFileSync('/sys/kernel/debug/rknpu/version', 'utf8');
-      // version file content varies; platform is identified by reading the chip model
-      const chipRaw = readFileSync('/proc/device-tree/model', 'utf8').replace(/\0/g, '').trim();
-      if (chipRaw.includes('3576')) status.platform = 'rk3576';
-      else if (chipRaw.includes('3588')) status.platform = 'rk3588';
-      else status.platform = null;
+      const compat = readFileSync('/proc/device-tree/compatible', 'utf8').replace(/\0/g, ' ');
+      const m = compat.match(/rockchip,(rk\d+)/i);
+      status.platform = m ? m[1].toLowerCase() : null;
     } catch {
       status.platform = null;
     }
@@ -543,12 +540,15 @@ export default async function adminRoutes(fastify, options) {
     return { success: true, modelId, settings };
   });
 
-  // GET /api/admin/hf/search?q=<query>&sort=downloads&rkllm=true&limit=20
+  // GET /api/admin/hf/search?q=<query>&sort=downloads&rkllm=true&platform=rk3576&limit=20
   fastify.get('/hf/search', async (request, reply) => {
-    const { q = '', sort = 'downloads', rkllm = 'false', limit = '20' } = request.query;
+    const { q = '', sort = 'downloads', rkllm = 'false', platform = '', limit = '20' } = request.query;
     const hfToken = dbGetSetting('hf_token') ?? '';
+    let search = q;
+    if (rkllm === 'true') search = `${search} rkllm`.trim();
+    if (platform) search = `${search} ${platform}`.trim();
     const params = new URLSearchParams({
-      search: rkllm === 'true' ? `${q} rkllm`.trim() : q,
+      search,
       sort,
       direction: '-1',
       limit: String(Math.min(parseInt(limit) || 20, 50)),
