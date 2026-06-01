@@ -1,3 +1,12 @@
+# [0.7.0-alpha.20](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.19...v0.7.0-alpha.20) (2026-06-01)
+
+
+### Bug Fixes
+
+* **nav:** replace version chip with inline text, tighten spacing ([cc8bc34](https://github.com/mafischer/oRKLLM/commit/cc8bc3477a8aaa19f014d52f62b7cd9f47b64f2a))
+* **nav:** use primary color for version text at reduced opacity ([5e12601](https://github.com/mafischer/oRKLLM/commit/5e12601114fc1cbbfd073546d6de5f483c723464))
+* **tests:** update version assertions from v-chip to inline span ([9bdfdc7](https://github.com/mafischer/oRKLLM/commit/9bdfdc786e77f507a99806da0a9b28ff8bed10e5))
+
 # [0.7.0-alpha.19](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.18...v0.7.0-alpha.19) (2026-06-01)
 
 
