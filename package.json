@@ -27,7 +27,7 @@
   "license": "ISC",
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
-    "@fastify/static": "^8.0.4",
+    "@fastify/static": "^9.1.3",
     "@fastify/websocket": "^11.0.2",
     "better-sqlite3": "^12.10.0",
     "dotenv": "^16.4.5",

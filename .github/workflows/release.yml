@@ -12,6 +12,9 @@ permissions:
   issues: write
   pull-requests: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   # Starts immediately in parallel with CI — does the slow work up front
   build:

@@ -10,6 +10,9 @@ permissions:
   contents: read
   security-events: write  # for Trivy SARIF upload
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   test:
     name: Test
