@@ -248,6 +248,54 @@ Each failed test has a `test-failed-1.png` screenshot and an `error-context.md` 
 
 ---
 
+## ⚙️ RKLLM Runtime Auto-Downloader
+
+oRKLLM requires a versioned copy of Rockchip's `librkllmrt.so` runtime library to drive NPU inference. Each `.rkllm` model file is compiled against a specific runtime version (e.g. `1.2.3`), and loading a model with the wrong version fails immediately.
+
+### How it works
+
+1. oRKLLM parses the runtime version from the model filename (e.g. `Qwen3-8B-rk3576-w4a16-**1.2.3**.rkllm`).
+2. It searches `ORKLLM_RUNTIMES_DIR` (`~/.config/orkllm/runtimes/` by default) for a matching `librkllmrt-aarch64-v1.2.3.so`.
+3. If none matches, it retries with all other available runtimes newest-first, then falls back to the system `/usr/lib/librkllmrt.so`.
+4. The winning library is cached per model so future loads skip straight to it.
+
+### Auto-download (opt-in)
+
+During first-time setup you are prompted to opt in to **auto-downloading runtimes**. When enabled:
+
+- All available runtime versions are downloaded in the background at server startup.
+- When a model is loaded whose required runtime is not yet present, oRKLLM downloads it automatically before retrying the load.
+- The toggle can be changed at any time in **Settings → Runtime Auto-Download**.
+
+When opted out, the UI shows a disclaimer dialog before downloading, and API callers receive `HTTP 422 RUNTIME_MISSING` with the required version.
+
+### Runtime mirror
+
+Pre-built `librkllmrt.so` binaries for `aarch64` and `armhf` are published at:
+
+**[github.com/mafischer/rkllm-runtimes](https://github.com/mafischer/rkllm-runtimes)**
+
+The mirror syncs from [airockchip/rknn-llm](https://github.com/airockchip/rknn-llm) nightly. All versions from v1.0.1 onward are available.
+
+#### Direct download
+
+```bash
+VERSION=v1.2.3
+ARCH=aarch64   # or armhf
+
+curl -fsSL \
+  https://github.com/mafischer/rkllm-runtimes/releases/download/${VERSION}/librkllmrt-${ARCH}-${VERSION}.so \
+  -o ~/.config/orkllm/runtimes/librkllmrt-${ARCH}-${VERSION}.so
+```
+
+### Licensing
+
+`librkllmrt.so` is Rockchip proprietary software distributed by Airockchip under the **[Apache 2.0 License](https://github.com/airockchip/rknn-llm/blob/main/LICENSE)** as part of the [rknn-llm](https://github.com/airockchip/rknn-llm) repository. The Apache 2.0 license explicitly permits redistribution with attribution. The mirror at `mafischer/rkllm-runtimes` reproduces this license in full on every release.
+
+> **oRKLLM does not modify the binaries.** They are downloaded verbatim from the upstream repository and re-published as properly versioned GitHub release artifacts for programmatic access.
+
+---
+
 ## 🤝 Credits & Acknowledgements
 
 * **[jundot/oMLX](https://github.com/jundot/omlx)**: Inspired the dashboard layout, metrics design, single-model lifecycle, and OpenAI compatibility structures.
