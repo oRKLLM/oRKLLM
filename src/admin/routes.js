@@ -342,7 +342,7 @@ export default async function adminRoutes(fastify, options) {
         cacheHotLimitMB:       parseInt(dbGetSetting('cache_hot_limit_mb')          ?? '512'),
         cacheColdLimitMB:      parseInt(dbGetSetting('cache_cold_limit_mb')         ?? String(10 * 1024)),
         cacheDir:              dbGetSetting('cache_dir') ?? '',
-        cacheMaxContextTokens: parseInt(dbGetSetting('cache_max_context_tokens')    ?? '3500'),
+        cacheMaxContextTokens: parseInt(dbGetSetting('cache_max_context_tokens')    ?? '8192'),
         localAuthDisabled: dbGetSetting('local_auth_disabled') === '1',
         trustedProxy: dbGetSetting('trusted_proxy') ?? '',
         pinnedModel: dbGetSetting('pinned_model') ?? '',

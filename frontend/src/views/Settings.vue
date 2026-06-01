@@ -253,7 +253,7 @@
           <div class="text-subtitle-2 font-weight-medium mb-1">Sliding Context Window</div>
           <div class="text-caption text-grey mb-2">Oldest non-system messages are dropped when the conversation exceeds this estimated token count. Prevents context overflow on the NPU.</div>
           <v-row no-gutters class="align-center mb-4">
-            <v-col cols="9"><v-slider v-model="settings.cacheMaxContextTokens" :min="512" :max="4096" :step="128" color="orange" density="compact" hide-details></v-slider></v-col>
+            <v-col cols="9"><v-slider v-model="settings.cacheMaxContextTokens" :min="512" :max="32768" :step="512" color="orange" density="compact" hide-details></v-slider></v-col>
             <v-col cols="3" class="pl-3"><v-chip size="small" class="font-weight-bold">{{ settings.cacheMaxContextTokens }} tok</v-chip></v-col>
           </v-row>
 
@@ -359,7 +359,7 @@ export default {
       cacheHotLimitMB: 512,
       cacheColdLimitMB: 10240,
       cacheDir: '',
-      cacheMaxContextTokens: 3500,
+      cacheMaxContextTokens: 8192,
       trustedProxy: '',
       autoDownloadRuntimes: true,
     },
@@ -411,7 +411,7 @@ export default {
         this.settings.cacheHotLimitMB       = s.cacheHotLimitMB ?? 512;
         this.settings.cacheColdLimitMB      = s.cacheColdLimitMB ?? 10240;
         this.settings.cacheDir              = s.cacheDir ?? '';
-        this.settings.cacheMaxContextTokens = s.cacheMaxContextTokens ?? 3500;
+        this.settings.cacheMaxContextTokens = s.cacheMaxContextTokens ?? 8192;
         this.settings.trustedProxy          = s.trustedProxy ?? '';
         this.settings.autoDownloadRuntimes  = s.autoDownloadRuntimes ?? true;
         this.cacheStats = data.cacheStats || null;
