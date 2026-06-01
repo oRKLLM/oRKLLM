@@ -178,15 +178,15 @@ test('Models page: Downloader tab visible with HF fields', async ({ page }) => {
 
   await page.click('.v-tab:has-text("Downloader")');
 
-  // HF repo ID field (any input on the page that appeared after tab click)
+  // Search field
+  await expect(
+    page.locator('.v-text-field').filter({ hasText: /Search models/i }).first()
+  ).toBeVisible({ timeout: 3000 });
+
+  // Repo ID field in the download card
   await expect(
     page.locator('.v-text-field').filter({ hasText: /Repo ID/i }).first()
   ).toBeVisible({ timeout: 3000 });
-
-  // HF token field
-  await expect(
-    page.locator('.v-text-field').filter({ hasText: /Token/i }).first()
-  ).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
