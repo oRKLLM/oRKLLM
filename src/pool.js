@@ -1,4 +1,4 @@
-import { fork } from 'child_process';
+import { fork, execFileSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -47,13 +47,36 @@ class EnginePool {
     return v || null;
   }
 
+  // Extract version embedded in a librkllmrt.so binary via strings
+  // Returns e.g. "1.2.3" or null
+  static readSoVersion(soPath) {
+    try {
+      const out = execFileSync('strings', [soPath], { encoding: 'utf8', timeout: 5000 });
+      const m = out.match(/RKLLM SDK \(version:\s*(\d+\.\d+\.\d+)/);
+      return m ? m[1] : null;
+    } catch {
+      return null;
+    }
+  }
+
   // Discover available versioned runtimes in RUNTIMES_DIR, sorted newest-first
   static getAvailableRuntimes() {
     try {
       return fs.readdirSync(RUNTIMES_DIR)
         .filter(f => f.startsWith('librkllmrt') && f.endsWith('.so'))
-        .map(f => ({ file: f, path: path.join(RUNTIMES_DIR, f) }))
-        .sort((a, b) => b.file.localeCompare(a.file, undefined, { numeric: true }));
+        .map(f => {
+          const soPath = path.join(RUNTIMES_DIR, f);
+          // Prefer version read from the binary itself; fall back to filename
+          const version = EnginePool.readSoVersion(soPath)
+            ?? f.match(/(\d+\.\d+\.\d+)/)?.[1]
+            ?? null;
+          return { file: f, path: soPath, version };
+        })
+        .sort((a, b) => {
+          // Sort newest-first by semver
+          if (a.version && b.version) return b.version.localeCompare(a.version, undefined, { numeric: true });
+          return b.file.localeCompare(a.file, undefined, { numeric: true });
+        });
     } catch {
       return [];
     }
@@ -72,9 +95,9 @@ class EnginePool {
     // 1. Previously confirmed working lib
     if (cachedPath && fs.existsSync(cachedPath)) candidates.push(cachedPath);
 
-    // 2. Runtime matching the version parsed from filename
+    // 2. Runtime whose embedded version matches the version parsed from model filename
     if (parsedVersion) {
-      const match = available.find(r => r.file.includes(parsedVersion));
+      const match = available.find(r => r.version === parsedVersion);
       if (match && match.path !== cachedPath) candidates.push(match.path);
     }
 

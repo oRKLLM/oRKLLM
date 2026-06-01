@@ -226,13 +226,13 @@ export default async function adminRoutes(fastify, options) {
 
   // GET /api/admin/runtimes — list available versioned librkllmrt.so files
   fastify.get('/runtimes', async (request, reply) => {
+    const runtimes = pool.constructor.getAvailableRuntimes();
+    // Also report the system fallback runtime version
+    const systemVersion = pool.constructor.readSoVersion(LIBRKLLMRT_PATH);
     return {
       runtimesDir: RUNTIMES_DIR,
-      runtimes: pool.constructor.getAvailableRuntimes().map(r => ({
-        filename: r.file,
-        path: r.path,
-        version: r.file.match(/(\d+\.\d+\.\d+)/)?.[1] ?? null,
-      })),
+      systemRuntime: { path: LIBRKLLMRT_PATH, version: systemVersion },
+      runtimes,
     };
   });
 
