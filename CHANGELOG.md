@@ -1,3 +1,16 @@
+# [0.7.0-alpha.19](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.18...v0.7.0-alpha.19) (2026-06-01)
+
+
+### Bug Fixes
+
+* **tests:** check href on v-list-item directly — it IS the anchor element ([0732a17](https://github.com/mafischer/oRKLLM/commit/0732a17017fde5d28faba07b7918e3d89ef02df1))
+* **tests:** replace playground test with cache observability + runtime versions test ([84ee069](https://github.com/mafischer/oRKLLM/commit/84ee0695a51b68c7a0cb9858ae07167cacd69c2c))
+
+
+### Features
+
+* **dashboard:** replace inference playground with cache observability and RKLLM runtime versions ([a9899a9](https://github.com/mafischer/oRKLLM/commit/a9899a91838633397e60ae3e9e575f16a2a14dae))
+
 # [0.7.0-alpha.18](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.17...v0.7.0-alpha.18) (2026-06-01)
 
 
