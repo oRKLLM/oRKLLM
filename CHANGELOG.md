@@ -1,3 +1,10 @@
+# [0.7.0-alpha.27](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.26...v0.7.0-alpha.27) (2026-06-01)
+
+
+### Bug Fixes
+
+* **search:** read platform from /proc/device-tree/compatible; pass as dedicated param ([cd201d0](https://github.com/mafischer/oRKLLM/commit/cd201d087652cbfca1d658c02e252648e01af6f6))
+
 # [0.7.0-alpha.26](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.25...v0.7.0-alpha.26) (2026-06-01)
 
 
