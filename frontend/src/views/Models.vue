@@ -854,10 +854,10 @@ export default {
           this.settingsDialog = false;
         } else {
           const data = await res.json();
-          alert(data.error || 'Failed to save settings');
+          this.$notify(data.error || 'Failed to save settings', 'error');
         }
       } catch (e) {
-        alert('Network connection error');
+        this.$notify('Network connection error', 'error');
       } finally {
         this.settingsSaving = false;
       }
@@ -879,10 +879,10 @@ export default {
           await this.fetchAllModelSettings();
         } else {
           const data = await res.json();
-          alert(data.error || 'Failed to delete model');
+          this.$notify(data.error || 'Failed to delete model', 'error');
         }
       } catch (e) {
-        alert('Network connection error');
+        this.$notify('Network connection error', 'error');
       } finally {
         this.deleteLoading = false;
       }
@@ -943,10 +943,10 @@ export default {
           await this.fetchStatus();
         } else {
           const data = await res.json();
-          alert(data.error || 'Failed to load model');
+          this.$notify(data.error || 'Failed to load model', 'error');
         }
       } catch (e) {
-        alert('Network connection error');
+        this.$notify('Network connection error', 'error');
       } finally {
         this.loadingModelId = null;
         this.stopRuntimeSyncPoller();
@@ -966,7 +966,7 @@ export default {
         this.runtimeDialog = false;
         await this._doLoadModel(this.runtimeDialogModel);
       } catch (e) {
-        alert('Download failed: ' + e.message);
+        this.$notify('Download failed: ' + e.message, 'error');
       } finally {
         this.runtimeDownloading = false;
       }
@@ -977,7 +977,7 @@ export default {
         const res = await fetch(endpoint, { method: 'POST' });
         if (res.ok) await this.fetchStatus();
       } catch (e) {
-        alert('Network connection error');
+        this.$notify('Network connection error', 'error');
       }
     },
     async unloadModel(modelId) {
@@ -988,7 +988,7 @@ export default {
           await this.fetchStatus();
         }
       } catch (e) {
-        alert('Network connection error');
+        this.$notify('Network connection error', 'error');
       } finally {
         this.loadingModelId = null;
       }
@@ -1001,10 +1001,10 @@ export default {
           body: JSON.stringify({ timeout: this.timeoutSlider })
         });
         if (res.ok) {
-          alert('Timeout saved successfully');
+          this.$notify('Timeout saved', 'success');
         }
       } catch (e) {
-        alert('Network error saving timeout');
+        this.$notify('Network error saving timeout', 'error');
       }
     },
     async searchHf() {
@@ -1113,11 +1113,11 @@ export default {
           }),
         });
         const data = await res.json();
-        if (!res.ok) { alert(data.error || 'Failed to start download'); return; }
+        if (!res.ok) { this.$notify(data.error || 'Failed to start download', 'error'); return; }
         this.dlFiles = [];
         this.startPollDownloadStatus();
       } catch (e) {
-        alert('Network error: ' + e.message);
+        this.$notify('Network error: ' + e.message, 'error');
       }
     },
     async refreshDownloadQueue() {

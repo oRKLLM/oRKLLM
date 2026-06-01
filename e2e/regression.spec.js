@@ -237,3 +237,22 @@ test('User menu: Contribute button links to GitHub', async ({ page }) => {
   const href = await contributeLink.getAttribute('href');
   expect(href).toContain('github.com/mafischer/oRKLLM');
 });
+
+test('No browser alert() popups — notifications use Vuetify snackbar', async ({ page }) => {
+  await login(page);
+
+  // Intercept any native dialog — should never fire
+  let alertFired = false;
+  page.on('dialog', dialog => { alertFired = true; dialog.dismiss(); });
+
+  // Copy to clipboard triggers a notification; v-snackbar should appear instead of alert()
+  await page.goto('/');
+  await page.locator('.v-btn:has(.mdi-content-copy)').first().click({ timeout: 5000 }).catch(() => {});
+
+  // Wait briefly
+  await page.waitForTimeout(500);
+  expect(alertFired).toBe(false);
+
+  // Snackbar element should exist in the DOM (rendered by App.vue)
+  await expect(page.locator('.v-snackbar')).toBeAttached();
+});

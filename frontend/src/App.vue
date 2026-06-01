@@ -1,12 +1,33 @@
 <template>
   <v-app>
     <router-view />
+    <v-snackbar
+      v-model="snackbar.show"
+      :color="snackbar.color"
+      :timeout="snackbar.timeout"
+      location="bottom right"
+      rounded="lg"
+      elevation="4"
+      min-width="260"
+    >
+      {{ snackbar.message }}
+      <template #actions>
+        <v-btn variant="text" size="small" @click="snackbar.show = false">
+          <v-icon>mdi-close</v-icon>
+        </v-btn>
+      </template>
+    </v-snackbar>
   </v-app>
 </template>
 
 <script>
+import { snackbar } from './notify.js';
+
 export default {
-  name: 'App'
+  name: 'App',
+  setup() {
+    return { snackbar };
+  },
 }
 </script>
 
@@ -18,12 +39,10 @@ html, body {
   font-family: 'Roboto', sans-serif;
 }
 
-/* Global bg-slate-page follows the active Vuetify theme */
 .bg-slate-page {
   background-color: rgb(var(--v-theme-background)) !important;
 }
 
-/* Custom scrollbars */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;

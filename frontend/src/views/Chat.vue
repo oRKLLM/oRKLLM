@@ -412,12 +412,12 @@ export default {
           await this.fetchConversations(modelId);
         } else {
           const data = await res.json();
-          alert(data.error || 'Failed to load model');
+          this.$notify(data.error || 'Failed to load model', 'error');
           this.selectedModel = this.status.model;
           this.activeModel = this.status.model;
         }
       } catch (e) {
-        alert('Network error');
+        this.$notify('Network error', 'error');
       } finally {
         this.loadingModel = false;
         if (this.runtimeSyncPoller) { clearInterval(this.runtimeSyncPoller); this.runtimeSyncPoller = null; }

@@ -138,6 +138,7 @@ graph TD
 | `frontend/src/views/Dashboard.vue` | Serving stats, hardware telemetry, inference playground |
 | `frontend/src/views/Models.vue` | Model manager + HF search/collection browser/downloader; recursive model scan; platform-aware search; download queue grouped by repo |
 | `frontend/src/components/RuntimeSyncDialog.vue` | Reusable JIT runtime download progress dialog; shown during model load when a runtime is being fetched; used by Models and Chat pages |
+| `frontend/src/notify.js` | Global notification store; `notify(message, color)` drives a `v-snackbar` in `App.vue` via `app.config.globalProperties.$notify`; replaces all `alert()` browser popups |
 | `frontend/src/views/Settings.vue` | Global settings, HF token, prefix cache config, trusted proxy |
 | `frontend/src/views/Logs.vue` | Full-page live log terminal (WebSocket) |
 | `frontend/src/views/Bench.vue` | Inference benchmark (TTFT, tok/s) |
@@ -146,7 +147,7 @@ graph TD
 | `frontend/src/views/Login.vue` | Login page; shows SSO button when OIDC/SAML configured |
 | `e2e/orkllm.spec.js` | Playwright E2E suite (33 tests — core flow, chat history, runtime, auto-download, download queue, dashboard, platform detection) |
 | `e2e/rbac.spec.js` | Playwright E2E suite (17 tests — RBAC, trusted proxy (single + multi-IP/CIDR), mock OIDC SSO, Keycloak integration) |
-| `e2e/regression.spec.js` | Playwright E2E suite (13 tests — UI regression: navbar, theme, user drawer, drawer toggles, Contribute button) |
+| `e2e/regression.spec.js` | Playwright E2E suite (14 tests — UI regression: navbar, theme, user drawer, drawer toggles, Contribute button, snackbar) |
 
 ---
 

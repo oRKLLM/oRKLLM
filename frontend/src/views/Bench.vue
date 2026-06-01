@@ -228,11 +228,11 @@ export default {
           await this.fetchStatus();
         } else {
           const data = await res.json();
-          alert(data.error || 'Failed to load model');
+          this.$notify(data.error || 'Failed to load model', 'error');
           this.selectedModel = this.status.model;
         }
       } catch (e) {
-        alert('Network error');
+        this.$notify('Network error', 'error');
       } finally {
         this.loadingModel = false;
       }

@@ -431,9 +431,9 @@ export default {
     },
     copyToClipboard(text) {
       navigator.clipboard.writeText(text).then(() => {
-        alert('Copied to clipboard: ' + text);
+        this.$notify('Copied to clipboard', 'success');
       }).catch(() => {
-        alert('Failed to copy text');
+        this.$notify('Failed to copy to clipboard', 'error');
       });
     },
     async fetchAllModelSettings() {
