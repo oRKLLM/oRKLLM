@@ -1,3 +1,17 @@
+# [0.7.0-alpha.22](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.21...v0.7.0-alpha.22) (2026-06-01)
+
+
+### Bug Fixes
+
+* **dashboard:** use r.file not r.filename for runtime versions table ([011ee88](https://github.com/mafischer/oRKLLM/commit/011ee881606c801a0d33dfefa558001f78d390d2))
+* **downloader:** restore download queue on mount and tab switch ([c64d423](https://github.com/mafischer/oRKLLM/commit/c64d4232a9c39e06c464820633ef4d595cea0175))
+
+
+### Features
+
+* **downloader:** save files to models/{repoName}/ and group queue by repo ([d355b86](https://github.com/mafischer/oRKLLM/commit/d355b862471ccf626f0262239b006c16bd282c84))
+* **models:** recursive scan supports subdirectory models; wildcard routes for settings/delete ([64ba54e](https://github.com/mafischer/oRKLLM/commit/64ba54e018428f2c426f5e43183275fe6f882f9b))
+
 # [0.7.0-alpha.21](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.20...v0.7.0-alpha.21) (2026-06-01)
 
 
