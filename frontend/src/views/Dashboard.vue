@@ -135,6 +135,7 @@
                     <th class="text-left">Device</th>
                     <th class="text-left">Type</th>
                     <th class="text-right">Size</th>
+                    <th class="text-right">TBW</th>
                     <th class="text-center">SMART</th>
                   </tr>
                 </thead>
@@ -143,6 +144,7 @@
                     <td class="font-mono">{{ d.device }}</td>
                     <td>{{ d.type }}</td>
                     <td class="text-right">{{ formatGb(d.size) }}</td>
+                    <td class="text-right text-grey">{{ d.tbw != null ? d.tbw + ' TB' : '—' }}</td>
                     <td class="text-center">
                       <v-chip
                         size="x-small"

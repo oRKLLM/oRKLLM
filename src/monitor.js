@@ -1,7 +1,24 @@
 import fs from 'fs';
 import si from 'systeminformation';
 import os from 'os';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import pool from './pool.js';
+
+const execFileAsync = promisify(execFile);
+
+// Read TBW (total bytes written) from smartctl JSON for a device
+async function getSmartTbw(device) {
+  try {
+    const { stdout } = await execFileAsync('smartctl', ['-a', device, '-j'], { timeout: 5000 });
+    const d = JSON.parse(stdout);
+    const duw = d.nvme_smart_health_information_log?.data_units_written;
+    // NVMe data_units_written is in 512kB units
+    return duw != null ? Math.round(duw * 512000 / 1e9) / 1000 : null; // TB, 3 decimal places
+  } catch {
+    return null;
+  }
+}
 
 // diskLayout is slow — cache it and refresh every 30 seconds
 let diskLayoutCache = [];
@@ -143,18 +160,19 @@ export async function getSystemMetrics() {
     // ignore
   }
 
-  // 7. Disk layout with SMART status (cached, refreshed every 30s)
+  // 7. Disk layout with SMART status + TBW (cached, refreshed every 30s)
   let disks = [];
   try {
     const layout = await getCachedDiskLayout();
-    disks = layout.map(d => ({
+    disks = await Promise.all(layout.map(async d => ({
       device: d.device || d.name || '—',
       type: d.type || '—',
       size: d.size || 0,
       smartStatus: d.smartStatus || 'unknown',
-    }));
+      tbw: await getSmartTbw(d.device || d.name),
+    })));
   } catch (e) {
-    // ignore — SMART may require elevated permissions
+    // ignore
   }
 
   return {
