@@ -59,85 +59,67 @@
 
           <!-- Metrics Panel -->
           <v-card class="glass-card pa-5">
-            <div class="text-h6 font-weight-bold mb-4 d-flex align-center">
-              <v-icon start color="primary">mdi-chart-line</v-icon>
-              Hardware Telemetry
+            <div class="text-h6 font-weight-bold mb-4 d-flex align-center justify-space-between">
+              <div class="d-flex align-center">
+                <v-icon start color="primary">mdi-chart-line</v-icon>
+                Hardware Telemetry
+              </div>
+              <v-btn-toggle v-model="telemetryUnits" mandatory density="compact" rounded="lg" color="primary" variant="outlined">
+                <v-btn :value="false" size="x-small" title="Show percentages">
+                  <v-icon size="14">mdi-percent</v-icon>
+                </v-btn>
+                <v-btn :value="true" size="x-small" title="Show units">
+                  <v-icon size="14">mdi-counter</v-icon>
+                </v-btn>
+              </v-btn-toggle>
             </div>
 
             <v-row class="text-center">
               <v-col cols="4" class="py-2">
-                <v-progress-circular
-                  :model-value="metrics.cpu"
-                  :size="80"
-                  :width="7"
-                  color="blue"
-                  class="font-weight-bold mb-1"
-                >
+                <v-progress-circular :model-value="metrics.cpu" :size="80" :width="7" color="blue" class="font-weight-bold mb-1">
                   <span class="text-caption font-weight-bold">{{ metrics.cpu }}%</span>
                 </v-progress-circular>
                 <div class="text-caption text-grey">CPU</div>
               </v-col>
 
               <v-col cols="4" class="py-2">
-                <v-progress-circular
-                  :model-value="metrics.npu"
-                  :size="80"
-                  :width="7"
-                  color="primary"
-                  class="font-weight-bold mb-1"
-                >
+                <v-progress-circular :model-value="metrics.npu" :size="80" :width="7" color="primary" class="font-weight-bold mb-1">
                   <span class="text-caption font-weight-bold">{{ metrics.npu }}%</span>
                 </v-progress-circular>
                 <div class="text-caption text-grey">NPU</div>
               </v-col>
 
               <v-col cols="4" class="py-2">
-                <v-progress-circular
-                  :model-value="metrics.gpu"
-                  :size="80"
-                  :width="7"
-                  color="orange"
-                  class="font-weight-bold mb-1"
-                >
+                <v-progress-circular :model-value="metrics.gpu" :size="80" :width="7" color="orange" class="font-weight-bold mb-1">
                   <span class="text-caption font-weight-bold">{{ metrics.gpu }}%</span>
                 </v-progress-circular>
                 <div class="text-caption text-grey">GPU</div>
               </v-col>
 
               <v-col cols="4" class="py-2">
-                <v-progress-circular
-                  :model-value="metrics.ram"
-                  :size="80"
-                  :width="7"
-                  color="teal"
-                  class="font-weight-bold mb-1"
-                >
-                  <span class="text-caption font-weight-bold">{{ metrics.ram }}%</span>
+                <v-progress-circular :model-value="metrics.ram" :size="80" :width="7" color="teal" class="font-weight-bold mb-1">
+                  <span v-if="!telemetryUnits" class="text-caption font-weight-bold">{{ metrics.ram }}%</span>
+                  <span v-else class="font-weight-bold" style="font-size: 0.62rem; line-height: 1.2; text-align: center;">
+                    {{ formatGb(metricsRaw.ramUsed) }}<br>
+                    <span class="text-grey" style="font-size: 0.55rem;">/ {{ formatGb(metricsRaw.ramTotal) }}</span>
+                  </span>
                 </v-progress-circular>
                 <div class="text-caption text-grey">RAM</div>
               </v-col>
 
               <v-col cols="4" class="py-2">
-                <v-progress-circular
-                  :model-value="metrics.disk"
-                  :size="80"
-                  :width="7"
-                  color="amber"
-                  class="font-weight-bold mb-1"
-                >
-                  <span class="text-caption font-weight-bold">{{ metrics.disk }}%</span>
+                <v-progress-circular :model-value="metrics.disk" :size="80" :width="7" color="amber" class="font-weight-bold mb-1">
+                  <span v-if="!telemetryUnits" class="text-caption font-weight-bold">{{ metrics.disk }}%</span>
+                  <span v-else class="font-weight-bold" style="font-size: 0.62rem; line-height: 1.2; text-align: center;">
+                    {{ formatGb(metricsRaw.diskUsed) }}<br>
+                    <span class="text-grey" style="font-size: 0.55rem;">/ {{ formatGb(metricsRaw.diskTotal) }}</span>
+                  </span>
                 </v-progress-circular>
                 <div class="text-caption text-grey">Disk</div>
               </v-col>
 
               <v-col cols="4" class="py-2">
-                <v-progress-circular
-                  :model-value="metrics.temp"
-                  :size="80"
-                  :width="7"
-                  color="rose"
-                  class="font-weight-bold mb-1"
-                >
+                <v-progress-circular :model-value="metrics.temp" :size="80" :width="7" color="rose" class="font-weight-bold mb-1">
                   <span class="text-caption font-weight-bold">{{ metrics.temp }}°C</span>
                 </v-progress-circular>
                 <div class="text-caption text-grey">Temp</div>
@@ -332,6 +314,8 @@ export default {
   data: () => ({
     user: { username: 'admin', role: 'admin', authProvider: 'local' },
     metrics: { cpu: 0, npu: 0, gpu: 0, ram: 0, disk: 0, temp: 0 },
+    metricsRaw: { ramUsed: 0, ramTotal: 0, diskUsed: 0, diskTotal: 0 },
+    telemetryUnits: false,
     models: [],
     status: { isLoaded: false, model: null, isMock: false },
     metricsWs: null,
@@ -429,6 +413,12 @@ export default {
         }
       } catch (e) {}
     },
+    formatGb(bytes) {
+      if (!bytes) return '0 B';
+      if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(1) + ' GB';
+      if (bytes >= 1048576) return (bytes / 1048576).toFixed(0) + ' MB';
+      return (bytes / 1024).toFixed(0) + ' KB';
+    },
     copyToClipboard(text) {
       navigator.clipboard.writeText(text).then(() => {
         this.$notify('Copied to clipboard', 'success');
@@ -507,6 +497,10 @@ export default {
           this.metrics.gpu = data.gpu ?? 0;
           this.metrics.ram = data.ram.percentage;
           this.metrics.disk = data.disk?.percentage ?? 0;
+          this.metricsRaw.ramUsed = data.ram.used ?? 0;
+          this.metricsRaw.ramTotal = data.ram.total ?? 0;
+          this.metricsRaw.diskUsed = data.disk?.used ?? 0;
+          this.metricsRaw.diskTotal = data.disk?.total ?? 0;
           this.metrics.temp = data.temperature;
           if (data.stats) {
             this.stats = data.stats;
