@@ -27,7 +27,8 @@ if (!useMock) {
 
 process.on('message', async (msg) => {
   if (msg.type === 'load') {
-    const { modelPath, options } = msg;
+    const { modelPath, options, libPath } = msg;
+    const resolvedLibPath = libPath || LIBRKLLMRT_PATH;
 
     if (!useMock) {
       if (!nativeAddon) {
@@ -38,11 +39,11 @@ process.on('message', async (msg) => {
         useMock = true;
       } else {
         try {
-          console.log(`Attempting to load NPU library from: ${LIBRKLLMRT_PATH}`);
-          const loaded = nativeAddon.load_library(LIBRKLLMRT_PATH);
+          console.log(`Attempting to load NPU library from: ${resolvedLibPath}`);
+          const loaded = nativeAddon.load_library(resolvedLibPath);
           if (!loaded) {
             if (isProductionHardware) {
-              process.send({ type: 'loaded', status: -1, error: `Failed to load RKLLM library at ${LIBRKLLMRT_PATH}. Ensure librkllmrt.so is installed and ORKLLM_LIB_PATH is set correctly.` });
+              process.send({ type: 'loaded', status: -1, error: `Failed to load RKLLM library at ${resolvedLibPath}. Ensure librkllmrt.so is installed and ORKLLM_LIB_PATH is set correctly.` });
               return;
             }
             console.warn(`Failed to dlopen ${LIBRKLLMRT_PATH}. Falling back to mock engine.`);

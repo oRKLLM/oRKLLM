@@ -2,8 +2,8 @@ import { fork } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { MODELS_DIR } from './config.js';
-import { dbGetSetting, dbSetSetting } from './db.js';
+import { MODELS_DIR, LIBRKLLMRT_PATH, RUNTIMES_DIR, parseRuntimeVersion } from './config.js';
+import { dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings } from './db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,6 +45,48 @@ class EnginePool {
   static getPinnedModel() {
     const v = dbGetSetting('pinned_model');
     return v || null;
+  }
+
+  // Discover available versioned runtimes in RUNTIMES_DIR, sorted newest-first
+  static getAvailableRuntimes() {
+    try {
+      return fs.readdirSync(RUNTIMES_DIR)
+        .filter(f => f.startsWith('librkllmrt') && f.endsWith('.so'))
+        .map(f => ({ file: f, path: path.join(RUNTIMES_DIR, f) }))
+        .sort((a, b) => b.file.localeCompare(a.file, undefined, { numeric: true }));
+    } catch {
+      return [];
+    }
+  }
+
+  // Build ordered list of lib paths to try for a given model
+  // Order: cached winner → parsed version → all others → fallback LIBRKLLMRT_PATH
+  static runtimeCandidates(modelName) {
+    const settings = dbGetModelSettings(modelName) || {};
+    const cachedPath = settings.workingLibPath;
+    const parsedVersion = parseRuntimeVersion(modelName);
+    const available = EnginePool.getAvailableRuntimes();
+
+    const candidates = [];
+
+    // 1. Previously confirmed working lib
+    if (cachedPath && fs.existsSync(cachedPath)) candidates.push(cachedPath);
+
+    // 2. Runtime matching the version parsed from filename
+    if (parsedVersion) {
+      const match = available.find(r => r.file.includes(parsedVersion));
+      if (match && match.path !== cachedPath) candidates.push(match.path);
+    }
+
+    // 3. All other available runtimes (newest first)
+    for (const r of available) {
+      if (!candidates.includes(r.path)) candidates.push(r.path);
+    }
+
+    // 4. System fallback (ORKLLM_LIB_PATH / /usr/lib/librkllmrt.so)
+    if (!candidates.includes(LIBRKLLMRT_PATH)) candidates.push(LIBRKLLMRT_PATH);
+
+    return candidates;
   }
 
   setIdleTimeout(minutes) {
@@ -91,61 +133,30 @@ class EnginePool {
         throw new Error(`Model file not found: ${modelPath}`);
       }
 
-      const workerPath = path.join(__dirname, 'worker.js');
-      this.worker = fork(workerPath);
+      const candidates = EnginePool.runtimeCandidates(modelName);
+      console.log(`[EnginePool] Runtime candidates for ${modelName}: ${candidates.join(', ')}`);
 
-      return new Promise((resolve, reject) => {
-        const loadTimeout = setTimeout(() => {
-          console.error(`[EnginePool] Load timeout (60s) for model: ${modelName}`);
-          this.unload();
-          reject(new Error("Timeout loading model (60s) — check server logs for details"));
-        }, 60000);
-
-        const onMessage = (msg) => {
-          if (msg.type === 'loaded') {
-            clearTimeout(loadTimeout);
-            this.worker.removeListener('exit', onExit);
-            this.worker.removeListener('message', onMessage);
-            if (msg.status === 0) {
-              this.isLoaded = true;
-              this.activeModel = {
-                name: modelName,
-                path: modelPath,
-                options,
-                isMock: msg.isMock
-              };
-              console.log(`[EnginePool] Model loaded successfully: ${modelName} (isMock: ${msg.isMock})`);
-              this.resetIdleTimer();
-              resolve({ status: 0, activeModel: this.activeModel });
-            } else {
-              console.error(`[EnginePool] Model init failed for ${modelName}: ${msg.error}`);
-              this.unload();
-              reject(new Error(msg.error || `Failed to load model: status ${msg.status}`));
-            }
+      // Try each candidate lib path until one succeeds
+      for (const libPath of candidates) {
+        const result = await this._tryLoad(modelName, modelPath, options, libPath);
+        if (result.success) {
+          // Cache the working lib path so future loads skip straight to it
+          const settings = dbGetModelSettings(modelName) || {};
+          if (settings.workingLibPath !== libPath) {
+            dbSetModelSettings(modelName, { ...settings, workingLibPath: libPath });
           }
-        };
+          this.isLoaded = true;
+          this.activeModel = { name: modelName, path: modelPath, options, isMock: result.isMock, libPath };
+          console.log(`[EnginePool] Model loaded: ${modelName} using ${libPath} (isMock: ${result.isMock})`);
+          this.resetIdleTimer();
+          return { status: 0, activeModel: this.activeModel };
+        }
+        console.warn(`[EnginePool] ${libPath} failed for ${modelName}: ${result.error} — trying next`);
+        // Kill the failed worker before trying next candidate
+        if (this.worker) { this.worker.kill(); this.worker = null; }
+      }
 
-        const onExit = (code, signal) => {
-          clearTimeout(loadTimeout);
-          this.worker.removeListener('message', onMessage);
-          const reason = signal ? `killed by signal ${signal}` : `exited with code ${code}`;
-          console.error(`[EnginePool] Worker process crashed during load of ${modelName}: ${reason}`);
-          console.error(`[EnginePool] Possible causes: RKLLM version mismatch, corrupt model file, or insufficient NPU memory.`);
-          this.worker = null;
-          this.isLoaded = false;
-          this.activeModel = null;
-          reject(new Error(`Worker crashed during model load (${reason}). Check logs — possible RKLLM version mismatch.`));
-        };
-
-        this.worker.on('message', onMessage);
-        this.worker.once('exit', onExit);
-
-        this.worker.send({
-          type: 'load',
-          modelPath,
-          options
-        });
-      });
+      throw new Error(`No compatible rkllm runtime found for ${modelName}. Tried: ${candidates.join(', ')}`);
     })();
 
     try {
@@ -153,6 +164,43 @@ class EnginePool {
     } finally {
       this.loadingPromise = null;
     }
+  }
+
+  // Attempt to load a model with a specific libPath — resolves with {success, isMock} or {success:false, error}
+  _tryLoad(modelName, modelPath, options, libPath) {
+    return new Promise((resolve) => {
+      const workerPath = path.join(__dirname, 'worker.js');
+      this.worker = fork(workerPath);
+
+      const loadTimeout = setTimeout(() => {
+        console.error(`[EnginePool] Load timeout (60s) with ${libPath}`);
+        resolve({ success: false, error: 'Timeout (60s)' });
+      }, 60000);
+
+      const onMessage = (msg) => {
+        if (msg.type !== 'loaded') return;
+        clearTimeout(loadTimeout);
+        this.worker.removeListener('exit', onExit);
+        this.worker.removeListener('message', onMessage);
+        if (msg.status === 0) {
+          resolve({ success: true, isMock: msg.isMock });
+        } else {
+          resolve({ success: false, error: msg.error || `status ${msg.status}` });
+        }
+      };
+
+      const onExit = (code, signal) => {
+        clearTimeout(loadTimeout);
+        this.worker.removeListener('message', onMessage);
+        this.worker = null;
+        const reason = signal ? `signal ${signal}` : `code ${code}`;
+        resolve({ success: false, error: `Worker exited (${reason})` });
+      };
+
+      this.worker.on('message', onMessage);
+      this.worker.once('exit', onExit);
+      this.worker.send({ type: 'load', modelPath, options, libPath });
+    });
   }
 
   async unload() {

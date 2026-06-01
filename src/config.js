@@ -25,6 +25,21 @@ if (!fs.existsSync(MODELS_DIR)) {
 // RKLLM Shared Library Path on the board
 export const LIBRKLLMRT_PATH = process.env.ORKLLM_LIB_PATH || '/usr/lib/librkllmrt.so';
 
+// Directory where versioned runtimes are stored (librkllmrt-aarch64-v1.2.3.so etc.)
+export const RUNTIMES_DIR = process.env.ORKLLM_RUNTIMES_DIR ||
+  (process.env.ORKLLM_DB_PATH
+    ? path.join(path.dirname(process.env.ORKLLM_DB_PATH), 'runtimes')
+    : path.join(CONFIG_DIR, 'runtimes'));
+if (!fs.existsSync(RUNTIMES_DIR)) {
+  fs.mkdirSync(RUNTIMES_DIR, { recursive: true });
+}
+
+// Parse rkllm runtime version from a model filename, e.g. "model-1.2.3.rkllm" → "1.2.3"
+export function parseRuntimeVersion(filename) {
+  const m = filename.match(/[-_](\d+\.\d+\.\d+)\.rkllm$/i);
+  return m ? m[1] : null;
+}
+
 /**
  * Retrieve saved credentials
  * @returns {object|null} {username, hash, salt} or null

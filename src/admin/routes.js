@@ -1,4 +1,4 @@
-import { getCredentials, saveCredentials, verifyCredentials, hashPassword, checkPassword, MODELS_DIR, LIBRKLLMRT_PATH } from '../config.js';
+import { getCredentials, saveCredentials, verifyCredentials, hashPassword, checkPassword, MODELS_DIR, LIBRKLLMRT_PATH, RUNTIMES_DIR, parseRuntimeVersion } from '../config.js';
 import { signCookie, verifyCookie, issueSessionCookie } from '../auth/session.js';
 import { clearAllCache, getCacheStats } from '../cache.js';
 import pool from '../pool.js';
@@ -222,6 +222,18 @@ export default async function adminRoutes(fastify, options) {
     status.libPath = LIBRKLLMRT_PATH;
     status.schemaVersion = dbGetSchemaVersion();
     return status;
+  });
+
+  // GET /api/admin/runtimes — list available versioned librkllmrt.so files
+  fastify.get('/runtimes', async (request, reply) => {
+    return {
+      runtimesDir: RUNTIMES_DIR,
+      runtimes: pool.constructor.getAvailableRuntimes().map(r => ({
+        filename: r.file,
+        path: r.path,
+        version: r.file.match(/(\d+\.\d+\.\d+)/)?.[1] ?? null,
+      })),
+    };
   });
 
   // GET /api/admin/stats
