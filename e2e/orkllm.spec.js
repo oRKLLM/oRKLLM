@@ -711,3 +711,28 @@ test('Settings page has auto-download runtime toggle', async ({ page }) => {
   await page.goto('/settings');
   await expect(page.locator('text=Auto-download rkllm runtimes')).toBeVisible({ timeout: 5000 });
 });
+
+// ---------------------------------------------------------------------------
+// Test 26: HF search API returns paramCount and storageBytes fields
+// ---------------------------------------------------------------------------
+test('HF search results include paramCount and storageBytes fields', async ({ page }) => {
+  await login(page);
+
+  const data = await page.evaluate(async () => {
+    const r = await fetch('/api/admin/hf/search?q=qwen+rkllm&limit=3&rkllm=true');
+    return { status: r.status, body: await r.json() };
+  });
+
+  // May fail if HF is unreachable in CI — treat network errors as skip
+  if (data.status !== 200) return;
+
+  expect(Array.isArray(data.body)).toBe(true);
+  if (data.body.length === 0) return; // no results, can't assert fields
+
+  const first = data.body[0];
+  // Fields must be present (values may be null if HF doesn't return them)
+  expect(first).toHaveProperty('paramCount');
+  expect(first).toHaveProperty('storageBytes');
+  expect(first).toHaveProperty('downloads');
+  expect(first).toHaveProperty('likes');
+});

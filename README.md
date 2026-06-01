@@ -51,7 +51,7 @@ Inspired by [jundot/oMLX](https://github.com/jundot/omlx) (which does the same f
 * **Pin Model**: Pin the active model to prevent idle auto-unload. Pin state persists across server restarts and triggers automatic model load on startup when sufficient RAM is available.
 * **Multi-User Auth & RBAC**: Local accounts or federated SSO via OIDC/SAML (Keycloak, Google, Azure AD). Two roles: `admin` and `user`. Site Management UI for user CRUD, auth provider config, and audit log.
 * **OIDC / SAML SSO**: Standard Flow with PKCE for public clients (no secret required). Group-to-role mapping from IdP claims. Routes at `/auth/oidc/*` and `/auth/saml/*`.
-* **HuggingFace Integration**: Search the HF Hub, browse collections (e.g. `huggingface.co/collections/Qwen/qwen3-...`), download `.rkllm` models directly from the admin console.
+* **HuggingFace Integration**: Search the HF Hub, browse collections (e.g. `huggingface.co/collections/Qwen/qwen3-...`), download `.rkllm` models directly from the admin console. Search results show parameter count (e.g. `8B params`) and storage size.
 * **Prefix KV Cache**: Tiered SSD hot/cold LRU cache saves KV state between conversation turns, skipping re-prefill of repeated prefixes. Sliding context window prevents NPU OOM on long conversations.
 * **Process-Isolated Execution**: Inference engine runs in a dedicated child process. Model unload/swap terminates the process, guaranteeing full NPU driver memory cleanup.
 * **Smart Resource Management**: Single active model lock, auto-swap, configurable idle timeout, pin-to-keep-loaded.
@@ -91,7 +91,7 @@ graph TD
 | **Frontend** | Vue 3 + Vuetify 3 SPA, built with Vite, route-based code splitting |
 | **Database** | SQLite via `node:sqlite` (Node ≥22.5) or `better-sqlite3` (Node 20) |
 | **Auth** | Local PBKDF2 + OIDC (PKCE) + SAML 2.0 |
-| **Testing** | Playwright E2E (54 tests across 3 spec files), mock OIDC service container in CI |
+| **Testing** | Playwright E2E (55 tests across 3 spec files), mock OIDC service container in CI |
 
 ---
 
