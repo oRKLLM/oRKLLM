@@ -1,3 +1,10 @@
+# [0.7.0-alpha.26](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.25...v0.7.0-alpha.26) (2026-06-01)
+
+
+### Features
+
+* **dashboard:** add % / units toggle to Hardware Telemetry card ([96ff7dc](https://github.com/mafischer/oRKLLM/commit/96ff7dcc1c569e18304979b922f8ed910153094e))
+
 # [0.7.0-alpha.25](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.24...v0.7.0-alpha.25) (2026-06-01)
 
 
