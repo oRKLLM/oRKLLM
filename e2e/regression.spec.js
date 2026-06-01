@@ -241,18 +241,19 @@ test('User menu: Contribute button links to GitHub', async ({ page }) => {
 test('No browser alert() popups — notifications use Vuetify snackbar', async ({ page }) => {
   await login(page);
 
-  // Intercept any native dialog — should never fire
+  // Intercept any native dialog — should never fire from app code
   let alertFired = false;
   page.on('dialog', dialog => { alertFired = true; dialog.dismiss(); });
 
-  // Copy to clipboard triggers a notification; v-snackbar should appear instead of alert()
   await page.goto('/');
+
+  // Grant clipboard permission so the copy button uses $notify not alert()
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.locator('.v-btn:has(.mdi-content-copy)').first().click({ timeout: 5000 }).catch(() => {});
 
-  // Wait briefly
   await page.waitForTimeout(500);
   expect(alertFired).toBe(false);
 
-  // Snackbar element should exist in the DOM (rendered by App.vue)
+  // v-snackbar rendered by App.vue should be in the DOM
   await expect(page.locator('.v-snackbar')).toBeAttached();
 });
