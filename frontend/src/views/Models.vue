@@ -532,7 +532,7 @@
             <div v-if="dlFileError" class="text-caption text-error mt-3">{{ dlFileError }}</div>
           </v-card>
 
-          <!-- Downloads queue -->
+          <!-- Downloads queue grouped by repo -->
           <v-card v-if="dlJobs.length" class="glass-card pa-5">
             <div class="d-flex align-center justify-space-between mb-3">
               <div class="text-subtitle-1 font-weight-bold d-flex align-center">
@@ -542,38 +542,45 @@
               <v-btn size="x-small" variant="text" color="grey" @click="clearFinishedJobs">Clear finished</v-btn>
             </div>
 
-            <div v-for="job in dlJobs" :key="job.id" class="mb-4">
-              <div class="d-flex align-center justify-space-between mb-1">
-                <span class="text-body-2 font-mono text-truncate" style="max-width: 60%">{{ job.filename }}</span>
-                <div class="d-flex align-center gap-2">
-                  <span v-if="job.status === 'downloading'" class="text-caption text-primary">
-                    {{ formatSpeed(job.speedBps) }}
-                  </span>
-                  <v-chip
-                    size="x-small"
-                    :color="job.status === 'done' ? 'success' : job.status === 'error' ? 'error' : job.status === 'cancelled' ? 'grey' : 'primary'"
-                    variant="tonal"
-                  >{{ job.status }}</v-chip>
-                  <v-btn v-if="job.status === 'done' || job.status === 'error' || job.status === 'cancelled'"
-                    icon size="x-small" variant="text" color="grey" @click="removeJob(job.id)">
-                    <v-icon size="14">mdi-close</v-icon>
-                  </v-btn>
-                  <v-btn v-else icon size="x-small" variant="text" color="error" @click="cancelJob(job.id)">
-                    <v-icon size="14">mdi-stop</v-icon>
-                  </v-btn>
-                </div>
+            <div v-for="(jobs, repoId) in dlJobsByRepo" :key="repoId" class="mb-5">
+              <!-- Repo header -->
+              <div class="d-flex align-center gap-2 mb-2">
+                <v-icon size="14" color="grey">mdi-github</v-icon>
+                <span class="text-caption font-weight-bold text-grey">{{ repoId }}</span>
               </div>
 
-              <v-progress-linear
-                :model-value="job.progress"
-                :color="job.status === 'done' ? 'success' : job.status === 'error' ? 'error' : 'primary'"
-                rounded height="5"
-                :indeterminate="job.status === 'downloading' && job.totalBytes === 0"
-              ></v-progress-linear>
-
-              <div class="d-flex justify-space-between mt-1">
-                <span class="text-caption text-grey">{{ job.status === 'downloading' ? formatBytes(job.bytesDown) + ' / ' + (job.totalBytes ? formatBytes(job.totalBytes) : '?') : job.error ?? '' }}</span>
-                <span class="text-caption text-grey">{{ job.progress }}%</span>
+              <!-- Files within repo -->
+              <div v-for="job in jobs" :key="job.id" class="mb-3 pl-4">
+                <div class="d-flex align-center justify-space-between mb-1">
+                  <span class="text-body-2 font-mono text-truncate" style="max-width: 60%">{{ job.filename }}</span>
+                  <div class="d-flex align-center gap-2">
+                    <span v-if="job.status === 'downloading'" class="text-caption text-primary">
+                      {{ formatSpeed(job.speedBps) }}
+                    </span>
+                    <v-chip
+                      size="x-small"
+                      :color="job.status === 'done' ? 'success' : job.status === 'error' ? 'error' : job.status === 'cancelled' ? 'grey' : 'primary'"
+                      variant="tonal"
+                    >{{ job.status }}</v-chip>
+                    <v-btn v-if="job.status === 'done' || job.status === 'error' || job.status === 'cancelled'"
+                      icon size="x-small" variant="text" color="grey" @click="removeJob(job.id)">
+                      <v-icon size="14">mdi-close</v-icon>
+                    </v-btn>
+                    <v-btn v-else icon size="x-small" variant="text" color="error" @click="cancelJob(job.id)">
+                      <v-icon size="14">mdi-stop</v-icon>
+                    </v-btn>
+                  </div>
+                </div>
+                <v-progress-linear
+                  :model-value="job.progress"
+                  :color="job.status === 'done' ? 'success' : job.status === 'error' ? 'error' : 'primary'"
+                  rounded height="5"
+                  :indeterminate="job.status === 'downloading' && job.totalBytes === 0"
+                ></v-progress-linear>
+                <div class="d-flex justify-space-between mt-1">
+                  <span class="text-caption text-grey">{{ job.status === 'downloading' ? formatBytes(job.bytesDown) + ' / ' + (job.totalBytes ? formatBytes(job.totalBytes) : '?') : job.error ?? '' }}</span>
+                  <span class="text-caption text-grey">{{ job.progress }}%</span>
+                </div>
               </div>
             </div>
           </v-card>
@@ -687,6 +694,15 @@ export default {
   computed: {
     isDark() {
       return this.themeName === 'customDarkTheme';
+    },
+    dlJobsByRepo() {
+      const groups = {};
+      for (const job of this.dlJobs) {
+        const key = job.repoId || 'unknown';
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(job);
+      }
+      return groups;
     },
     dlStatusColor() {
       if (!this.dlStatus) return 'grey';

@@ -687,7 +687,11 @@ export default async function adminRoutes(fastify, options) {
     if (!filename.endsWith('.rkllm')) return reply.status(400).send({ error: 'Only .rkllm files allowed' });
 
     const id = uuidv4();
-    const destPath = path.join(MODELS_DIR, path.basename(filename));
+    // Save as {MODELS_DIR}/{repoName}/{filename} to avoid collisions across repos
+    const repoName = repoId.split('/').pop();
+    const repoDir = path.join(MODELS_DIR, repoName);
+    if (!fs.existsSync(repoDir)) fs.mkdirSync(repoDir, { recursive: true });
+    const destPath = path.join(repoDir, path.basename(filename));
     const hfToken = tokenOverride || (dbGetSetting('hf_token') ?? '');
 
     const job = { id, repoId, filename, status: 'downloading', bytesDown: 0, totalBytes: 0, speedBps: 0, startedAt: Date.now(), error: null, _dest: destPath };
