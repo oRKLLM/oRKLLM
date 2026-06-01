@@ -666,7 +666,9 @@ export default async function adminRoutes(fastify, options) {
     const headers = { 'User-Agent': 'oRKLLM/1.0' };
     if (hfToken) headers['Authorization'] = `Bearer ${hfToken}`;
     try {
-      const res = await fetch(`https://huggingface.co/api/models/${encodeURIComponent(repoId)}?full=true`, { headers });
+      // repoId is "owner/repo" — encode each segment but keep the slash as path separator
+      const encodedId = repoId.split('/').map(encodeURIComponent).join('/');
+      const res = await fetch(`https://huggingface.co/api/models/${encodedId}?full=true`, { headers });
       if (!res.ok) return reply.status(res.status).send({ error: `HF API error: ${res.status}` });
       const data = await res.json();
       const files = (data.siblings ?? [])
@@ -693,7 +695,8 @@ export default async function adminRoutes(fastify, options) {
 
     // Stream download in background
     (async () => {
-      const url = `https://huggingface.co/${encodeURIComponent(repoId)}/resolve/main/${encodeURIComponent(filename)}`;
+      const encodedRepo = repoId.split('/').map(encodeURIComponent).join('/');
+      const url = `https://huggingface.co/${encodedRepo}/resolve/main/${encodeURIComponent(filename)}`;
       const headers = { 'User-Agent': 'oRKLLM/1.0' };
       if (hfToken) headers['Authorization'] = `Bearer ${hfToken}`;
 
