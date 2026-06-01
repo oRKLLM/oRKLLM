@@ -125,8 +125,9 @@ sudo apt update && sudo apt install orkllm
 ### Option B — Direct download
 
 ```bash
-wget https://github.com/mafischer/oRKLLM/releases/latest/download/orkllm_VERSION_arm64.deb
-sudo dpkg -i orkllm_VERSION_arm64.deb
+VERSION=0.7.0
+wget https://github.com/mafischer/oRKLLM/releases/latest/download/orkllm_${VERSION}_arm64.deb
+sudo dpkg -i orkllm_${VERSION}_arm64.deb
 ```
 
 ### Configure
