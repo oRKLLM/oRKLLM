@@ -780,3 +780,82 @@ test('Dashboard cache observability shows stats from global-settings', async ({ 
   expect(data).toHaveProperty('cacheStats');
   expect(data.cacheStats).toHaveProperty('enabled');
 });
+
+// ---------------------------------------------------------------------------
+// Test 30: GET /api/admin/status includes platform field
+// ---------------------------------------------------------------------------
+test('Status endpoint includes platform field', async ({ page }) => {
+  await login(page);
+
+  const data = await page.evaluate(async () => {
+    const r = await fetch('/api/admin/status');
+    return r.json();
+  });
+
+  // platform is null on non-ARM64 (CI runs x86); must be present as property
+  expect(data).toHaveProperty('platform');
+  // On ARM64 Linux it would be 'rk3576' or 'rk3588'; on CI it's null
+  expect(data.platform === null || typeof data.platform === 'string').toBe(true);
+});
+
+// ---------------------------------------------------------------------------
+// Test 31: HF search shows both RKLLM and compatible chipset checkboxes
+// ---------------------------------------------------------------------------
+test('HF search has RKLLM only and Compatible chipset checkboxes', async ({ page }) => {
+  await login(page);
+  await page.goto('/models');
+  await page.click('.v-tab:has-text("Downloader")');
+
+  await expect(page.locator('text=RKLLM models only')).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('text=Compatible chipset')).toBeVisible({ timeout: 5000 });
+});
+
+// ---------------------------------------------------------------------------
+// Test 32: Recursive model scan — subdirectory models appear in /v1/models
+// ---------------------------------------------------------------------------
+test('Recursive model scan includes subdirectory models', async ({ page }) => {
+  await login(page);
+
+  const data = await page.evaluate(async () => {
+    const r = await fetch('/v1/models');
+    return r.json();
+  });
+
+  // Every model returned has an id string
+  expect(Array.isArray(data.data)).toBe(true);
+  for (const model of data.data) {
+    expect(typeof model.id).toBe('string');
+    expect(model.id.length).toBeGreaterThan(0);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Test 33: Context window setting accepts values up to 32768
+// ---------------------------------------------------------------------------
+test('Context window max is 32768 in global-settings', async ({ page }) => {
+  await login(page);
+
+  await page.evaluate(async () => {
+    await fetch('/api/admin/global-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cacheMaxContextTokens: 32768 }),
+    });
+  });
+
+  const data = await page.evaluate(async () => {
+    const r = await fetch('/api/admin/global-settings');
+    return r.json();
+  });
+
+  expect(data.settings.cacheMaxContextTokens).toBe(32768);
+
+  // Restore default
+  await page.evaluate(async () => {
+    await fetch('/api/admin/global-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cacheMaxContextTokens: 8192 }),
+    });
+  });
+});

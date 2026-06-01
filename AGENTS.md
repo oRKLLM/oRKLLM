@@ -129,21 +129,22 @@ graph TD
 | `src/config.js` | Env-driven settings; multi-user credential helpers; PBKDF2-HMAC-SHA256 |
 | `src/cache.js` | Tiered SSD prefix KV cache (hot/cold LRU), sliding context window trim |
 | `src/server.js` | Fastify bootstrap; trustProxy config; mounts `/ws/metrics`, `/ws/logs`, static SPA, API routes |
-| `src/api/routes.js` | `/v1/chat/completions` (SSE streaming + prefix cache), `/v1/models`, `/v1/embeddings` |
+| `src/api/routes.js` | `/v1/chat/completions` (SSE streaming + prefix cache), `/v1/models` (recursive scan of MODELS_DIR including subdirectories), `/v1/embeddings` |
 | `src/admin/routes.js` | Auth (local + OIDC + SAML), user CRUD, RBAC, HF proxy, audit log, settings (incl. trustedProxy, pinnedModel) |
 | `src/auth/routes.js` | OIDC (PKCE + confidential) and SAML 2.0 routes at `/auth/*` |
 | `src/auth/session.js` | Shared signCookie / verifyCookie / issueSessionCookie (userId\|username\|role\|expires\|HMAC) |
 | `src/mock_engine.js` | JS mock engine streaming realistic fake tokens (for macOS dev) |
 | `frontend/src/components/AppNav.vue` | Shared navbar; Site Management item for admins; provider chip |
 | `frontend/src/views/Dashboard.vue` | Serving stats, hardware telemetry, inference playground |
-| `frontend/src/views/Models.vue` | Model manager + HF search/collection browser/downloader |
+| `frontend/src/views/Models.vue` | Model manager + HF search/collection browser/downloader; recursive model scan; platform-aware search; download queue grouped by repo |
+| `frontend/src/components/RuntimeSyncDialog.vue` | Reusable JIT runtime download progress dialog; shown during model load when a runtime is being fetched; used by Models and Chat pages |
 | `frontend/src/views/Settings.vue` | Global settings, HF token, prefix cache config, trusted proxy |
 | `frontend/src/views/Logs.vue` | Full-page live log terminal (WebSocket) |
 | `frontend/src/views/Bench.vue` | Inference benchmark (TTFT, tok/s) |
 | `frontend/src/views/Chat.vue` | Full streaming chat against OpenAI-compatible API |
 | `frontend/src/views/SiteManagement.vue` | Admin-only: user CRUD, OIDC/SAML config, audit log |
 | `frontend/src/views/Login.vue` | Login page; shows SSO button when OIDC/SAML configured |
-| `e2e/orkllm.spec.js` | Playwright E2E suite (29 tests — core flow, chat history, runtime, auto-download, download queue, dashboard) |
+| `e2e/orkllm.spec.js` | Playwright E2E suite (33 tests — core flow, chat history, runtime, auto-download, download queue, dashboard, platform detection) |
 | `e2e/rbac.spec.js` | Playwright E2E suite (17 tests — RBAC, trusted proxy (single + multi-IP/CIDR), mock OIDC SSO, Keycloak integration) |
 | `e2e/regression.spec.js` | Playwright E2E suite (13 tests — UI regression: navbar, theme, user drawer, drawer toggles, Contribute button) |
 
@@ -200,7 +201,7 @@ oRKLLM/
 │           └── Setup.vue
 └── e2e/
     ├── global-setup.js     # Resets server state between test runs
-    ├── orkllm.spec.js      # 29 feature tests (core flow, chat history, runtime, download queue, dashboard)
+    ├── orkllm.spec.js      # 33 feature tests (core flow, chat history, runtime, platform detection, download)
     ├── rbac.spec.js        # 17 tests — RBAC, trusted proxy, SSO
     └── regression.spec.js  # 12 UI regression tests
 ```
@@ -520,6 +521,8 @@ echo "==> Done! Admin console: http://10.6.0.14:8000/admin"
 | Phase 17: Pin Model | ✅ Done | Pin persists to DB (`pinned_model` setting); auto-load on startup with RAM check (1.2× model size); clears on unload |
 | Phase 18: Runtime Version Matching | ✅ Done | `RUNTIMES_DIR` holds versioned `.so` files; `readSoVersion()` extracts version via `strings`; `runtimeCandidates()` orders by cached winner → filename match → all others → system fallback; `GET /api/admin/runtimes` exposes available runtimes; rkllm-runtimes mirror at `mafischer/rkllm-runtimes` |
 | Phase 19: Runtime Auto-Download | ✅ Done | Setup opt-in checkbox (default on); `runtime_sync.js` downloads aarch64 `.so` files from mirror on startup; targeted sync when model load fails with unknown version; opt-out shows disclaimer dialog in UI; API returns HTTP 422 `RUNTIME_MISSING` with `runtimeVersion`; `autoDownloadRuntimes` setting in Settings page |
+| Phase 20: Model Downloader | ✅ Done | HF search + collection browse; Download button fetches all repo files and queues all downloads in parallel; files saved to `MODELS_DIR/{repoName}/{filename}`; download queue persists across tab/page navigation; progress + speed per file; grouped by repo in queue UI |
+| Phase 21: Platform-Aware Search | ✅ Done | `GET /api/admin/status` returns `platform` field (`rk3576`/`rk3588`/`null`) from `/proc/device-tree/model`; "Compatible chipset" checkbox appends platform slug to HF search query; recursive model scan supports `models/{repoName}/` subdirectories; wildcard routes for model settings and delete |
 
 ---
 

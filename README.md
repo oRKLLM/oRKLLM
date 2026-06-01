@@ -51,8 +51,8 @@ Inspired by [jundot/oMLX](https://github.com/jundot/omlx) (which does the same f
 * **Pin Model**: Pin the active model to prevent idle auto-unload. Pin state persists across server restarts and triggers automatic model load on startup when sufficient RAM is available.
 * **Multi-User Auth & RBAC**: Local accounts or federated SSO via OIDC/SAML (Keycloak, Google, Azure AD). Two roles: `admin` and `user`. Site Management UI for user CRUD, auth provider config, and audit log.
 * **OIDC / SAML SSO**: Standard Flow with PKCE for public clients (no secret required). Group-to-role mapping from IdP claims. Routes at `/auth/oidc/*` and `/auth/saml/*`.
-* **HuggingFace Integration**: Search the HF Hub, browse collections (e.g. `huggingface.co/collections/Qwen/qwen3-...`), download `.rkllm` models directly from the admin console. Search results show parameter count (e.g. `8B params`) and storage size.
-* **Prefix KV Cache**: Tiered SSD hot/cold LRU cache saves KV state between conversation turns, skipping re-prefill of repeated prefixes. Sliding context window prevents NPU OOM on long conversations.
+* **HuggingFace Integration**: Search the HF Hub, browse collections, download `.rkllm` models directly. Search results show parameter count and storage size. A **Compatible chipset** filter auto-detects your SoC (RK3576/RK3588) from the board's device tree and appends it to the query — preventing downloads of models built for the wrong platform. The Download button queues all repo files simultaneously with per-file progress bars, speeds, and byte counters grouped by repo. Files saved to `models/{repoName}/`.
+* **Prefix KV Cache**: Tiered SSD hot/cold LRU cache saves KV state between conversation turns. Sliding context window (configurable up to 32,768 tokens, default 8,192) prevents NPU OOM on long conversations.
 * **Process-Isolated Execution**: Inference engine runs in a dedicated child process. Model unload/swap terminates the process, guaranteeing full NPU driver memory cleanup.
 * **Smart Resource Management**: Single active model lock, auto-swap, configurable idle timeout, pin-to-keep-loaded.
 * **Runtime Version Auto-Matching & Auto-Download**: oRKLLM reads the embedded version from each `librkllmrt.so` (via `strings`), matches it against the version in the model filename, and retries all candidates until one succeeds — caching the winner per model. On first setup, opt in to automatically download all versioned runtimes from [mafischer/rkllm-runtimes](https://github.com/mafischer/rkllm-runtimes) (Apache 2.0). Opted-out users are prompted with a disclaimer dialog in the UI; API callers receive HTTP 422 `RUNTIME_MISSING` with the required version. Toggle in Settings after setup.
@@ -91,7 +91,7 @@ graph TD
 | **Frontend** | Vue 3 + Vuetify 3 SPA, built with Vite, route-based code splitting |
 | **Database** | SQLite via `node:sqlite` (Node ≥22.5) or `better-sqlite3` (Node 20) |
 | **Auth** | Local PBKDF2 + OIDC (PKCE) + SAML 2.0 |
-| **Testing** | Playwright E2E (59 tests across 3 spec files), mock OIDC service container in CI |
+| **Testing** | Playwright E2E (63 tests across 3 spec files), mock OIDC service container in CI |
 
 ---
 
