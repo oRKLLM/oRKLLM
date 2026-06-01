@@ -6,7 +6,7 @@
       color="primary"
       size="28"
       class="mr-2 d-flex d-sm-none cursor-pointer"
-      @click="mobileNavOpen = true"
+      @click="mobileNavOpen = !mobileNavOpen"
     >mdi-menu</v-icon>
     <v-icon color="primary" size="32" class="mr-2 d-none d-sm-flex">mdi-chip</v-icon>
 
@@ -41,7 +41,7 @@
 
     <v-spacer class="d-none d-sm-flex"></v-spacer>
 
-    <v-btn icon color="primary" variant="tonal" size="36" @click="drawerOpen = true">
+    <v-btn icon color="primary" variant="tonal" size="36" @click="drawerOpen = !drawerOpen">
       <v-icon size="20">mdi-account</v-icon>
     </v-btn>
   </v-app-bar>
