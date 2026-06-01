@@ -1,3 +1,10 @@
+# [0.7.0](https://github.com/mafischer/oRKLLM/compare/v0.6.0...v0.7.0) (2026-06-01)
+
+
+### Features
+
+* **github:** bug report issue template with version field ([061fe2f](https://github.com/mafischer/oRKLLM/commit/061fe2fa7c4429cf07eafebfc72109d4396f2521))
+
 # [0.6.0](https://github.com/mafischer/oRKLLM/compare/v0.5.1...v0.6.0) (2026-05-30)
 
 
