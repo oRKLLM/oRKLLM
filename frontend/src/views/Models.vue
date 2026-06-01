@@ -342,14 +342,23 @@
               </v-btn>
             </div>
 
-            <v-checkbox
-              v-model="searchRkllmOnly"
-              label="RKLLM models only (adds 'rkllm' to search)"
-              density="compact"
-              hide-details
-              color="primary"
-              class="mb-2"
-            ></v-checkbox>
+            <div class="d-flex gap-4 flex-wrap">
+              <v-checkbox
+                v-model="searchRkllmOnly"
+                label="RKLLM models only"
+                density="compact"
+                hide-details
+                color="primary"
+              ></v-checkbox>
+              <v-checkbox
+                v-model="searchPlatformOnly"
+                :label="detectedPlatform ? `${detectedPlatform.toUpperCase()} models only` : 'Filter by platform'"
+                :disabled="!detectedPlatform"
+                density="compact"
+                hide-details
+                color="primary"
+              ></v-checkbox>
+            </div>
 
             <v-alert v-if="searchError" type="error" variant="tonal" density="compact" class="mb-3 text-caption">
               {{ searchError }}
@@ -688,6 +697,8 @@ export default {
     searchQuery: '',
     searchSort: 'downloads',
     searchRkllmOnly: true,
+    searchPlatformOnly: true,
+    detectedPlatform: null,
     searchLoading: false,
     searchResults: [],
     searchError: '',
@@ -733,6 +744,7 @@ export default {
     this.fetchStatus();
     this.fetchAllModelSettings();
     this.fetchGlobalSettings();
+    this.fetchPlatform();
     this.refreshDownloadQueue();
   },
   beforeUnmount() {
@@ -786,6 +798,14 @@ export default {
         const data = await res.json();
         if (data.settings?.hfToken) this.dlHfToken = data.settings.hfToken;
         this.autoDownloadRuntimes = data.settings?.autoDownloadRuntimes ?? true;
+      } catch (e) {}
+    },
+    async fetchPlatform() {
+      try {
+        const res = await fetch('/api/admin/status');
+        if (!res.ok) return;
+        const data = await res.json();
+        this.detectedPlatform = data.platform ?? null;
       } catch (e) {}
     },
     async fetchAllModelSettings() {
@@ -988,13 +1008,18 @@ export default {
       }
     },
     async searchHf() {
-      if (!this.searchQuery.trim() && !this.searchRkllmOnly) return;
+      if (!this.searchQuery.trim() && !this.searchRkllmOnly && !this.searchPlatformOnly) return;
       this.searchLoading = true;
       this.searchError = '';
       this.searchResults = [];
       try {
+        // Build augmented query: append rkllm and/or platform keywords
+        let q = this.searchQuery.trim();
+        if (this.searchPlatformOnly && this.detectedPlatform) {
+          q = `${q} ${this.detectedPlatform}`.trim();
+        }
         const params = new URLSearchParams({
-          q: this.searchQuery.trim(),
+          q,
           sort: this.searchSort,
           rkllm: this.searchRkllmOnly ? 'true' : 'false',
           limit: '25',

@@ -233,6 +233,18 @@ export default async function adminRoutes(fastify, options) {
     status.port = port;
     status.libPath = LIBRKLLMRT_PATH;
     status.schemaVersion = dbGetSchemaVersion();
+    // Detect SoC platform from NPU driver sysfs (Linux/ARM64 only)
+    try {
+      const { readFileSync } = await import('fs');
+      const ver = readFileSync('/sys/kernel/debug/rknpu/version', 'utf8');
+      // version file content varies; platform is identified by reading the chip model
+      const chipRaw = readFileSync('/proc/device-tree/model', 'utf8').replace(/\0/g, '').trim();
+      if (chipRaw.includes('3576')) status.platform = 'rk3576';
+      else if (chipRaw.includes('3588')) status.platform = 'rk3588';
+      else status.platform = null;
+    } catch {
+      status.platform = null;
+    }
     return status;
   });
 
