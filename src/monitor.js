@@ -129,6 +129,20 @@ export async function getSystemMetrics() {
     // ignore
   }
 
+  // 7. Disk layout with SMART status
+  let disks = [];
+  try {
+    const layout = await si.diskLayout();
+    disks = layout.map(d => ({
+      device: d.device || d.name || '—',
+      type: d.type || '—',
+      size: d.size || 0,
+      smartStatus: d.smartStatus || 'unknown',
+    }));
+  } catch (e) {
+    // ignore — SMART may require elevated permissions
+  }
+
   return {
     cpu: Math.round(cpuLoad),
     ram: {
@@ -144,5 +158,6 @@ export async function getSystemMetrics() {
       used: diskUsed,
       percentage: diskPercentage,
     },
+    disks,
   };
 }

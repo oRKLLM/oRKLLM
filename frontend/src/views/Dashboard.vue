@@ -125,6 +125,35 @@
                 <div class="text-caption text-grey">Temp</div>
               </v-col>
             </v-row>
+
+            <!-- Disk table -->
+            <div v-if="disks.length" class="mt-4">
+              <v-divider class="mb-3"></v-divider>
+              <v-table density="compact" class="text-caption">
+                <thead>
+                  <tr>
+                    <th class="text-left">Device</th>
+                    <th class="text-left">Type</th>
+                    <th class="text-right">Size</th>
+                    <th class="text-center">SMART</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="d in disks" :key="d.device">
+                    <td class="font-mono">{{ d.device }}</td>
+                    <td>{{ d.type }}</td>
+                    <td class="text-right">{{ formatGb(d.size) }}</td>
+                    <td class="text-center">
+                      <v-chip
+                        size="x-small"
+                        :color="d.smartStatus === 'Ok' ? 'success' : d.smartStatus === 'Bad' ? 'error' : d.smartStatus === 'Degraded' ? 'warning' : 'grey'"
+                        variant="tonal"
+                      >{{ d.smartStatus }}</v-chip>
+                    </td>
+                  </tr>
+                </tbody>
+              </v-table>
+            </div>
           </v-card>
 
           <!-- API Endpoints Panel -->
@@ -315,6 +344,7 @@ export default {
     user: { username: 'admin', role: 'admin', authProvider: 'local' },
     metrics: { cpu: 0, npu: 0, gpu: 0, ram: 0, disk: 0, temp: 0 },
     metricsRaw: { ramUsed: 0, ramTotal: 0, diskUsed: 0, diskTotal: 0 },
+    disks: [],
     telemetryUnits: false,
     models: [],
     status: { isLoaded: false, model: null, isMock: false },
@@ -501,6 +531,7 @@ export default {
           this.metricsRaw.ramTotal = data.ram.total ?? 0;
           this.metricsRaw.diskUsed = data.disk?.used ?? 0;
           this.metricsRaw.diskTotal = data.disk?.total ?? 0;
+          if (data.disks) this.disks = data.disks;
           this.metrics.temp = data.temperature;
           if (data.stats) {
             this.stats = data.stats;
