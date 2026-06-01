@@ -234,13 +234,13 @@
               <v-row class="mb-4">
                 <v-col cols="6" sm="3">
                   <div class="text-caption text-grey">Hot Cache</div>
-                  <div class="text-body-1 font-weight-bold">{{ cacheStats.hot?.sizeMB ?? 0 }} MB</div>
-                  <div class="text-caption text-grey">/ {{ cacheStats.hot?.limitMB ?? 0 }} MB · {{ cacheStats.hot?.entries ?? 0 }} entries</div>
+                  <div class="text-body-1 font-weight-bold">{{ formatMB(cacheStats.hot?.sizeMB ?? 0) }}</div>
+                  <div class="text-caption text-grey">/ {{ formatMB(cacheStats.hot?.limitMB ?? 0) }} · {{ cacheStats.hot?.entries ?? 0 }} entries</div>
                 </v-col>
                 <v-col cols="6" sm="3">
                   <div class="text-caption text-grey">Cold Cache</div>
-                  <div class="text-body-1 font-weight-bold">{{ cacheStats.cold?.sizeMB ?? 0 }} MB</div>
-                  <div class="text-caption text-grey">/ {{ cacheStats.cold?.limitMB ?? 0 }} MB · {{ cacheStats.cold?.entries ?? 0 }} entries</div>
+                  <div class="text-body-1 font-weight-bold">{{ formatMB(cacheStats.cold?.sizeMB ?? 0) }}</div>
+                  <div class="text-caption text-grey">/ {{ formatMB(cacheStats.cold?.limitMB ?? 0) }} · {{ cacheStats.cold?.entries ?? 0 }} entries</div>
                 </v-col>
                 <v-col cols="6" sm="3">
                   <div class="text-caption text-grey">Cache Directory</div>
@@ -256,7 +256,7 @@
               <div class="mb-2">
                 <div class="d-flex justify-space-between mb-1">
                   <span class="text-caption">Hot</span>
-                  <span class="text-caption">{{ cacheStats.hot?.sizeMB ?? 0 }} / {{ cacheStats.hot?.limitMB ?? 0 }} MB</span>
+                  <span class="text-caption">{{ formatMB(cacheStats.hot?.sizeMB ?? 0) }} / {{ formatMB(cacheStats.hot?.limitMB ?? 0) }}</span>
                 </div>
                 <v-progress-linear
                   :model-value="cacheStats.hot?.limitMB ? (cacheStats.hot.sizeMB / cacheStats.hot.limitMB) * 100 : 0"
@@ -266,7 +266,7 @@
               <div>
                 <div class="d-flex justify-space-between mb-1">
                   <span class="text-caption">Cold</span>
-                  <span class="text-caption">{{ cacheStats.cold?.sizeMB ?? 0 }} / {{ cacheStats.cold?.limitMB ?? 0 }} MB</span>
+                  <span class="text-caption">{{ formatMB(cacheStats.cold?.sizeMB ?? 0) }} / {{ formatMB(cacheStats.cold?.limitMB ?? 0) }}</span>
                 </div>
                 <v-progress-linear
                   :model-value="cacheStats.cold?.limitMB ? (cacheStats.cold.sizeMB / cacheStats.cold.limitMB) * 100 : 0"
@@ -442,6 +442,11 @@ export default {
           }
         }
       } catch (e) {}
+    },
+    formatMB(mb) {
+      if (!mb && mb !== 0) return '0 B';
+      if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
+      return mb + ' MB';
     },
     formatGb(bytes) {
       if (!bytes) return '0 B';
