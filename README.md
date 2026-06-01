@@ -46,14 +46,18 @@ Inspired by [jundot/oMLX](https://github.com/jundot/omlx) (which does the same f
   * **Settings** — inference defaults, HF token, prefix cache config, trusted proxy
   * **Logs** — full-page real-time log terminal over WebSocket
   * **Bench** — inference benchmark (TTFT, prefill tok/s, generation tok/s)
-  * **Chat** — full streaming chat UI with system prompt, model selector, and parameter controls
+  * **Chat** — full streaming chat UI with conversation history sidebar (grouped by model), message queueing during inference, system prompt, model selector, and parameter controls
+* **Conversation History**: Chat sessions persisted in SQLite grouped by model. Collapsible sidebar on desktop, bottom-sheet on mobile. Partial responses saved via `sendBeacon` on page navigation.
+* **Pin Model**: Pin the active model to prevent idle auto-unload. Pin state persists across server restarts and triggers automatic model load on startup when sufficient RAM is available.
 * **Multi-User Auth & RBAC**: Local accounts or federated SSO via OIDC/SAML (Keycloak, Google, Azure AD). Two roles: `admin` and `user`. Site Management UI for user CRUD, auth provider config, and audit log.
 * **OIDC / SAML SSO**: Standard Flow with PKCE for public clients (no secret required). Group-to-role mapping from IdP claims. Routes at `/auth/oidc/*` and `/auth/saml/*`.
 * **HuggingFace Integration**: Search the HF Hub, browse collections (e.g. `huggingface.co/collections/Qwen/qwen3-...`), download `.rkllm` models directly from the admin console.
 * **Prefix KV Cache**: Tiered SSD hot/cold LRU cache saves KV state between conversation turns, skipping re-prefill of repeated prefixes. Sliding context window prevents NPU OOM on long conversations.
 * **Process-Isolated Execution**: Inference engine runs in a dedicated child process. Model unload/swap terminates the process, guaranteeing full NPU driver memory cleanup.
-* **Smart Resource Management**: Single active model lock, auto-swap, configurable idle timeout.
-* **Database Migrations**: PRAGMA user_version migration runner — schema changes apply automatically on startup, safe across upgrades from any previous version.
+* **Smart Resource Management**: Single active model lock, auto-swap, configurable idle timeout, pin-to-keep-loaded.
+* **APT Distribution Channels**: Three channels — `stable` (main), `beta`, `alpha` — with separate `dists/<channel>/` directories on gh-pages. Users pin to their preferred channel.
+* **Trusted Proxy**: Supports `true`, single IP/CIDR, or comma-separated list (SAN-style) passed directly to Fastify's `trustProxy`.
+* **Database Migrations**: PRAGMA user_version migration runner — schema changes (v1–v3) apply automatically on startup, safe across upgrades from any previous version.
 * **Seamless Mock Fallback**: On non-ARM64/non-Linux platforms, oRKLLM falls back to a JS mock engine — rapid UI development on macOS/Windows without a board.
 * **Dynamic N-API Bindings**: C++ addon uses `dlopen`/`dlsym` — no compile-time dependency on `librkllmrt.so`.
 * **Secure Auth**: PBKDF2-HMAC-SHA256 password hashing, signed session cookies (`userId|username|role|expires|HMAC`), backward-compatible with single-user installs.

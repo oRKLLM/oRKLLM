@@ -120,7 +120,8 @@ graph TD
 | :--- | :--- |
 | `src/addon/orkllm_napi.cpp` | C++ N-API addon; wraps `rkllm_init`, `rkllm_run`, `rkllm_destroy` with `Napi::ThreadSafeFunction` for non-blocking callbacks |
 | `src/worker.js` | Process-isolated inference worker; receives `load`/`run`/`unload` IPC commands from pool |
-| `src/pool.js` | Single-active-model lock, auto-swap, idle timeout (configured via SQLite settings) |
+| `src/pool.js` | Single-active-model lock, auto-swap, idle timeout, pin-to-keep-loaded (persisted to DB); auto-loads pinned model on startup with RAM check |
+| `src/admin/conversations.js` | 6 REST endpoints for conversation CRUD + message append (`/api/admin/conversations/…`) |
 | `src/monitor.js` | Polls CPU, RAM, SoC Temp, NPU load; Rockchip-native on ARM64 Linux, simulated elsewhere |
 | `src/stats.js` | Records prefill/generation tokens and latencies in SQLite |
 | `src/db.js` | SQLite + PRAGMA user_version migration runner; 2 versioned migrations; all table accessors |
@@ -128,7 +129,7 @@ graph TD
 | `src/cache.js` | Tiered SSD prefix KV cache (hot/cold LRU), sliding context window trim |
 | `src/server.js` | Fastify bootstrap; trustProxy config; mounts `/ws/metrics`, `/ws/logs`, static SPA, API routes |
 | `src/api/routes.js` | `/v1/chat/completions` (SSE streaming + prefix cache), `/v1/models`, `/v1/embeddings` |
-| `src/admin/routes.js` | Auth (local + OIDC + SAML), user CRUD, RBAC, HF proxy, audit log, settings (incl. trustedProxy) |
+| `src/admin/routes.js` | Auth (local + OIDC + SAML), user CRUD, RBAC, HF proxy, audit log, settings (incl. trustedProxy, pinnedModel) |
 | `src/auth/routes.js` | OIDC (PKCE + confidential) and SAML 2.0 routes at `/auth/*` |
 | `src/auth/session.js` | Shared signCookie / verifyCookie / issueSessionCookie (userId\|username\|role\|expires\|HMAC) |
 | `src/mock_engine.js` | JS mock engine streaming realistic fake tokens (for macOS dev) |
@@ -165,7 +166,8 @@ oRKLLM/
 │   ├── api/
 │   │   └── routes.js
 │   ├── admin/
-│   │   └── routes.js
+│   │   ├── routes.js
+│   │   └── conversations.js
 │   ├── config.js
 │   ├── db.js
 │   ├── mock_engine.js
@@ -351,6 +353,7 @@ Append to the `MIGRATIONS` array in `src/db.js`:
 |---------|-------------|
 | v1 | Initial schema: auth, stats, settings, model_settings |
 | v2 | Multi-user RBAC: users, auth_provider_config, audit_log |
+| v3 | Chat history: conversations, messages (with FK cascade delete and indexes) |
 
 ---
 
@@ -504,9 +507,13 @@ echo "==> Done! Admin console: http://10.6.0.14:8000/admin"
 | Phase 8: Auth & RBAC | ✅ Done | OIDC/SAML federated auth, multi-user RBAC, Site Management UI, Keycloak integration |
 | Phase 9: Prefix Cache | ✅ Done | Tiered SSD KV cache, sliding context window, cache stats in Settings |
 | Phase 10: CI/CD | ✅ Done | GitHub Actions: parallel CI + Release, Trivy scan, dynamic shields.io badges |
-| Phase 11: DB Migrations | ✅ Done | PRAGMA user_version migration runner, v1-v2 migrations, schema version in status API |
-| Phase 12: Trusted Proxy | ✅ Done | Fastify trustProxy from env/DB setting, UI config in Settings |
+| Phase 11: DB Migrations | ✅ Done | PRAGMA user_version migration runner, v1-v3 migrations, schema version in status API |
+| Phase 12: Trusted Proxy | ✅ Done | Fastify trustProxy from env/DB setting; comma-separated multi-IP/CIDR support; UI config in Settings |
 | Phase 13: SSO E2E Tests | ✅ Done | mock-oauth2-server service container in CI, nginx port proxy, real Keycloak locally |
+| Phase 14: APT Channels | ✅ Done | Separate `dists/stable/`, `dists/beta/`, `dists/alpha/` on gh-pages; release workflow maps branch → channel |
+| Phase 15: Chat UX | ✅ Done | Input pinned at bottom (fixed viewport); message queueing during inference; mobile responsive layout |
+| Phase 16: Conversation History | ✅ Done | SQLite v3 migration; conversations + messages tables; collapsible sidebar (desktop) / bottom-sheet (mobile); `sendBeacon` on unload for partial responses |
+| Phase 17: Pin Model | ✅ Done | Pin persists to DB (`pinned_model` setting); auto-load on startup with RAM check (1.2× model size); clears on unload |
 
 ---
 
