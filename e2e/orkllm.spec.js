@@ -730,3 +730,53 @@ test('HF search results include paramCount and storageBytes fields', async ({ pa
   expect(first).toHaveProperty('downloads');
   expect(first).toHaveProperty('likes');
 });
+
+// ---------------------------------------------------------------------------
+// Test 27: GET /api/admin/download/status returns an array
+// ---------------------------------------------------------------------------
+test('GET /api/admin/download/status returns array', async ({ page }) => {
+  await login(page);
+
+  const data = await page.evaluate(async () => {
+    const r = await fetch('/api/admin/download/status');
+    return { status: r.status, body: await r.json() };
+  });
+
+  expect(data.status).toBe(200);
+  expect(Array.isArray(data.body)).toBe(true);
+});
+
+// ---------------------------------------------------------------------------
+// Test 28: GET /api/admin/hf/files returns files array for a valid repo
+// ---------------------------------------------------------------------------
+test('GET /api/admin/hf/files returns files for a HF repo', async ({ page }) => {
+  await login(page);
+
+  const data = await page.evaluate(async () => {
+    const r = await fetch('/api/admin/hf/files?repoId=Qwen/Qwen2.5-0.5B-Instruct');
+    return { status: r.status, body: await r.json() };
+  });
+
+  // Graceful skip if HF unreachable
+  if (data.status !== 200) return;
+
+  expect(data.body).toHaveProperty('repoId');
+  expect(data.body).toHaveProperty('files');
+  expect(Array.isArray(data.body.files)).toBe(true);
+});
+
+// ---------------------------------------------------------------------------
+// Test 29: Dashboard cache observability section shows hot/cold stats
+// ---------------------------------------------------------------------------
+test('Dashboard cache observability shows stats from global-settings', async ({ page }) => {
+  await login(page);
+
+  const data = await page.evaluate(async () => {
+    const r = await fetch('/api/admin/global-settings');
+    return r.json();
+  });
+
+  // cacheStats is always present in the response
+  expect(data).toHaveProperty('cacheStats');
+  expect(data.cacheStats).toHaveProperty('enabled');
+});

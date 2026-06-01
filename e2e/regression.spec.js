@@ -224,3 +224,16 @@ test('Account button: toggles user drawer open then closed', async ({ page }) =>
   await btn.click();
   await expect(d).toHaveAttribute('inert', { timeout: 3000 });
 });
+
+test('User menu: Contribute button links to GitHub', async ({ page }) => {
+  await login(page);
+  await accountBtn(page).click();
+  const d = drawer(page);
+  await expect(d).toBeVisible();
+
+  const contributeLink = d.locator('.v-list-item').filter({ hasText: 'Contribute' });
+  await expect(contributeLink).toBeVisible();
+  // Verify it's an anchor pointing to GitHub
+  const href = await contributeLink.locator('a, [href]').first().getAttribute('href');
+  expect(href).toContain('github.com/mafischer/oRKLLM');
+});

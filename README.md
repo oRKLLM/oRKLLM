@@ -41,7 +41,7 @@ Inspired by [jundot/oMLX](https://github.com/jundot/omlx) (which does the same f
 
 * **OpenAI API Compatibility**: Drop-in `/v1/chat/completions`, `/v1/models`, and `/v1/embeddings` endpoints — works with Open WebUI, Claude Code, and any OpenAI-compatible client.
 * **Full Admin Console**: Built with **Vue 3** and **Vuetify 3** — six dedicated pages:
-  * **Dashboard** — live CPU/NPU/GPU/RAM/Disk/Temperature gauges, serving stats, inference playground
+  * **Dashboard** — live CPU/NPU/GPU/RAM/Disk/Temperature gauges, serving stats, prefix cache observability, RKLLM runtime versions
   * **Models** — local model manager, HuggingFace search, collection browser, direct downloader
   * **Settings** — inference defaults, HF token, prefix cache config, trusted proxy
   * **Logs** — full-page real-time log terminal over WebSocket
@@ -91,7 +91,7 @@ graph TD
 | **Frontend** | Vue 3 + Vuetify 3 SPA, built with Vite, route-based code splitting |
 | **Database** | SQLite via `node:sqlite` (Node ≥22.5) or `better-sqlite3` (Node 20) |
 | **Auth** | Local PBKDF2 + OIDC (PKCE) + SAML 2.0 |
-| **Testing** | Playwright E2E (55 tests across 3 spec files), mock OIDC service container in CI |
+| **Testing** | Playwright E2E (59 tests across 3 spec files), mock OIDC service container in CI |
 
 ---
 

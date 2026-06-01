@@ -143,9 +143,9 @@ graph TD
 | `frontend/src/views/Chat.vue` | Full streaming chat against OpenAI-compatible API |
 | `frontend/src/views/SiteManagement.vue` | Admin-only: user CRUD, OIDC/SAML config, audit log |
 | `frontend/src/views/Login.vue` | Login page; shows SSO button when OIDC/SAML configured |
-| `e2e/orkllm.spec.js` | Playwright E2E suite (26 tests — core flow, chat history, pin persistence, runtime version, auto-download, HF search) |
+| `e2e/orkllm.spec.js` | Playwright E2E suite (29 tests — core flow, chat history, runtime, auto-download, download queue, dashboard) |
 | `e2e/rbac.spec.js` | Playwright E2E suite (17 tests — RBAC, trusted proxy (single + multi-IP/CIDR), mock OIDC SSO, Keycloak integration) |
-| `e2e/regression.spec.js` | Playwright E2E suite (12 tests — UI regression: navbar, theme, user drawer, drawer toggles) |
+| `e2e/regression.spec.js` | Playwright E2E suite (13 tests — UI regression: navbar, theme, user drawer, drawer toggles, Contribute button) |
 
 ---
 
@@ -200,7 +200,7 @@ oRKLLM/
 │           └── Setup.vue
 └── e2e/
     ├── global-setup.js     # Resets server state between test runs
-    ├── orkllm.spec.js      # 26 feature tests (core flow, chat history, runtime, HF search)
+    ├── orkllm.spec.js      # 29 feature tests (core flow, chat history, runtime, download queue, dashboard)
     ├── rbac.spec.js        # 17 tests — RBAC, trusted proxy, SSO
     └── regression.spec.js  # 12 UI regression tests
 ```
