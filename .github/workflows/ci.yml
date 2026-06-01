@@ -225,6 +225,10 @@ jobs:
           ignore-unfixed: true
           cache-dir: ~/.cache/trivy
           skip-db-update: ${{ steps.trivy-cache.outputs.cache-hit == 'true' }}
+          # node_modules/npm is the npm CLI pulled in by @semantic-release/npm (CI-only, never
+          # shipped to production). Its bundled deps (picomatch, brace-expansion, ip-address)
+          # cannot be patched via package.json overrides — they live inside npm's own nested
+          # node_modules which npm's override mechanism cannot reach. Production server: 0 vulns.
           skip-dirs: 'node_modules/npm'
 
       - name: Upload Trivy SARIF to GitHub Security tab
