@@ -3,6 +3,20 @@ import si from 'systeminformation';
 import os from 'os';
 import pool from './pool.js';
 
+// diskLayout is slow — cache it and refresh every 30 seconds
+let diskLayoutCache = [];
+let diskLayoutLastFetch = 0;
+async function getCachedDiskLayout() {
+  const now = Date.now();
+  if (now - diskLayoutLastFetch > 30000) {
+    try {
+      diskLayoutCache = await si.diskLayout();
+      diskLayoutLastFetch = now;
+    } catch {}
+  }
+  return diskLayoutCache;
+}
+
 /**
  * Gather current CPU, NPU, RAM, and Temperature metrics
  * @returns {Promise<object>} system metrics object
@@ -129,10 +143,10 @@ export async function getSystemMetrics() {
     // ignore
   }
 
-  // 7. Disk layout with SMART status
+  // 7. Disk layout with SMART status (cached, refreshed every 30s)
   let disks = [];
   try {
-    const layout = await si.diskLayout();
+    const layout = await getCachedDiskLayout();
     disks = layout.map(d => ({
       device: d.device || d.name || '—',
       type: d.type || '—',
