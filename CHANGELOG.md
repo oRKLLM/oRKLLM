@@ -1,3 +1,23 @@
+# [0.7.0-alpha.14](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.13...v0.7.0-alpha.14) (2026-06-01)
+
+
+### Bug Fixes
+
+* **nav:** toggle drawers on button tap instead of always opening ([3ef974c](https://github.com/mafischer/oRKLLM/commit/3ef974c2b5c26a2579386595b0e7033de1a7b805))
+* **tests:** correct dynamic import paths and flaky test assertions ([f788a87](https://github.com/mafischer/oRKLLM/commit/f788a876c9615fdeee87caf384cc9c7667d3abda))
+* **tests:** scope telemetry gauge label assertions to Hardware Telemetry card ([df36244](https://github.com/mafischer/oRKLLM/commit/df362448e453ae074161ff90c71822c6c95936dc))
+* **tests:** use inert attribute and correct viewport timing for drawer toggle tests ([c6cbbc9](https://github.com/mafischer/oRKLLM/commit/c6cbbc9f990683d92a211d3097e4547c8c00e51c))
+* **tests:** use v-navigation-drawer--active class to assert drawer open/closed state ([fc23145](https://github.com/mafischer/oRKLLM/commit/fc23145742bf0c96dd9828f3d8177cd5f53f6c02))
+
+
+### Features
+
+* **runtime:** auto-discover and retry rkllm runtimes by version ([3ef14ae](https://github.com/mafischer/oRKLLM/commit/3ef14ae67c41f122aebf26f989f30a2ce6852274))
+* **runtime:** read embedded version from librkllmrt.so via strings ([fcb3ca3](https://github.com/mafischer/oRKLLM/commit/fcb3ca3d41475c28fe254205e1f2fe8924a36639))
+* **runtimes:** auto-download rkllm runtimes with setup opt-in ([7f56775](https://github.com/mafischer/oRKLLM/commit/7f5677514ebb4c057b40216a5b3a7d26bcbf723a))
+* **runtimes:** opt-out flow, model scan version persistence, API 422 on missing runtime ([147dc9f](https://github.com/mafischer/oRKLLM/commit/147dc9f9c0cbd4ba5306137433447cabdbca07ea))
+* **telemetry:** add GPU and disk utilization to hardware telemetry ([e56b34d](https://github.com/mafischer/oRKLLM/commit/e56b34da40a9e81b0139bc93937d11f6429fd680))
+
 # [0.7.0-alpha.13](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.12...v0.7.0-alpha.13) (2026-06-01)
 
 
