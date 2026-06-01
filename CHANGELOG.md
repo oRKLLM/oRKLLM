@@ -1,3 +1,10 @@
+# [0.7.0-alpha.13](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.12...v0.7.0-alpha.13) (2026-06-01)
+
+
+### Features
+
+* **pool:** persist pinned model across restarts with auto-load on startup ([5c5983b](https://github.com/mafischer/oRKLLM/commit/5c5983ba93aaed0586256c46c1db13ccb294ea32))
+
 # [0.7.0-alpha.12](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.11...v0.7.0-alpha.12) (2026-06-01)
 
 
