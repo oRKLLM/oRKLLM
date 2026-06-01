@@ -120,7 +120,7 @@ graph TD
 | :--- | :--- |
 | `src/addon/orkllm_napi.cpp` | C++ N-API addon; wraps `rkllm_init`, `rkllm_run`, `rkllm_destroy` with `Napi::ThreadSafeFunction` for non-blocking callbacks |
 | `src/worker.js` | Process-isolated inference worker; receives `load`/`run`/`unload` IPC commands from pool |
-| `src/pool.js` | Single-active-model lock, auto-swap, idle timeout, pin-to-keep-loaded (persisted to DB); auto-loads pinned model on startup with RAM check |
+| `src/pool.js` | Single-active-model lock, auto-swap, idle timeout, pin-to-keep-loaded; runtime version auto-discovery (`getAvailableRuntimes`, `readSoVersion`, `runtimeCandidates`, `_tryLoad`); caches winning lib path in model_settings |
 | `src/admin/conversations.js` | 6 REST endpoints for conversation CRUD + message append (`/api/admin/conversations/…`) |
 | `src/monitor.js` | Polls CPU, RAM, SoC Temp, NPU load, GPU load (Mali), disk utilization; Rockchip-native on ARM64 Linux, simulated elsewhere |
 | `src/stats.js` | Records prefill/generation tokens and latencies in SQLite |
@@ -142,7 +142,7 @@ graph TD
 | `frontend/src/views/Chat.vue` | Full streaming chat against OpenAI-compatible API |
 | `frontend/src/views/SiteManagement.vue` | Admin-only: user CRUD, OIDC/SAML config, audit log |
 | `frontend/src/views/Login.vue` | Login page; shows SSO button when OIDC/SAML configured |
-| `e2e/orkllm.spec.js` | Playwright E2E suite (18 tests — core flow, chat history, pin persistence) |
+| `e2e/orkllm.spec.js` | Playwright E2E suite (20 tests — core flow, chat history, pin persistence, runtime version API) |
 | `e2e/rbac.spec.js` | Playwright E2E suite (17 tests — RBAC, trusted proxy (single + multi-IP/CIDR), mock OIDC SSO, Keycloak integration) |
 | `e2e/regression.spec.js` | Playwright E2E suite (12 tests — UI regression: navbar, theme, user drawer, drawer toggles) |
 
@@ -198,7 +198,7 @@ oRKLLM/
 │           └── Setup.vue
 └── e2e/
     ├── global-setup.js     # Resets server state between test runs
-    ├── orkllm.spec.js      # 16 feature tests (core flow, chat history)
+    ├── orkllm.spec.js      # 20 feature tests (core flow, chat history, runtime version)
     ├── rbac.spec.js        # 17 tests — RBAC, trusted proxy, SSO
     └── regression.spec.js  # 10 UI regression tests
 ```
@@ -231,9 +231,10 @@ npm run dev:server
 | :--- | :--- | :--- |
 | `ORKLLM_HOST` | `127.0.0.1` | Listen address |
 | `ORKLLM_PORT` | `8000` | Listen port |
-| `ORKLLM_LIB_PATH` | *(auto-detect)* | Path to `librkllmrt.so` |
+| `ORKLLM_LIB_PATH` | *(auto-detect)* | Path to `librkllmrt.so` (system fallback when no versioned runtime matches) |
 | `ORKLLM_MODELS_DIR` | `./models` | Directory scanned for `.rkllm` files |
 | `ORKLLM_DB_PATH` | `~/.config/orkllm/auth.db` | SQLite database path |
+| `ORKLLM_RUNTIMES_DIR` | `~/.config/orkllm/runtimes` | Directory of versioned `librkllmrt-aarch64-vX.Y.Z.so` files for auto-matching |
 
 ---
 
@@ -514,6 +515,7 @@ echo "==> Done! Admin console: http://10.6.0.14:8000/admin"
 | Phase 15: Chat UX | ✅ Done | Input pinned at bottom (fixed viewport); message queueing during inference; mobile responsive layout |
 | Phase 16: Conversation History | ✅ Done | SQLite v3 migration; conversations + messages tables; collapsible sidebar (desktop) / bottom-sheet (mobile); `sendBeacon` on unload for partial responses |
 | Phase 17: Pin Model | ✅ Done | Pin persists to DB (`pinned_model` setting); auto-load on startup with RAM check (1.2× model size); clears on unload |
+| Phase 18: Runtime Version Matching | ✅ Done | `RUNTIMES_DIR` holds versioned `.so` files; `readSoVersion()` extracts version via `strings`; `runtimeCandidates()` orders by cached winner → filename match → all others → system fallback; `GET /api/admin/runtimes` exposes available runtimes; rkllm-runtimes mirror at `mafischer/rkllm-runtimes` |
 
 ---
 

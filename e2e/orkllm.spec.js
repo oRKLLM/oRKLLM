@@ -571,3 +571,46 @@ test('Pin model: pin state saved to DB and cleared on unload', async ({ page }) 
   });
   expect(settingsAfter.settings.pinnedModel).toBeFalsy();
 });
+
+// ---------------------------------------------------------------------------
+// Test 19: Runtime version API
+// ---------------------------------------------------------------------------
+test('GET /api/admin/runtimes returns systemRuntime and runtimes array', async ({ page }) => {
+  await login(page);
+
+  const data = await page.evaluate(async () => {
+    const r = await fetch('/api/admin/runtimes');
+    return r.json();
+  });
+
+  // Required fields present
+  expect(data).toHaveProperty('runtimesDir');
+  expect(data).toHaveProperty('systemRuntime');
+  expect(data).toHaveProperty('runtimes');
+  expect(Array.isArray(data.runtimes)).toBe(true);
+
+  // systemRuntime has path and version fields
+  expect(data.systemRuntime).toHaveProperty('path');
+  expect(data.systemRuntime).toHaveProperty('version');
+});
+
+// ---------------------------------------------------------------------------
+// Test 20: workingLibPath cached in model settings after successful load
+// ---------------------------------------------------------------------------
+test('Model settings store workingLibPath after successful load', async ({ page }) => {
+  await login(page);
+  await loadModel(page);
+
+  // Read model settings via API
+  const settings = await page.evaluate(async (modelName) => {
+    const r = await fetch(`/api/admin/models/settings/${encodeURIComponent(modelName)}`);
+    return r.json();
+  }, dummyModelName);
+
+  // workingLibPath should be set after a successful load
+  expect(settings.settings).toHaveProperty('workingLibPath');
+  expect(typeof settings.settings.workingLibPath).toBe('string');
+  expect(settings.settings.workingLibPath.length).toBeGreaterThan(0);
+
+  await unloadModel(page);
+});
