@@ -1,3 +1,12 @@
+# [0.7.0-alpha.28](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.27...v0.7.0-alpha.28) (2026-06-01)
+
+
+### Bug Fixes
+
+* regenerate package-lock.json after @fastify/static upgrade to 9.1.3 ([075cf64](https://github.com/mafischer/oRKLLM/commit/075cf64c88748dc0c13fa96b7a2eae77ac4e5f26))
+* sync package-lock.json with @fastify/static@9.1.3 upgrade ([3c49ce8](https://github.com/mafischer/oRKLLM/commit/3c49ce8b24be17fd4dda3a9f27b59ac494e3bc02))
+* **tests:** fix strict mode NPU locator and grant clipboard permission for snackbar test ([182f082](https://github.com/mafischer/oRKLLM/commit/182f0828891730a0170323ad6f9928c5165aab0e))
+
 # [0.7.0-alpha.27](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.26...v0.7.0-alpha.27) (2026-06-01)
 
 
