@@ -34,9 +34,25 @@ oRKLLM is a **Node.js / JavaScript project end-to-end**. All tooling decisions s
 
 - **Prefer fast-forward merges** whenever practical. Use `git merge --ff-only` or rebase rather than creating unnecessary merge commits.
 - **Keep history linear and clean.** A flat history is easier to bisect, revert, and understand.
-- Merge commits are acceptable when intentionally promoting between release branches (e.g. `alpha → beta`, `beta → main`) — use `--no-ff` there to mark the promotion explicitly.
 - Avoid `--no-verify`, force pushes to shared branches, or amending published commits.
 - Cherry-pick single commits (e.g. hotfixes, docs) to `main` rather than merging an entire branch when only one commit is relevant.
+
+### Branch promotion flow
+
+All development happens on `alpha`. Promotions flow strictly forward — **never commit directly to `beta` or `main`, and never cherry-pick from beta/main back to alpha.**
+
+```
+alpha  →  beta  →  main
+```
+
+| Action | Command |
+| :----- | :------ |
+| Promote alpha → beta | `git push origin alpha:beta` |
+| Promote beta → main | `git push origin beta:main` |
+
+These are fast-forward pushes — no checkout, no merge commit, no conflicts. They only work when the target branch is strictly behind the source. If a conflict arises, it means something was committed directly to the target branch, which is the mistake to avoid.
+
+**Never use `--no-ff` for promotions.** A merge commit on `beta` or `main` creates a divergence that breaks future fast-forwards and forces either cherry-picks (wrong direction) or force pushes (blocked on shared branches).
 
 ### Documentation review on every commit
 
