@@ -369,6 +369,12 @@
                   <v-icon size="12" class="mr-1">mdi-download-outline</v-icon>{{ formatNum(model.downloads) }}
                   <span class="mx-2">·</span>
                   <v-icon size="12" class="mr-1">mdi-heart-outline</v-icon>{{ formatNum(model.likes) }}
+                  <template v-if="model.paramCount || model.storageBytes">
+                    <span class="mx-2">·</span>
+                    <v-icon size="12" class="mr-1">mdi-weight</v-icon>
+                    <span v-if="model.paramCount">{{ formatParams(model.paramCount) }} params</span>
+                    <span v-else-if="model.storageBytes">{{ formatBytes(model.storageBytes) }}</span>
+                  </template>
                   <span v-for="tag in model.tags.slice(0,3)" :key="tag" class="ml-2">
                     <v-chip size="x-small" variant="tonal">{{ tag }}</v-chip>
                   </span>
@@ -439,6 +445,12 @@
                     <v-icon size="12" class="mr-1">mdi-download-outline</v-icon>{{ formatNum(model.downloads) }}
                     <span class="mx-2">·</span>
                     <v-icon size="12" class="mr-1">mdi-heart-outline</v-icon>{{ formatNum(model.likes) }}
+                    <template v-if="model.paramCount || model.storageBytes">
+                      <span class="mx-2">·</span>
+                      <v-icon size="12" class="mr-1">mdi-weight</v-icon>
+                      <span v-if="model.paramCount">{{ formatParams(model.paramCount) }} params</span>
+                      <span v-else-if="model.storageBytes">{{ formatBytes(model.storageBytes) }}</span>
+                    </template>
                     <span v-for="tag in model.tags.slice(0,3)" :key="tag" class="ml-2">
                       <v-chip size="x-small" variant="tonal">{{ tag }}</v-chip>
                     </span>
@@ -995,11 +1007,18 @@ export default {
       } catch (e) {}
     },
     formatBytes(bytes) {
-      if (bytes === 0) return '0 Bytes';
+      if (!bytes || bytes === 0) return '0 B';
       const k = 1024;
-      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
       const i = Math.floor(Math.log(bytes) / Math.log(k));
-      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    },
+    formatParams(n) {
+      if (!n) return null;
+      if (n >= 1e12) return (n / 1e12).toFixed(1).replace(/\.0$/, '') + 'T';
+      if (n >= 1e9)  return (n / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
+      if (n >= 1e6)  return (n / 1e6).toFixed(0) + 'M';
+      return n.toLocaleString();
     }
   }
 };

@@ -554,6 +554,10 @@ export default async function adminRoutes(fastify, options) {
         tags: (m.tags ?? []).slice(0, 8),
         lastModified: m.lastModified,
         private: m.private ?? false,
+        // Weight size: parameter count from safetensors metadata
+        paramCount: m.safetensors?.total ?? null,
+        // Total repo storage in bytes (all files including weights)
+        storageBytes: m.usedStorage ?? null,
       }));
     } catch (e) {
       return reply.status(502).send({ error: `Failed to reach HuggingFace: ${e.message}` });
@@ -624,6 +628,8 @@ export default async function adminRoutes(fastify, options) {
           tags: (item.tags ?? []).slice(0, 8),
           lastModified: item.lastModified,
           private: item.private ?? false,
+          paramCount: item.safetensors?.total ?? null,
+          storageBytes: item.usedStorage ?? null,
         }))
         .filter(m => m.id);
       return { title: col.title ?? slug, description: col.description ?? '', models };
