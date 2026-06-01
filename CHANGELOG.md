@@ -1,3 +1,15 @@
+# [0.7.0-alpha.21](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.20...v0.7.0-alpha.21) (2026-06-01)
+
+
+### Bug Fixes
+
+* **cache:** raise sliding context window max to 32768 tokens, default 8192 ([e37eb10](https://github.com/mafischer/oRKLLM/commit/e37eb106276396d50f3c4864f579cedc5aaf732f))
+
+
+### Features
+
+* **downloader:** Download button fetches all repo files and starts all downloads immediately ([86eeef4](https://github.com/mafischer/oRKLLM/commit/86eeef459c2060185fd9c56b2e029788d7dc1fa8))
+
 # [0.7.0-alpha.20](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.19...v0.7.0-alpha.20) (2026-06-01)
 
 
