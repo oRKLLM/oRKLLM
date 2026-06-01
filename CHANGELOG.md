@@ -1,3 +1,10 @@
+# [0.7.0-alpha.25](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.24...v0.7.0-alpha.25) (2026-06-01)
+
+
+### Features
+
+* **ux:** replace all browser alert() popups with Vuetify v-snackbar ([31af206](https://github.com/mafischer/oRKLLM/commit/31af206cf937b6cf2aff6ef184eca26785406f86))
+
 # [0.7.0-alpha.24](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.23...v0.7.0-alpha.24) (2026-06-01)
 
 
