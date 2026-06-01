@@ -472,7 +472,7 @@
             </div>
             <div class="text-caption text-grey mb-4">Enter a repo ID or click <strong>Download</strong> on a search result above.</div>
 
-            <div class="d-flex gap-3 align-start flex-wrap">
+            <div class="d-flex gap-3 align-start flex-wrap mb-3">
               <v-text-field
                 v-model="dlRepoId"
                 label="HuggingFace Repo ID"
@@ -483,6 +483,19 @@
                 style="min-width: 280px; flex: 1"
                 prepend-inner-icon="mdi-github"
                 @keyup.enter="fetchRepoFiles"
+              ></v-text-field>
+              <v-text-field
+                v-model="dlHfToken"
+                label="HF Token (optional)"
+                hint="Override for private/gated repos"
+                persistent-hint
+                :type="showHfToken ? 'text' : 'password'"
+                variant="outlined"
+                density="comfortable"
+                style="min-width: 200px; flex: 1"
+                prepend-inner-icon="mdi-key-outline"
+                :append-inner-icon="showHfToken ? 'mdi-eye-off' : 'mdi-eye'"
+                @click:append-inner="showHfToken = !showHfToken"
               ></v-text-field>
               <v-btn
                 color="primary"

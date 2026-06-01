@@ -187,6 +187,11 @@ test('Models page: Downloader tab visible with HF fields', async ({ page }) => {
   await expect(
     page.locator('.v-text-field').filter({ hasText: /Repo ID/i }).first()
   ).toBeVisible({ timeout: 3000 });
+
+  // HF Token field for ad-hoc override
+  await expect(
+    page.locator('.v-text-field').filter({ hasText: /Token/i }).first()
+  ).toBeVisible({ timeout: 3000 });
 });
 
 // ---------------------------------------------------------------------------
