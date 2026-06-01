@@ -190,19 +190,21 @@ test('User menu: Sign Out navigates to login page', async ({ page }) => {
 });
 
 test('Hamburger: toggles mobile nav drawer open then closed', async ({ page }) => {
-  await login(page);
   await page.setViewportSize({ width: 390, height: 844 });
+  await login(page); // login after setting viewport so Vuetify picks up mobile breakpoint
 
   const hamburger = page.locator('.v-app-bar .mdi-menu').locator('..');
+  await expect(hamburger).toBeVisible({ timeout: 5000 });
+
   const navDrawer = page.locator('.v-navigation-drawer--left');
 
-  // First tap — drawer becomes active
+  // First tap — drawer opens (inert attribute removed)
   await hamburger.click();
-  await expect(navDrawer).toHaveClass(/v-navigation-drawer--active/, { timeout: 3000 });
+  await expect(navDrawer).not.toHaveAttribute('inert', { timeout: 3000 });
 
-  // Second tap — drawer loses active class
+  // Second tap — drawer closes (inert attribute restored)
   await hamburger.click();
-  await expect(navDrawer).not.toHaveClass(/v-navigation-drawer--active/, { timeout: 3000 });
+  await expect(navDrawer).toHaveAttribute('inert', { timeout: 3000 });
 
   await page.setViewportSize({ width: 1280, height: 800 });
 });
@@ -213,11 +215,11 @@ test('Account button: toggles user drawer open then closed', async ({ page }) =>
   const btn = accountBtn(page);
   const d = drawer(page);
 
-  // First click — drawer becomes active
+  // First click — drawer opens (inert removed)
   await btn.click();
-  await expect(d).toHaveClass(/v-navigation-drawer--active/, { timeout: 3000 });
+  await expect(d).not.toHaveAttribute('inert', { timeout: 3000 });
 
-  // Second click — drawer loses active class
+  // Second click — drawer closes (inert restored)
   await btn.click();
-  await expect(d).not.toHaveClass(/v-navigation-drawer--active/, { timeout: 3000 });
+  await expect(d).toHaveAttribute('inert', { timeout: 3000 });
 });
