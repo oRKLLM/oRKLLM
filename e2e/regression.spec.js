@@ -31,20 +31,20 @@ test('Navbar: shows oRKLLM brand without Console suffix', async ({ page }) => {
   await expect(brand).not.toContainText('Console');
 });
 
-test('Navbar: version chip is visible on desktop', async ({ page }) => {
+test('Navbar: version text is visible on desktop', async ({ page }) => {
   await login(page);
-  const chip = page.locator('.v-app-bar .v-chip');
-  await expect(chip).toBeVisible();
-  const text = await chip.textContent();
+  const versionText = page.locator('.v-app-bar span.d-none.d-sm-flex');
+  await expect(versionText).toBeVisible();
+  const text = await versionText.textContent();
   expect(text).toMatch(/^v\d+\.\d+/);
 });
 
 test('Navbar: version shown in user drawer on mobile', async ({ page }) => {
   await login(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  // Version chip hidden in navbar on mobile
-  const navChip = page.locator('.v-app-bar .v-chip');
-  await expect(navChip).toBeHidden();
+  // Version text hidden in navbar on mobile
+  const navVersion = page.locator('.v-app-bar span.d-none.d-sm-flex');
+  await expect(navVersion).toBeHidden();
   // Opens in user drawer footer
   await page.locator('.v-app-bar .v-btn:has(.mdi-account)').click();
   await page.waitForSelector('.v-navigation-drawer:has(.mdi-logout)', { state: 'visible' });
