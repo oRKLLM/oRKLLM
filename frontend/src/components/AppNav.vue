@@ -17,7 +17,7 @@
         @click="$router.push('/')"
       >oRKLLM</span>
       <!-- Version text hidden on mobile — shown in user drawer instead -->
-      <span class="text-grey d-none d-sm-flex" style="font-size: 0.65rem; line-height: 1; margin-top: 2px;">v{{ appVersion }}</span>
+      <span class="text-primary d-none d-sm-flex" style="font-size: 0.65rem; line-height: 1; margin-top: 2px; opacity: 0.7;">v{{ appVersion }}</span>
     </v-app-bar-title>
 
     <v-spacer></v-spacer>
