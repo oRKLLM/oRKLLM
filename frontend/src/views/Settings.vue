@@ -66,6 +66,26 @@
         ></v-text-field>
       </v-card>
 
+      <!-- Runtime Auto-Download -->
+      <v-card class="glass-card pa-5 mb-5">
+        <div class="section-heading mb-4">
+          <v-icon color="primary" size="18" class="mr-2">mdi-download-circle-outline</v-icon>
+          Runtime Auto-Download
+        </div>
+        <div class="d-flex align-center justify-space-between">
+          <div>
+            <div class="text-subtitle-2 font-weight-medium mb-1">Auto-download rkllm runtimes</div>
+            <div class="text-caption text-grey">
+              Automatically download versioned <code>librkllmrt.so</code> files from
+              <a href="https://github.com/mafischer/rkllm-runtimes" target="_blank" class="text-primary">mafischer/rkllm-runtimes</a>
+              on startup and when a model with an unknown runtime version is loaded.
+              Binaries are Apache 2.0 licensed.
+            </div>
+          </div>
+          <v-switch v-model="settings.autoDownloadRuntimes" color="primary" hide-details density="compact" class="ml-4 flex-shrink-0"></v-switch>
+        </div>
+      </v-card>
+
       <!-- Authentication -->
       <v-card class="glass-card pa-5 mb-5">
         <div class="section-heading mb-4">
@@ -341,6 +361,7 @@ export default {
       cacheDir: '',
       cacheMaxContextTokens: 3500,
       trustedProxy: '',
+      autoDownloadRuntimes: true,
     },
     cacheStats: null,
     clearingCache: false,
@@ -392,6 +413,7 @@ export default {
         this.settings.cacheDir              = s.cacheDir ?? '';
         this.settings.cacheMaxContextTokens = s.cacheMaxContextTokens ?? 3500;
         this.settings.trustedProxy          = s.trustedProxy ?? '';
+        this.settings.autoDownloadRuntimes  = s.autoDownloadRuntimes ?? true;
         this.cacheStats = data.cacheStats || null;
       } catch (e) {}
     },

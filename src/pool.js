@@ -4,6 +4,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { MODELS_DIR, LIBRKLLMRT_PATH, RUNTIMES_DIR, parseRuntimeVersion } from './config.js';
 import { dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings } from './db.js';
+import { syncRuntimes, hasRuntime } from './runtime_sync.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -177,6 +178,28 @@ class EnginePool {
         console.warn(`[EnginePool] ${libPath} failed for ${modelName}: ${result.error} — trying next`);
         // Kill the failed worker before trying next candidate
         if (this.worker) { this.worker.kill(); this.worker = null; }
+      }
+
+      // If auto-download is enabled and we know the required version, try fetching it
+      const parsedVersion = parseRuntimeVersion(modelName);
+      if (dbGetSetting('auto_download_runtimes') === '1' && parsedVersion && !hasRuntime(parsedVersion)) {
+        console.log(`[EnginePool] No runtime found for ${modelName} — triggering sync for v${parsedVersion}`);
+        await syncRuntimes(parsedVersion);
+        // Rebuild candidates with newly downloaded runtime and retry once
+        const freshCandidates = EnginePool.runtimeCandidates(modelName);
+        for (const libPath of freshCandidates) {
+          const result = await this._tryLoad(modelName, modelPath, options, libPath);
+          if (result.success) {
+            const settings = dbGetModelSettings(modelName) || {};
+            dbSetModelSettings(modelName, { ...settings, workingLibPath: libPath });
+            this.isLoaded = true;
+            this.activeModel = { name: modelName, path: modelPath, options, isMock: result.isMock, libPath };
+            console.log(`[EnginePool] Model loaded after runtime sync: ${modelName} using ${libPath}`);
+            this.resetIdleTimer();
+            return { status: 0, activeModel: this.activeModel };
+          }
+          if (this.worker) { this.worker.kill(); this.worker = null; }
+        }
       }
 
       throw new Error(`No compatible rkllm runtime found for ${modelName}. Tried: ${candidates.join(', ')}`);

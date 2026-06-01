@@ -13,6 +13,7 @@ import { getSystemMetrics } from './monitor.js';
 import { getStats } from './stats.js';
 import pool from './pool.js';
 import { MODELS_DIR } from './config.js';
+import { syncRuntimes } from './runtime_sync.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -205,6 +206,10 @@ const start = async () => {
     await fastify.listen({ port, host });
     fastify.log.info(`oRKLLM server started at http://${host}:${port}`);
     await autoLoadPinnedModel();
+    // Background runtime sync (non-blocking)
+    if (dbGetSetting('auto_download_runtimes') === '1') {
+      syncRuntimes().catch(e => fastify.log.error(`[RuntimeSync] ${e.message}`));
+    }
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);

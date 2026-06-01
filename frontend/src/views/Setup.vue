@@ -47,6 +47,24 @@
             ]"
           ></v-text-field>
 
+          <v-checkbox
+            v-model="autoDownloadRuntimes"
+            color="primary"
+            density="compact"
+            class="mb-2"
+          >
+            <template #label>
+              <span class="text-body-2">
+                Auto-download rkllm runtime versions
+                <span class="text-grey text-caption d-block">
+                  Downloads pre-built <code>librkllmrt.so</code> files from
+                  <a href="https://github.com/mafischer/rkllm-runtimes" target="_blank" class="text-primary">mafischer/rkllm-runtimes</a>
+                  for automatic model compatibility matching. Binaries are Apache 2.0 licensed.
+                </span>
+              </span>
+            </template>
+          </v-checkbox>
+
           <v-alert
             v-if="errorMessage"
             type="error"
@@ -85,6 +103,7 @@ export default {
     confirmPassword: '',
     loading: false,
     errorMessage: '',
+    autoDownloadRuntimes: true,
   }),
   methods: {
     async submitSetup() {
@@ -99,6 +118,7 @@ export default {
           body: JSON.stringify({
             username: this.username,
             password: this.password,
+            autoDownloadRuntimes: this.autoDownloadRuntimes,
           }),
         });
 

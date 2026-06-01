@@ -168,7 +168,7 @@ export default async function adminRoutes(fastify, options) {
     const hasUsers = !dbUsersEmpty() || !!getCredentials();
     if (hasUsers) return reply.status(400).send({ error: 'Setup already completed' });
 
-    const { username, password } = request.body || {};
+    const { username, password, autoDownloadRuntimes } = request.body || {};
     if (!username || !password) return reply.status(400).send({ error: 'Username and password required' });
     if (password.length < 6) return reply.status(400).send({ error: 'Password must be at least 6 characters long' });
 
@@ -178,8 +178,20 @@ export default async function adminRoutes(fastify, options) {
     // Keep legacy auth table in sync for backward compatibility
     saveCredentials(username, password);
 
+    if (typeof autoDownloadRuntimes === 'boolean') {
+      dbSetSetting('auto_download_runtimes', autoDownloadRuntimes ? '1' : '0');
+    }
+
     issueSessionCookie(reply, { id, username, role: 'admin' });
     logAudit({ user: { id, username }, ip: request.ip }, 'setup', null);
+
+    // Kick off background runtime sync if opted in
+    if (autoDownloadRuntimes) {
+      import('./runtime_sync.js')
+        .then(m => m.syncRuntimes())
+        .catch(e => console.error('[Setup] Runtime sync failed:', e.message));
+    }
+
     return { success: true };
   });
 
@@ -327,6 +339,7 @@ export default async function adminRoutes(fastify, options) {
         localAuthDisabled: dbGetSetting('local_auth_disabled') === '1',
         trustedProxy: dbGetSetting('trusted_proxy') ?? '',
         pinnedModel: dbGetSetting('pinned_model') ?? '',
+        autoDownloadRuntimes: dbGetSetting('auto_download_runtimes') === '1',
       },
       cacheStats: getCacheStats()
     };
@@ -336,7 +349,7 @@ export default async function adminRoutes(fastify, options) {
   fastify.post('/global-settings', async (request, reply) => {
     const { idleTimeoutMinutes, temperature, topP, topK, maxNewTokens, repPenalty, hfToken,
             cacheEnabled, cacheHotLimitMB, cacheColdLimitMB, cacheDir, cacheMaxContextTokens,
-            localAuthDisabled, trustedProxy } = request.body || {};
+            localAuthDisabled, trustedProxy, autoDownloadRuntimes } = request.body || {};
     if (typeof idleTimeoutMinutes === 'number') {
       pool.setIdleTimeout(idleTimeoutMinutes);
     }
@@ -353,8 +366,16 @@ export default async function adminRoutes(fastify, options) {
     if (typeof cacheMaxContextTokens === 'number') dbSetSetting('cache_max_context_tokens', cacheMaxContextTokens);
     if (typeof localAuthDisabled === 'boolean') dbSetSetting('local_auth_disabled', localAuthDisabled ? '1' : '0');
     if (typeof trustedProxy === 'string') dbSetSetting('trusted_proxy', trustedProxy);
+    if (typeof autoDownloadRuntimes === 'boolean') dbSetSetting('auto_download_runtimes', autoDownloadRuntimes ? '1' : '0');
     logAudit(request, 'settings_change', null);
     return { success: true };
+  });
+
+  // POST /api/admin/runtimes/sync — manually trigger runtime download
+  fastify.post('/runtimes/sync', async (request, reply) => {
+    const { syncRuntimes } = await import('./runtime_sync.js');
+    syncRuntimes().catch(e => console.error('[RuntimeSync] Manual sync failed:', e.message));
+    return { success: true, message: 'Runtime sync started in background' };
   });
 
   // DELETE /api/admin/cache — clear all prefix cache files
