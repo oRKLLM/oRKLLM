@@ -380,7 +380,7 @@
                   </span>
                 </v-list-item-subtitle>
                 <template v-slot:append>
-                  <v-btn size="small" color="primary" variant="tonal" @click="selectModel(model.id)">Use</v-btn>
+                  <v-btn size="small" color="primary" variant="tonal" @click="selectModel(model.id)">Download</v-btn>
                 </template>
               </v-list-item>
             </v-list>
@@ -456,7 +456,7 @@
                     </span>
                   </v-list-item-subtitle>
                   <template v-slot:append>
-                    <v-btn size="small" color="primary" variant="tonal" @click="selectModel(model.id)">Use</v-btn>
+                    <v-btn size="small" color="primary" variant="tonal" @click="selectModel(model.id)">Download</v-btn>
                   </template>
                 </v-list-item>
               </v-list>
@@ -464,77 +464,105 @@
           </v-card>
 
           <!-- Direct Download -->
+          <!-- Manual download by repo ID -->
           <v-card class="glass-card pa-5 mb-5" ref="downloadCard">
             <div class="text-h6 font-weight-bold mb-1 d-flex align-center">
               <v-icon start color="primary">mdi-download-outline</v-icon>
               Download from HuggingFace
             </div>
-            <div class="text-caption text-grey mb-5">Download a .rkllm model file from a HuggingFace repository.</div>
+            <div class="text-caption text-grey mb-4">Enter a repo ID or click <strong>Download</strong> on a search result above.</div>
 
-            <v-text-field
-              v-model="dlRepoId"
-              label="HuggingFace Repo ID"
-              hint="e.g. Qwen/Qwen2.5-0.5B-Instruct"
-              persistent-hint
-              variant="outlined"
-              density="comfortable"
-              class="mb-4"
-              prepend-inner-icon="mdi-github"
-            ></v-text-field>
+            <div class="d-flex gap-3 align-start flex-wrap">
+              <v-text-field
+                v-model="dlRepoId"
+                label="HuggingFace Repo ID"
+                hint="e.g. Qwen/Qwen2.5-0.5B-Instruct"
+                persistent-hint
+                variant="outlined"
+                density="comfortable"
+                style="min-width: 280px; flex: 1"
+                prepend-inner-icon="mdi-github"
+                @keyup.enter="fetchRepoFiles"
+              ></v-text-field>
+              <v-btn
+                color="primary"
+                variant="flat"
+                :loading="dlLoading"
+                :disabled="!dlRepoId.trim()"
+                prepend-icon="mdi-magnify"
+                class="mt-1"
+                @click="fetchRepoFiles"
+              >
+                Find Files
+              </v-btn>
+            </div>
 
-            <v-text-field
-              v-model="dlHfToken"
-              label="HuggingFace Token (optional)"
-              hint="Used for private or gated repositories"
-              persistent-hint
-              :type="showHfToken ? 'text' : 'password'"
-              variant="outlined"
-              density="comfortable"
-              class="mb-5"
-              prepend-inner-icon="mdi-key-outline"
-              :append-inner-icon="showHfToken ? 'mdi-eye-off' : 'mdi-eye'"
-              @click:append-inner="showHfToken = !showHfToken"
-            ></v-text-field>
-
-            <v-btn
-              color="primary"
-              variant="flat"
-              :loading="dlLoading"
-              :disabled="!dlRepoId.trim()"
-              prepend-icon="mdi-download"
-              @click="startDownload"
-            >
-              Download Model
-            </v-btn>
+            <!-- File picker -->
+            <div v-if="dlFiles.length" class="mt-4">
+              <div class="text-caption text-grey mb-2">Select a file to download:</div>
+              <v-list class="pa-0" bg-color="transparent">
+                <v-list-item
+                  v-for="f in dlFiles"
+                  :key="f.name"
+                  class="border-bottom py-2 px-0"
+                >
+                  <v-list-item-title class="text-body-2 font-mono">{{ f.name }}</v-list-item-title>
+                  <v-list-item-subtitle v-if="f.size" class="text-caption">{{ formatBytes(f.size) }}</v-list-item-subtitle>
+                  <template #append>
+                    <v-btn size="small" color="primary" variant="flat" @click="startDownload(f.name)">
+                      <v-icon start size="16">mdi-download</v-icon>Download
+                    </v-btn>
+                  </template>
+                </v-list-item>
+              </v-list>
+            </div>
+            <div v-if="dlFileError" class="text-caption text-error mt-3">{{ dlFileError }}</div>
           </v-card>
 
-          <!-- Download status -->
-          <v-card v-if="dlStatus" class="glass-card pa-5">
-            <div class="text-subtitle-1 font-weight-bold mb-3 d-flex align-center">
-              <v-icon start :color="dlStatusColor">{{ dlStatusIcon }}</v-icon>
-              Download Status
+          <!-- Downloads queue -->
+          <v-card v-if="dlJobs.length" class="glass-card pa-5">
+            <div class="d-flex align-center justify-space-between mb-3">
+              <div class="text-subtitle-1 font-weight-bold d-flex align-center">
+                <v-icon start color="primary">mdi-tray-arrow-down</v-icon>
+                Downloads
+              </div>
+              <v-btn size="x-small" variant="text" color="grey" @click="clearFinishedJobs">Clear finished</v-btn>
             </div>
-            <div class="text-body-2 mb-2">{{ dlStatus.message }}</div>
-            <v-progress-linear
-              v-if="dlStatus.progress !== undefined"
-              :model-value="dlStatus.progress"
-              color="primary"
-              rounded
-              height="6"
-              class="mb-2"
-            ></v-progress-linear>
-            <div v-if="dlStatus.progress !== undefined" class="text-caption text-grey">
-              {{ dlStatus.progress }}%
+
+            <div v-for="job in dlJobs" :key="job.id" class="mb-4">
+              <div class="d-flex align-center justify-space-between mb-1">
+                <span class="text-body-2 font-mono text-truncate" style="max-width: 60%">{{ job.filename }}</span>
+                <div class="d-flex align-center gap-2">
+                  <span v-if="job.status === 'downloading'" class="text-caption text-primary">
+                    {{ formatSpeed(job.speedBps) }}
+                  </span>
+                  <v-chip
+                    size="x-small"
+                    :color="job.status === 'done' ? 'success' : job.status === 'error' ? 'error' : job.status === 'cancelled' ? 'grey' : 'primary'"
+                    variant="tonal"
+                  >{{ job.status }}</v-chip>
+                  <v-btn v-if="job.status === 'done' || job.status === 'error' || job.status === 'cancelled'"
+                    icon size="x-small" variant="text" color="grey" @click="removeJob(job.id)">
+                    <v-icon size="14">mdi-close</v-icon>
+                  </v-btn>
+                  <v-btn v-else icon size="x-small" variant="text" color="error" @click="cancelJob(job.id)">
+                    <v-icon size="14">mdi-stop</v-icon>
+                  </v-btn>
+                </div>
+              </div>
+
+              <v-progress-linear
+                :model-value="job.progress"
+                :color="job.status === 'done' ? 'success' : job.status === 'error' ? 'error' : 'primary'"
+                rounded height="5"
+                :indeterminate="job.status === 'downloading' && job.totalBytes === 0"
+              ></v-progress-linear>
+
+              <div class="d-flex justify-space-between mt-1">
+                <span class="text-caption text-grey">{{ job.status === 'downloading' ? formatBytes(job.bytesDown) + ' / ' + (job.totalBytes ? formatBytes(job.totalBytes) : '?') : job.error ?? '' }}</span>
+                <span class="text-caption text-grey">{{ job.progress }}%</span>
+              </div>
             </div>
-            <v-alert
-              v-if="dlStatus.error"
-              type="error"
-              variant="tonal"
-              density="compact"
-              class="mt-3 text-caption"
-            >
-              {{ dlStatus.error }}
-            </v-alert>
           </v-card>
         </v-tabs-window-item>
 
@@ -615,11 +643,14 @@ export default {
 
     // Downloader
     dlRepoId: '',
+    dlFiles: [],
+    dlFileError: '',
     dlHfToken: '',
     showHfToken: false,
     dlLoading: false,
     dlStatus: null,
     dlPollTimer: null,
+    dlJobs: [],
 
     // HF Search
     searchQuery: '',
@@ -926,10 +957,33 @@ export default {
     },
     selectModel(id) {
       this.dlRepoId = id;
+      this.dlFiles = [];
+      this.dlFileError = '';
       this.$nextTick(() => {
         const el = this.$refs.downloadCard?.$el || this.$refs.downloadCard;
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
+      // Auto-fetch files for the selected repo
+      this.fetchRepoFiles();
+    },
+    async fetchRepoFiles() {
+      if (!this.dlRepoId.trim()) return;
+      this.dlLoading = true;
+      this.dlFiles = [];
+      this.dlFileError = '';
+      try {
+        const res = await fetch(`/api/admin/hf/files?repoId=${encodeURIComponent(this.dlRepoId.trim())}`);
+        const data = await res.json();
+        if (!res.ok) { this.dlFileError = data.error || 'Failed to fetch files'; return; }
+        if (data.files.length === 0) { this.dlFileError = 'No .rkllm files found in this repository.'; return; }
+        this.dlFiles = data.files;
+        // Auto-start if only one file
+        if (data.files.length === 1) this.startDownload(data.files[0].name);
+      } catch (e) {
+        this.dlFileError = 'Network error: ' + e.message;
+      } finally {
+        this.dlLoading = false;
+      }
     },
     formatNum(n) {
       if (!n) return '0';
@@ -937,58 +991,58 @@ export default {
       if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
       return String(n);
     },
-    async startDownload() {
-      if (!this.dlRepoId.trim()) return;
-      this.dlLoading = true;
-      this.dlStatus = { message: 'Starting download...', progress: 0 };
-
+    async startDownload(filename) {
       try {
         const res = await fetch('/api/admin/download', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ repoId: this.dlRepoId.trim(), hfToken: this.dlHfToken.trim() || undefined })
+          body: JSON.stringify({
+            repoId: this.dlRepoId.trim(),
+            filename,
+            hfToken: this.dlHfToken.trim() || undefined,
+          }),
         });
         const data = await res.json();
-        if (!res.ok) {
-          this.dlStatus = { message: 'Failed to start download', error: data.error || 'Unknown error' };
-          this.dlLoading = false;
-          return;
-        }
-        this.dlStatus = { message: data.message || 'Download started', progress: 0 };
+        if (!res.ok) { alert(data.error || 'Failed to start download'); return; }
+        this.dlFiles = [];
         this.startPollDownloadStatus();
       } catch (e) {
-        this.dlStatus = { message: 'Network error', error: e.message };
-        this.dlLoading = false;
+        alert('Network error: ' + e.message);
       }
     },
     startPollDownloadStatus() {
-      if (this.dlPollTimer) clearInterval(this.dlPollTimer);
+      if (this.dlPollTimer) return; // already polling
       this.dlPollTimer = setInterval(async () => {
         try {
           const res = await fetch('/api/admin/download/status');
-          if (!res.ok) {
-            this.dlStatus = { message: 'Could not fetch status', error: `HTTP ${res.status}` };
-            this.stopPollDownloadStatus();
-            return;
+          if (!res.ok) return;
+          this.dlJobs = await res.json();
+          const anyActive = this.dlJobs.some(j => j.status === 'downloading');
+          if (!anyActive) {
+            clearInterval(this.dlPollTimer);
+            this.dlPollTimer = null;
+            await this.fetchModels();
           }
-          const data = await res.json();
-          this.dlStatus = data;
-          if (data.done || data.error) {
-            this.stopPollDownloadStatus();
-            if (data.done) await this.fetchModels();
-          }
-        } catch (e) {
-          this.dlStatus = { message: 'Status check failed', error: e.message };
-          this.stopPollDownloadStatus();
-        }
-      }, 1500);
+        } catch (e) {}
+      }, 500);
     },
-    stopPollDownloadStatus() {
-      if (this.dlPollTimer) {
-        clearInterval(this.dlPollTimer);
-        this.dlPollTimer = null;
-      }
-      this.dlLoading = false;
+    async cancelJob(id) {
+      await fetch(`/api/admin/download/${id}`, { method: 'DELETE' }).catch(() => {});
+    },
+    async removeJob(id) {
+      await fetch(`/api/admin/download/${id}`, { method: 'DELETE' }).catch(() => {});
+      this.dlJobs = this.dlJobs.filter(j => j.id !== id);
+    },
+    async clearFinishedJobs() {
+      const finished = this.dlJobs.filter(j => j.status !== 'downloading');
+      await Promise.all(finished.map(j => fetch(`/api/admin/download/${j.id}`, { method: 'DELETE' }).catch(() => {})));
+      this.dlJobs = this.dlJobs.filter(j => j.status === 'downloading');
+    },
+    formatSpeed(bps) {
+      if (!bps) return '';
+      if (bps >= 1024 * 1024) return (bps / 1024 / 1024).toFixed(1) + ' MB/s';
+      if (bps >= 1024) return (bps / 1024).toFixed(0) + ' KB/s';
+      return bps + ' B/s';
     },
     toggleTheme() {
       const next = this.isDark ? 'customLightTheme' : 'customDarkTheme';

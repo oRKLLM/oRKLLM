@@ -638,6 +638,129 @@ export default async function adminRoutes(fastify, options) {
     }
   });
 
+  // ── Model download queue ─────────────────────────────────────────────────
+  // In-memory job store: { [id]: { id, repoId, filename, status, bytesDown, totalBytes, speedBps, startedAt, finishedAt, error } }
+  const downloadJobs = new Map();
+
+  function jobSummary(job) {
+    const elapsed = (Date.now() - job.startedAt) / 1000;
+    return {
+      id: job.id,
+      repoId: job.repoId,
+      filename: job.filename,
+      status: job.status,        // 'downloading' | 'done' | 'error' | 'cancelled'
+      bytesDown: job.bytesDown,
+      totalBytes: job.totalBytes,
+      progress: job.totalBytes > 0 ? Math.round((job.bytesDown / job.totalBytes) * 100) : 0,
+      speedBps: job.speedBps,
+      elapsed: Math.round(elapsed),
+      error: job.error ?? null,
+    };
+  }
+
+  // GET /api/admin/hf/files?repoId=<id> — list .rkllm files in a HF repo
+  fastify.get('/hf/files', async (request, reply) => {
+    const { repoId } = request.query;
+    if (!repoId) return reply.status(400).send({ error: 'repoId required' });
+    const hfToken = dbGetSetting('hf_token') ?? '';
+    const headers = { 'User-Agent': 'oRKLLM/1.0' };
+    if (hfToken) headers['Authorization'] = `Bearer ${hfToken}`;
+    try {
+      const res = await fetch(`https://huggingface.co/api/models/${encodeURIComponent(repoId)}?full=true`, { headers });
+      if (!res.ok) return reply.status(res.status).send({ error: `HF API error: ${res.status}` });
+      const data = await res.json();
+      const files = (data.siblings ?? [])
+        .filter(f => f.rfilename?.endsWith('.rkllm'))
+        .map(f => ({ name: f.rfilename, size: f.size ?? null }));
+      return { repoId, files };
+    } catch (e) {
+      return reply.status(502).send({ error: e.message });
+    }
+  });
+
+  // POST /api/admin/download — enqueue a download
+  fastify.post('/download', async (request, reply) => {
+    const { repoId, filename, hfToken: tokenOverride } = request.body || {};
+    if (!repoId || !filename) return reply.status(400).send({ error: 'repoId and filename required' });
+    if (!filename.endsWith('.rkllm')) return reply.status(400).send({ error: 'Only .rkllm files allowed' });
+
+    const id = uuidv4();
+    const destPath = path.join(MODELS_DIR, path.basename(filename));
+    const hfToken = tokenOverride || (dbGetSetting('hf_token') ?? '');
+
+    const job = { id, repoId, filename, status: 'downloading', bytesDown: 0, totalBytes: 0, speedBps: 0, startedAt: Date.now(), error: null, _dest: destPath };
+    downloadJobs.set(id, job);
+
+    // Stream download in background
+    (async () => {
+      const url = `https://huggingface.co/${encodeURIComponent(repoId)}/resolve/main/${encodeURIComponent(filename)}`;
+      const headers = { 'User-Agent': 'oRKLLM/1.0' };
+      if (hfToken) headers['Authorization'] = `Bearer ${hfToken}`;
+
+      try {
+        let res = await fetch(url, { headers });
+        // Follow redirects manually to preserve auth header
+        while (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
+          res = await fetch(res.headers.get('location'), { headers });
+        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        job.totalBytes = parseInt(res.headers.get('content-length') || '0', 10);
+
+        const tmpPath = destPath + '.tmp';
+        const fileStream = fs.createWriteStream(tmpPath);
+        const reader = res.body.getReader();
+
+        let lastCheck = Date.now();
+        let bytesAtLastCheck = 0;
+
+        while (true) {
+          if (job.status === 'cancelled') { reader.cancel(); fileStream.close(); fs.unlink(tmpPath, () => {}); return; }
+          const { value, done } = await reader.read();
+          if (done) break;
+          fileStream.write(Buffer.from(value));
+          job.bytesDown += value.length;
+
+          // Update speed every 500ms
+          const now = Date.now();
+          if (now - lastCheck >= 500) {
+            job.speedBps = Math.round(((job.bytesDown - bytesAtLastCheck) / ((now - lastCheck) / 1000)));
+            bytesAtLastCheck = job.bytesDown;
+            lastCheck = now;
+          }
+        }
+
+        await new Promise((res, rej) => fileStream.end(err => err ? rej(err) : res()));
+        fs.renameSync(tmpPath, destPath);
+        job.status = 'done';
+        job.speedBps = 0;
+        job.finishedAt = Date.now();
+        console.log(`[Download] Completed: ${filename}`);
+      } catch (e) {
+        job.status = 'error';
+        job.error = e.message;
+        try { fs.unlinkSync(destPath + '.tmp'); } catch {}
+        console.error(`[Download] Failed ${filename}: ${e.message}`);
+      }
+    })();
+
+    return { success: true, id, message: `Downloading ${filename}` };
+  });
+
+  // GET /api/admin/download/status — all jobs
+  fastify.get('/download/status', async (request, reply) => {
+    return [...downloadJobs.values()].map(jobSummary).reverse();
+  });
+
+  // DELETE /api/admin/download/:id — cancel or clear a job
+  fastify.delete('/download/:id', async (request, reply) => {
+    const job = downloadJobs.get(request.params.id);
+    if (!job) return reply.status(404).send({ error: 'Job not found' });
+    if (job.status === 'downloading') job.status = 'cancelled';
+    else downloadJobs.delete(request.params.id);
+    return { success: true };
+  });
+
   // DELETE /api/admin/models/:modelId
   fastify.delete('/models/:modelId', async (request, reply) => {
     const { modelId } = request.params;
