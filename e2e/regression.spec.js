@@ -233,7 +233,7 @@ test('User menu: Contribute button links to GitHub', async ({ page }) => {
 
   const contributeLink = d.locator('.v-list-item').filter({ hasText: 'Contribute' });
   await expect(contributeLink).toBeVisible();
-  // Verify it's an anchor pointing to GitHub
-  const href = await contributeLink.locator('a, [href]').first().getAttribute('href');
+  // v-list-item with href renders as the <a> element itself
+  const href = await contributeLink.getAttribute('href');
   expect(href).toContain('github.com/mafischer/oRKLLM');
 });
