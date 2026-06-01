@@ -300,7 +300,7 @@
                 </thead>
                 <tbody>
                   <tr v-for="r in runtimes.runtimes" :key="r.path">
-                    <td class="font-mono">{{ r.filename }}</td>
+                    <td class="font-mono">{{ r.file }}</td>
                     <td>
                       <v-chip size="x-small" color="primary" variant="tonal">
                         {{ r.version ? `v${r.version}` : '—' }}
