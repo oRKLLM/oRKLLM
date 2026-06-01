@@ -225,6 +225,7 @@ jobs:
           ignore-unfixed: true
           cache-dir: ~/.cache/trivy
           skip-db-update: ${{ steps.trivy-cache.outputs.cache-hit == 'true' }}
+          skip-dirs: 'node_modules/npm,node_modules/.cache'
 
       - name: Upload Trivy SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
