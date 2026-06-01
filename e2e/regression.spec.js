@@ -194,15 +194,15 @@ test('Hamburger: toggles mobile nav drawer open then closed', async ({ page }) =
   await page.setViewportSize({ width: 390, height: 844 });
 
   const hamburger = page.locator('.v-app-bar .mdi-menu').locator('..');
+  const navDrawer = page.locator('.v-navigation-drawer--left');
 
-  // First tap opens the drawer
+  // First tap — drawer becomes active
   await hamburger.click();
-  const navDrawer = page.locator('.v-navigation-drawer').filter({ hasText: 'Dashboard' });
-  await expect(navDrawer).toBeVisible({ timeout: 3000 });
+  await expect(navDrawer).toHaveClass(/v-navigation-drawer--active/, { timeout: 3000 });
 
-  // Second tap closes it
+  // Second tap — drawer loses active class
   await hamburger.click();
-  await expect(navDrawer).toBeHidden({ timeout: 3000 });
+  await expect(navDrawer).not.toHaveClass(/v-navigation-drawer--active/, { timeout: 3000 });
 
   await page.setViewportSize({ width: 1280, height: 800 });
 });
@@ -213,11 +213,11 @@ test('Account button: toggles user drawer open then closed', async ({ page }) =>
   const btn = accountBtn(page);
   const d = drawer(page);
 
-  // First click opens
+  // First click — drawer becomes active
   await btn.click();
-  await expect(d).toBeVisible({ timeout: 3000 });
+  await expect(d).toHaveClass(/v-navigation-drawer--active/, { timeout: 3000 });
 
-  // Second click closes
+  // Second click — drawer loses active class
   await btn.click();
-  await expect(d).toBeHidden({ timeout: 3000 });
+  await expect(d).not.toHaveClass(/v-navigation-drawer--active/, { timeout: 3000 });
 });
