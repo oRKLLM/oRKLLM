@@ -380,7 +380,7 @@
                   </span>
                 </v-list-item-subtitle>
                 <template v-slot:append>
-                  <v-btn size="small" color="primary" variant="tonal" @click="selectModel(model.id)">Download</v-btn>
+                  <v-btn size="small" color="primary" variant="tonal" :loading="loadingRepoId === model.id" @click="selectModel(model.id)">Download</v-btn>
                 </template>
               </v-list-item>
             </v-list>
@@ -456,7 +456,7 @@
                     </span>
                   </v-list-item-subtitle>
                   <template v-slot:append>
-                    <v-btn size="small" color="primary" variant="tonal" @click="selectModel(model.id)">Download</v-btn>
+                    <v-btn size="small" color="primary" variant="tonal" :loading="loadingRepoId === model.id" @click="selectModel(model.id)">Download</v-btn>
                   </template>
                 </v-list-item>
               </v-list>
@@ -626,6 +626,8 @@ export default {
     loadingModelId: null,
     scanningModels: false,
     timeoutSlider: 5,
+
+    loadingRepoId: null,
 
     // Runtime download prompt
     runtimeDialog: false,
@@ -968,16 +970,31 @@ export default {
         this.collectionLoading = false;
       }
     },
-    selectModel(id) {
+    async selectModel(id) {
+      // Fetch all .rkllm files and start every download immediately
       this.dlRepoId = id;
       this.dlFiles = [];
       this.dlFileError = '';
-      this.$nextTick(() => {
-        const el = this.$refs.downloadCard?.$el || this.$refs.downloadCard;
-        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      });
-      // Auto-fetch files for the selected repo
-      this.fetchRepoFiles();
+      this.dlLoading = true;
+      this.loadingRepoId = id;
+      try {
+        const res = await fetch(`/api/admin/hf/files?repoId=${encodeURIComponent(id)}`);
+        const data = await res.json();
+        if (!res.ok) { this.dlFileError = data.error || 'Failed to fetch files'; return; }
+        if (data.files.length === 0) { this.dlFileError = `No .rkllm files found in ${id}.`; return; }
+        // Kick off all downloads in parallel
+        await Promise.all(data.files.map(f => this.startDownload(f.name)));
+        // Scroll to the queue
+        this.$nextTick(() => {
+          const el = this.$refs.downloadCard?.$el || this.$refs.downloadCard;
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      } catch (e) {
+        this.dlFileError = 'Network error: ' + e.message;
+      } finally {
+        this.dlLoading = false;
+        this.loadingRepoId = null;
+      }
     },
     async fetchRepoFiles() {
       if (!this.dlRepoId.trim()) return;
