@@ -1,3 +1,12 @@
+# [0.7.0-alpha.30](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.29...v0.7.0-alpha.30) (2026-06-01)
+
+
+### Bug Fixes
+
+* **ci:** exclude node_modules/npm from Trivy scan — vulnerabilities are in npm's own bundled deps, not our app ([160e471](https://github.com/mafischer/oRKLLM/commit/160e47170fbd87aa3cdf3cd7db3d4cd78c2cb8a9))
+* **ci:** remove overbroad .cache skip from Trivy, keep only node_modules/npm ([1010273](https://github.com/mafischer/oRKLLM/commit/101027385d38737fb30ce6a07384fa01387b11e3))
+* **security:** skip node_modules/npm in Trivy — bundled deps unreachable via overrides ([49dfa6c](https://github.com/mafischer/oRKLLM/commit/49dfa6ccfd490a08d100721caae12bad943d3d50))
+
 # [0.7.0-alpha.29](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.28...v0.7.0-alpha.29) (2026-06-01)
 
 
