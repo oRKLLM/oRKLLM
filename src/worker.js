@@ -53,9 +53,8 @@ process.on('message', async (msg) => {
             const ret = nativeAddon.init_model(modelPath, options || {});
             if (ret !== 0) {
               console.error(`[Worker] rkllm_init returned error code: ${ret}`);
-              console.error(`[Worker] This usually means an RKLLM runtime version mismatch.`);
-              console.error(`[Worker] The model was compiled for a different RKLLM version than what is installed on the board.`);
-              console.error(`[Worker] Board runtime: check 'I rkllm: rkllm-runtime version:' above. Model must match.`);
+              console.error(`[Worker] Possible causes: wrong target platform (RK3576 vs RK3588), runtime version mismatch, or corrupt model file.`);
+              console.error(`[Worker] Check journalctl -u orkllm for 'E rkllm:' lines with the specific reason.`);
               process.send({ type: 'loaded', status: ret, error: `rkllm_init failed (code ${ret}): likely RKLLM runtime version mismatch. See server logs.` });
               return;
             }

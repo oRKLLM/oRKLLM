@@ -204,7 +204,12 @@ class EnginePool {
 
       const versionHint = parsedVersion ? ` (requires runtime v${parsedVersion})` : '';
       throw Object.assign(
-        new Error(`No compatible rkllm runtime found for ${modelName}${versionHint}. Tried: ${candidates.join(', ')}`),
+        new Error(
+          `Failed to load ${modelName}${versionHint}. All runtimes were tried and failed. ` +
+          `Check journalctl -u orkllm for 'E rkllm:' lines — common causes: wrong target platform ` +
+          `(model built for RK3588 but board is RK3576, or vice versa), corrupt model file, or ` +
+          `insufficient NPU memory. Tried: ${candidates.join(', ')}`
+        ),
         { code: 'RUNTIME_MISSING', runtimeVersion: parsedVersion }
       );
     })();
