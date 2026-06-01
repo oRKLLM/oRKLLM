@@ -29,14 +29,22 @@ class EnginePool {
 
   setPin(pinned) {
     this.pinned = pinned;
-    if (!pinned) {
-      this.resetIdleTimer(); // restart idle countdown when unpinned
-    } else {
+    if (pinned) {
+      dbSetSetting('pinned_model', this.activeModel?.name ?? '');
       if (this.idleTimer) {
         clearTimeout(this.idleTimer);
         this.idleTimer = null;
       }
+    } else {
+      dbSetSetting('pinned_model', '');
+      this.resetIdleTimer();
     }
+  }
+
+  // Returns the persisted pinned model name (or null if none)
+  static getPinnedModel() {
+    const v = dbGetSetting('pinned_model');
+    return v || null;
   }
 
   setIdleTimeout(minutes) {
@@ -162,6 +170,7 @@ class EnginePool {
     this.activeModel = null;
     this.isLoaded = false;
     this.pinned = false;
+    dbSetSetting('pinned_model', '');
   }
 
   async generate(modelName, prompt, options, onToken, cachePaths = {}) {

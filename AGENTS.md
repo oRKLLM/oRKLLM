@@ -141,7 +141,7 @@ graph TD
 | `frontend/src/views/Chat.vue` | Full streaming chat against OpenAI-compatible API |
 | `frontend/src/views/SiteManagement.vue` | Admin-only: user CRUD, OIDC/SAML config, audit log |
 | `frontend/src/views/Login.vue` | Login page; shows SSO button when OIDC/SAML configured |
-| `e2e/orkllm.spec.js` | Playwright E2E suite (17 tests — core flow, chat history, partial persist) |
+| `e2e/orkllm.spec.js` | Playwright E2E suite (18 tests — core flow, chat history, pin persistence) |
 | `e2e/rbac.spec.js` | Playwright E2E suite (17 tests — RBAC, trusted proxy (single + multi-IP/CIDR), mock OIDC SSO, Keycloak integration) |
 | `e2e/regression.spec.js` | Playwright E2E suite (10 tests — UI regression: navbar, theme, user drawer) |
 

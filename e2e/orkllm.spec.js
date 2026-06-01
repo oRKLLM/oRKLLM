@@ -531,3 +531,41 @@ test('Chat: partial assistant response persisted when navigating away during gen
 
   await unloadModel(page);
 });
+
+// ---------------------------------------------------------------------------
+// Test 18: Pin model — persists to DB and clears on unload
+// ---------------------------------------------------------------------------
+test('Pin model: pin state saved to DB and cleared on unload', async ({ page }) => {
+  await login(page);
+  await loadModel(page);
+
+  // Pin via API
+  const pinRes = await page.evaluate(async () => {
+    const r = await fetch('/api/admin/pin', { method: 'POST' });
+    return r.json();
+  });
+  expect(pinRes.pinned).toBe(true);
+
+  // Status reflects pinned=true
+  const status = await page.evaluate(async () => {
+    const r = await fetch('/api/admin/status');
+    return r.json();
+  });
+  expect(status.pinned).toBe(true);
+
+  // pinnedModel persisted in global-settings
+  const settings = await page.evaluate(async () => {
+    const r = await fetch('/api/admin/global-settings');
+    return r.json();
+  });
+  expect(settings.settings.pinnedModel).toBeTruthy();
+
+  // Unload clears pin in DB
+  await page.evaluate(async () => fetch('/api/admin/unload', { method: 'POST' }));
+
+  const settingsAfter = await page.evaluate(async () => {
+    const r = await fetch('/api/admin/global-settings');
+    return r.json();
+  });
+  expect(settingsAfter.settings.pinnedModel).toBeFalsy();
+});

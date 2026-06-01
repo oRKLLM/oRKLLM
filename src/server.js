@@ -11,6 +11,8 @@ import adminRoutes from './admin/routes.js';
 import authRoutes from './auth/routes.js';
 import { getSystemMetrics } from './monitor.js';
 import { getStats } from './stats.js';
+import pool from './pool.js';
+import { MODELS_DIR } from './config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -48,6 +50,7 @@ process.stderr.write = function (chunk, encoding, callback) {
 // Trusted proxy: trust X-Forwarded-* headers from nginx/reverse proxies
 // Configurable via ORKLLM_TRUSTED_PROXY env var or stored setting
 import { dbGetSetting } from './db.js';
+import os from 'os';
 
 function parseTrustedProxy(value) {
   if (!value) return false;
@@ -163,14 +166,45 @@ if (fs.existsSync(distPath)) {
   });
 }
 
+// Auto-load pinned model on startup if RAM is sufficient
+async function autoLoadPinnedModel() {
+  const pinnedName = pool.constructor.getPinnedModel();
+  if (!pinnedName) return;
+
+  const modelPath = path.join(MODELS_DIR, pinnedName);
+  if (!fs.existsSync(modelPath)) {
+    fastify.log.warn(`[Autoload] Pinned model not found on disk: ${pinnedName}`);
+    return;
+  }
+
+  const modelSize = fs.statSync(modelPath).size;
+  const freeMem = os.freemem();
+  // Require at least 1.2× the model file size free to attempt load
+  if (freeMem < modelSize * 1.2) {
+    fastify.log.warn(`[Autoload] Insufficient RAM to auto-load pinned model ${pinnedName} ` +
+      `(free: ${Math.round(freeMem / 1024 / 1024)}MB, model: ${Math.round(modelSize / 1024 / 1024)}MB)`);
+    return;
+  }
+
+  fastify.log.info(`[Autoload] Loading pinned model: ${pinnedName}`);
+  try {
+    await pool.load(pinnedName);
+    pool.setPin(true);
+    fastify.log.info(`[Autoload] Pinned model loaded: ${pinnedName}`);
+  } catch (e) {
+    fastify.log.error(`[Autoload] Failed to load pinned model ${pinnedName}: ${e.message}`);
+  }
+}
+
 // Bootstrap Server
 const start = async () => {
   const host = process.env.ORKLLM_HOST || '127.0.0.1';
   const port = parseInt(process.env.ORKLLM_PORT || '8000');
-  
+
   try {
     await fastify.listen({ port, host });
     fastify.log.info(`oRKLLM server started at http://${host}:${port}`);
+    await autoLoadPinnedModel();
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);
