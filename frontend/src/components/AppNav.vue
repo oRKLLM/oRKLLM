@@ -107,6 +107,14 @@
       ></v-list-item>
       <v-divider></v-divider>
       <v-list-item
+        prepend-icon="mdi-github"
+        title="Contribute"
+        href="https://github.com/mafischer/oRKLLM"
+        target="_blank"
+        rel="noopener"
+      ></v-list-item>
+      <v-divider></v-divider>
+      <v-list-item
         prepend-icon="mdi-logout"
         title="Sign Out"
         @click="$emit('logout')"
