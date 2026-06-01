@@ -1,3 +1,16 @@
+# [0.7.0-alpha.23](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.22...v0.7.0-alpha.23) (2026-06-01)
+
+
+### Bug Fixes
+
+* correct runtime_sync.js import path in runtimes endpoint (./→../) ([4649bbe](https://github.com/mafischer/oRKLLM/commit/4649bbe76332a73a9979019d644167b74ba5a5ba))
+
+
+### Features
+
+* **runtime:** show JIT download progress dialog when runtime is fetched during model load ([c28658b](https://github.com/mafischer/oRKLLM/commit/c28658b9abd22afad5064b3e170550ef76364a4a))
+* **settings:** trigger immediate runtime sync when auto-download is enabled ([e2b8353](https://github.com/mafischer/oRKLLM/commit/e2b835314f17d66515af4e83971cfacb59bb3005))
+
 # [0.7.0-alpha.22](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.21...v0.7.0-alpha.22) (2026-06-01)
 
 
