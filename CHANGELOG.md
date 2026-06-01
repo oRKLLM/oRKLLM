@@ -1,3 +1,10 @@
+# [0.7.0-alpha.15](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.14...v0.7.0-alpha.15) (2026-06-01)
+
+
+### Features
+
+* **models:** show model weight size in HF search and collection results ([2a77eba](https://github.com/mafischer/oRKLLM/commit/2a77ebadcd0e8c65e20fb5bbe52e4a8c75e77e63))
+
 # [0.7.0-alpha.14](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.13...v0.7.0-alpha.14) (2026-06-01)
 
 
