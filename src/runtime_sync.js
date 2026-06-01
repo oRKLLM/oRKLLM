@@ -20,17 +20,23 @@ function httpsGet(url) {
   });
 }
 
-function downloadFile(url, dest) {
+function downloadFile(url, dest, onProgress) {
   return new Promise((resolve, reject) => {
     const opts = new URL(url);
     const req = https.get({ hostname: opts.hostname, path: opts.pathname + opts.search, headers: { 'User-Agent': 'oRKLLM' } }, res => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        return resolve(downloadFile(res.headers.location, dest));
+        return resolve(downloadFile(res.headers.location, dest, onProgress));
       }
       if (res.statusCode !== 200) {
         return reject(new Error(`HTTP ${res.statusCode} for ${url}`));
       }
+      const total = parseInt(res.headers['content-length'] || '0', 10);
+      let received = 0;
       const stream = fs.createWriteStream(dest + '.tmp');
+      res.on('data', chunk => {
+        received += chunk.length;
+        if (onProgress) onProgress(received, total);
+      });
       res.pipe(stream);
       stream.on('finish', () => {
         stream.close();
@@ -41,6 +47,19 @@ function downloadFile(url, dest) {
     });
     req.on('error', reject);
   });
+}
+
+// Live sync state — polled by the UI during JIT downloads
+const syncState = {
+  active: false,
+  version: null,
+  filename: null,
+  bytesDown: 0,
+  totalBytes: 0,
+};
+
+export function getSyncState() {
+  return { ...syncState };
 }
 
 // Check if a specific version is already available locally
@@ -89,14 +108,28 @@ export async function syncRuntimes(requiredVersion = null) {
     if (fs.existsSync(dest)) continue;
 
     console.log(`[RuntimeSync] Downloading ${asset.name}...`);
+    syncState.active = true;
+    syncState.version = release.tag_name;
+    syncState.filename = asset.name;
+    syncState.bytesDown = 0;
+    syncState.totalBytes = asset.size ?? 0;
     try {
-      await downloadFile(asset.browser_download_url, dest);
+      await downloadFile(asset.browser_download_url, dest, (received, total) => {
+        syncState.bytesDown = received;
+        if (total) syncState.totalBytes = total;
+      });
       fs.chmodSync(dest, 0o755);
       console.log(`[RuntimeSync] Downloaded ${asset.name}`);
       downloaded++;
     } catch (e) {
       console.error(`[RuntimeSync] Failed to download ${asset.name}: ${e.message}`);
       try { fs.unlinkSync(dest + '.tmp'); } catch {}
+    } finally {
+      syncState.active = false;
+      syncState.version = null;
+      syncState.filename = null;
+      syncState.bytesDown = 0;
+      syncState.totalBytes = 0;
     }
   }
 

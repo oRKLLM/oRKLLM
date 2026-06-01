@@ -273,14 +273,20 @@
       </v-card>
     </v-bottom-sheet>
   </v-main>
+
+  <RuntimeSyncDialog
+    :model-value="showRuntimeSyncDialog"
+    :sync-state="runtimeSyncState"
+  />
 </template>
 
 <script>
 import AppNav from '../components/AppNav.vue';
+import RuntimeSyncDialog from '../components/RuntimeSyncDialog.vue';
 
 export default {
   name: 'Chat',
-  components: { AppNav },
+  components: { AppNav, RuntimeSyncDialog },
   data: () => ({
     user: { username: 'admin', role: 'admin', authProvider: 'local' },
     models: [],
@@ -298,6 +304,9 @@ export default {
       max_tokens: 1024
     },
     generating: false,
+    showRuntimeSyncDialog: false,
+    runtimeSyncState: { active: false, version: null, filename: null, bytesDown: 0, totalBytes: 0 },
+    runtimeSyncPoller: null,
     messageQueue: [],
     abortController: null,
     appVersion: __APP_VERSION__,
@@ -333,8 +342,26 @@ export default {
           { type: 'application/json' })
       );
     }
+    if (this.runtimeSyncPoller) clearInterval(this.runtimeSyncPoller);
   },
   methods: {
+    startRuntimeSyncPoller() {
+      if (this.runtimeSyncPoller) return;
+      this.runtimeSyncPoller = setInterval(async () => {
+        try {
+          const res = await fetch('/api/admin/runtimes');
+          if (!res.ok) return;
+          const data = await res.json();
+          this.runtimeSyncState = data.syncState || {};
+          this.showRuntimeSyncDialog = !!data.syncState?.active;
+          if (!data.syncState?.active) {
+            clearInterval(this.runtimeSyncPoller);
+            this.runtimeSyncPoller = null;
+            this.showRuntimeSyncDialog = false;
+          }
+        } catch (e) {}
+      }, 600);
+    },
     async fetchAuth() {
       try {
         const res = await fetch('/api/admin/auth-status');
@@ -370,6 +397,7 @@ export default {
         return;
       }
       this.loadingModel = true;
+      this.startRuntimeSyncPoller();
       try {
         const res = await fetch('/api/admin/load', {
           method: 'POST',
@@ -392,6 +420,8 @@ export default {
         alert('Network error');
       } finally {
         this.loadingModel = false;
+        if (this.runtimeSyncPoller) { clearInterval(this.runtimeSyncPoller); this.runtimeSyncPoller = null; }
+        this.showRuntimeSyncDialog = false;
       }
     },
 

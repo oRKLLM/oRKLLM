@@ -616,15 +616,22 @@
         </div>
       </v-card>
     </v-dialog>
+
+    <!-- JIT runtime download progress dialog -->
+    <RuntimeSyncDialog
+      :model-value="showRuntimeSyncDialog"
+      :sync-state="runtimeSyncState"
+    />
   </v-main>
 </template>
 
 <script>
 import AppNav from '../components/AppNav.vue';
+import RuntimeSyncDialog from '../components/RuntimeSyncDialog.vue';
 
 export default {
   name: 'Models',
-  components: { AppNav },
+  components: { AppNav, RuntimeSyncDialog },
   data: () => ({
     user: { username: 'admin', role: 'admin', authProvider: 'local' },
     tab: 'manager',
@@ -635,6 +642,9 @@ export default {
     timeoutSlider: 5,
 
     loadingRepoId: null,
+    showRuntimeSyncDialog: false,
+    runtimeSyncState: { active: false, version: null, filename: null, bytesDown: 0, totalBytes: 0 },
+    runtimeSyncPoller: null,
 
     // Runtime download prompt
     runtimeDialog: false,
@@ -727,6 +737,7 @@ export default {
   },
   beforeUnmount() {
     if (this.dlPollTimer) clearInterval(this.dlPollTimer);
+    this.stopRuntimeSyncPoller?.();
   },
   watch: {
     tab(val) {
@@ -878,8 +889,29 @@ export default {
       }
       await this._doLoadModel(modelId);
     },
+    startRuntimeSyncPoller() {
+      if (this.runtimeSyncPoller) return;
+      this.runtimeSyncPoller = setInterval(async () => {
+        try {
+          const res = await fetch('/api/admin/runtimes');
+          if (!res.ok) return;
+          const data = await res.json();
+          this.runtimeSyncState = data.syncState || {};
+          this.showRuntimeSyncDialog = !!data.syncState?.active;
+          if (!data.syncState?.active) this.stopRuntimeSyncPoller();
+        } catch (e) {}
+      }, 600);
+    },
+    stopRuntimeSyncPoller() {
+      if (this.runtimeSyncPoller) {
+        clearInterval(this.runtimeSyncPoller);
+        this.runtimeSyncPoller = null;
+      }
+      this.showRuntimeSyncDialog = false;
+    },
     async _doLoadModel(modelId) {
       this.loadingModelId = modelId;
+      this.startRuntimeSyncPoller();
       try {
         const saved = this.modelSettings[modelId] || {};
         const res = await fetch('/api/admin/load', {
@@ -897,6 +929,7 @@ export default {
         alert('Network connection error');
       } finally {
         this.loadingModelId = null;
+        this.stopRuntimeSyncPoller();
       }
     },
     async downloadAndLoad() {
