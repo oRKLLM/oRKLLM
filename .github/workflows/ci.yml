@@ -17,7 +17,11 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    # Expose test count so the badge job can use it
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22, 24]
+    # Expose test count so the badge job can use it (from Node 22 run only)
     outputs:
       tests_passed: ${{ steps.results.outputs.passed }}
       tests_total:  ${{ steps.results.outputs.total }}
@@ -84,7 +88,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
           cache: 'npm'
 
       - name: Install root dependencies
@@ -152,7 +156,7 @@ jobs:
 
       - name: Parse test results
         id: results
-        if: always()
+        if: always() && matrix.node-version == 22
         run: |
           if [ -f /tmp/pw-results.json ]; then
             PASSED=$(node -e "const s=JSON.parse(require('fs').readFileSync('/tmp/pw-results.json')).stats||{}; console.log(s.expected??s.passed??0)")
