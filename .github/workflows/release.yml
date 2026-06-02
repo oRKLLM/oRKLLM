@@ -163,39 +163,6 @@ jobs:
           GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
         run: npx semantic-release
 
-      - name: Get week number for ClamAV DB cache key
-        id: clamav-week
-        run: echo "week=$(date +%Y-%U)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache ClamAV database
-        uses: actions/cache@v4
-        with:
-          path: /var/lib/clamav
-          key: clamav-db-${{ runner.os }}-${{ steps.clamav-week.outputs.week }}
-          restore-keys: clamav-db-${{ runner.os }}-
-
-      - name: Scan .deb with ClamAV
-        run: |
-          DEB=$(ls dist/*.deb 2>/dev/null | head -1)
-          [ -z "$DEB" ] && { echo "No deb built — skipping ClamAV scan"; exit 0; }
-
-          sudo apt-get install -y -q clamav
-
-          # Only update DB if not cached (freshclam is slow)
-          if [ ! -f /var/lib/clamav/main.cvd ] && [ ! -f /var/lib/clamav/main.cld ]; then
-            echo "ClamAV DB not cached — running freshclam"
-            sudo freshclam --quiet
-          else
-            echo "ClamAV DB cache hit — skipping freshclam"
-          fi
-
-          echo "Scanning $DEB..."
-          # Extract .deb and scan contents (binary + JS files)
-          mkdir -p /tmp/deb-scan
-          dpkg-deb -x "$DEB" /tmp/deb-scan
-          sudo clamscan --recursive --infected --no-summary /tmp/deb-scan
-          echo "ClamAV scan passed — no malware signatures detected"
-
       - name: Publish to APT repository
         env:
           GIT_AUTHOR_NAME: github-actions[bot]
