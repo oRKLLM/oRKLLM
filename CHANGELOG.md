@@ -1,3 +1,10 @@
+# [0.8.0-alpha.2](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.1...v0.8.0-alpha.2) (2026-06-02)
+
+
+### Bug Fixes
+
+* **spec-decode:** rename 'dflash' to 'speculative' — applies to any draft model pairing ([192789a](https://github.com/mafischer/oRKLLM/commit/192789ad3cb253cbaad2c2d42a45be514f682d60))
+
 # [0.8.0-alpha.1](https://github.com/mafischer/oRKLLM/compare/v0.7.0...v0.8.0-alpha.1) (2026-06-02)
 
 
