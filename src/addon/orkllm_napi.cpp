@@ -197,30 +197,33 @@ int GlobalLLMCallback(RKLLMResult* result, void* userdata, LLMCallState state) {
     float gen_time = 0;
     int gen_tokens = 0;
     
+    int token_id = -1;
     if (result != nullptr) {
         if (result->text != nullptr) {
             text = result->text;
         }
+        token_id = result->token_id;
         prefill_time = result->perf.prefill_time_ms;
         prefill_tokens = result->perf.prefill_tokens;
         gen_time = result->perf.generate_time_ms;
         gen_tokens = result->perf.generate_tokens;
     }
-    
+
     // Broadcast token back to JS thread-safely
-    ctx->tsfn.NonBlockingCall([text, state, prefill_time, prefill_tokens, gen_time, gen_tokens](Napi::Env env, Napi::Function jsCallback) {
+    ctx->tsfn.NonBlockingCall([text, token_id, state, prefill_time, prefill_tokens, gen_time, gen_tokens](Napi::Env env, Napi::Function jsCallback) {
         Napi::Object resultObj = Napi::Object::New(env);
         resultObj.Set("text", Napi::String::New(env, text));
+        resultObj.Set("token_id", Napi::Number::New(env, token_id));
         resultObj.Set("state", Napi::Number::New(env, static_cast<int>(state)));
-        
+
         Napi::Object perfObj = Napi::Object::New(env);
         perfObj.Set("prefill_time_ms", Napi::Number::New(env, prefill_time));
         perfObj.Set("prefill_tokens", Napi::Number::New(env, prefill_tokens));
         perfObj.Set("generate_time_ms", Napi::Number::New(env, gen_time));
         perfObj.Set("generate_tokens", Napi::Number::New(env, gen_tokens));
-        
+
         resultObj.Set("perf", perfObj);
-        
+
         jsCallback.Call({ resultObj });
     });
     
@@ -349,6 +352,9 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
         ? inputObj.Get("loadCachePath").As<Napi::String>().Utf8Value() : "";
     std::string saveCachePath = inputObj.Has("saveCachePath") && inputObj.Get("saveCachePath").IsString()
         ? inputObj.Get("saveCachePath").As<Napi::String>().Utf8Value() : "";
+    // infer_mode: 0=RKLLM_INFER_GENERATE (default), 2=RKLLM_INFER_GET_LOGITS (spec decode verify)
+    int inferMode = inputObj.Has("infer_mode") && inputObj.Get("infer_mode").IsNumber()
+        ? inputObj.Get("infer_mode").As<Napi::Number>().Int32Value() : 0;
 
     RequestContext* ctx = new RequestContext();
     ctx->tsfn = Napi::ThreadSafeFunction::New(
@@ -373,7 +379,8 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
 
         RKLLMInferParam inferParam;
         memset(&inferParam, 0, sizeof(RKLLMInferParam));
-        inferParam.mode = RKLLM_INFER_GENERATE;
+        // infer_mode: 0=generate (default), 2=get_logits (for speculative decode verification)
+        inferParam.mode = static_cast<RKLLMInferMode>(inferMode);
         inferParam.keep_history = 0;
 
         RKLLMPromptCacheParam cacheParam;

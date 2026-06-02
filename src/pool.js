@@ -26,6 +26,11 @@ class EnginePool {
 
     this.queue = [];
     this.processingQueue = false;
+
+    // Speculative decoding — draft model worker (null when spec decode disabled)
+    this.draftWorker = null;
+    this.draftModel = null; // { name, path, options, isMock }
+    this.draftIsLoaded = false;
   }
 
   setPin(pinned) {
@@ -274,6 +279,203 @@ class EnginePool {
     this.isLoaded = false;
     this.pinned = false;
     dbSetSetting('pinned_model', '');
+  }
+
+  // ── Draft model management ──────────────────────────────────────────────
+
+  async loadDraft(draftModelName) {
+    if (this.draftIsLoaded && this.draftModel?.name === draftModelName) return;
+    await this.unloadDraft();
+
+    const draftPath = path.join(MODELS_DIR, draftModelName);
+    if (!fs.existsSync(draftPath)) {
+      throw new Error(`Draft model not found: ${draftPath}`);
+    }
+
+    const candidates = EnginePool.runtimeCandidates(draftModelName);
+    for (const libPath of candidates) {
+      const result = await this._tryLoadWorker('draft', draftModelName, draftPath, {}, libPath);
+      if (result.success) {
+        this.draftIsLoaded = true;
+        this.draftModel = { name: draftModelName, path: draftPath, isMock: result.isMock, libPath };
+        console.log(`[EnginePool] Draft model loaded: ${draftModelName}`);
+        return;
+      }
+      if (this.draftWorker) { this.draftWorker.kill(); this.draftWorker = null; }
+    }
+    throw new Error(`No compatible runtime for draft model: ${draftModelName}`);
+  }
+
+  async unloadDraft() {
+    if (this.draftWorker) {
+      this.draftWorker.kill();
+      this.draftWorker = null;
+    }
+    this.draftModel = null;
+    this.draftIsLoaded = false;
+  }
+
+  // Like _tryLoad but targets the draftWorker slot
+  _tryLoadWorker(slot, modelName, modelPath, options, libPath) {
+    const workerPath = path.join(__dirname, 'worker.js');
+    if (slot === 'draft') {
+      this.draftWorker = fork(workerPath);
+    }
+    const worker = slot === 'draft' ? this.draftWorker : this.worker;
+
+    return new Promise((resolve) => {
+      const loadTimeout = setTimeout(() => {
+        resolve({ success: false, error: 'Timeout (60s)' });
+      }, 60000);
+
+      const onMessage = (msg) => {
+        if (msg.type !== 'loaded') return;
+        clearTimeout(loadTimeout);
+        worker.removeListener('exit', onExit);
+        worker.removeListener('message', onMessage);
+        if (msg.status === 0) {
+          resolve({ success: true, isMock: msg.isMock });
+        } else {
+          resolve({ success: false, error: msg.error || `status ${msg.status}` });
+        }
+      };
+
+      const onExit = (code, signal) => {
+        clearTimeout(loadTimeout);
+        worker.removeListener('message', onMessage);
+        if (slot === 'draft') this.draftWorker = null;
+        else this.worker = null;
+        resolve({ success: false, error: `Worker exited (${signal || code})` });
+      };
+
+      worker.on('message', onMessage);
+      worker.once('exit', onExit);
+      worker.send({ type: 'load', modelPath, options, libPath });
+    });
+  }
+
+  // ── Speculative decoding ────────────────────────────────────────────────
+
+  // Run k draft steps, return array of { text, token_id } for each generated token
+  _runDraftSteps(prompt, k) {
+    return new Promise((resolve, reject) => {
+      if (!this.draftWorker || !this.draftIsLoaded) {
+        return reject(new Error('Draft model not loaded'));
+      }
+      const tokens = [];
+      let promptSoFar = prompt;
+
+      const runOne = () => {
+        if (tokens.length >= k) return resolve(tokens);
+
+        const onMsg = (msg) => {
+          if (msg.type === 'token') {
+            if (msg.state === 0 && msg.text) {
+              tokens.push({ text: msg.text, token_id: msg.token_id });
+              promptSoFar += msg.text;
+              this.draftWorker.removeListener('message', onMsg);
+              runOne();
+            } else if (msg.state === 2 || msg.state === 3) {
+              this.draftWorker.removeListener('message', onMsg);
+              resolve(tokens); // draft finished early
+            }
+          }
+        };
+        this.draftWorker.on('message', onMsg);
+        // Each draft step: feed accumulated prompt, get one token, then stop via max_new_tokens=1
+        // We rely on RKLLM generating one token at a time via KV cache continuation
+        this.draftWorker.send({ type: 'run', prompt: promptSoFar });
+      };
+
+      runOne();
+    });
+  }
+
+  // Verify draft tokens with target model using get_logits mode.
+  // Returns array of accepted tokens (longest matching prefix).
+  _verifyDraftTokens(prompt, draftTokens) {
+    return new Promise((resolve, reject) => {
+      if (!this.worker || !this.isLoaded) {
+        return reject(new Error('Target model not loaded'));
+      }
+
+      // Feed target: original prompt + all draft tokens concatenated
+      const verifyPrompt = prompt + draftTokens.map(t => t.text).join('');
+      const accepted = [];
+
+      // Run target from the prompt, collect tokens until mismatch or k accepted
+      let draftIdx = 0;
+      const onMsg = (msg) => {
+        if (msg.type === 'token') {
+          if (msg.state === 0 && msg.text) {
+            const draft = draftTokens[draftIdx];
+            if (draft && msg.token_id === draft.token_id) {
+              // Tokens match — accept
+              accepted.push({ text: msg.text, token_id: msg.token_id });
+              draftIdx++;
+              if (draftIdx >= draftTokens.length) {
+                // All draft tokens accepted — also include this bonus token
+                this.worker.removeListener('message', onMsg);
+                if (this.worker) this.worker.send({ type: 'abort' });
+                resolve({ accepted, bonus: null, targetToken: null });
+              }
+            } else {
+              // Mismatch — use target's token, reject rest
+              this.worker.removeListener('message', onMsg);
+              if (this.worker) this.worker.send({ type: 'abort' });
+              resolve({ accepted, bonus: null, targetToken: { text: msg.text, token_id: msg.token_id } });
+            }
+          } else if (msg.state === 2 || msg.state === 3) {
+            this.worker.removeListener('message', onMsg);
+            resolve({ accepted, bonus: null, targetToken: null });
+          }
+        }
+      };
+      this.worker.on('message', onMsg);
+      this.worker.send({ type: 'run', prompt: verifyPrompt, infer_mode: 0 });
+    });
+  }
+
+  // Speculative decoding generation loop
+  async generateSpeculative(modelName, draftModelName, prompt, options, onToken, k = 4) {
+    // Ensure both models are loaded
+    await this.load(modelName, options);
+    await this.loadDraft(draftModelName);
+
+    let currentPrompt = prompt;
+    let totalTokens = 0;
+    const maxTokens = options.max_new_tokens || 512;
+    let done = false;
+
+    while (!done && totalTokens < maxTokens) {
+      // 1. Draft phase: generate k candidate tokens
+      const draftTokens = await this._runDraftSteps(currentPrompt, k);
+      if (draftTokens.length === 0) break;
+
+      // 2. Verify phase: target model verifies draft
+      const { accepted, targetToken } = await this._verifyDraftTokens(currentPrompt, draftTokens);
+
+      // 3. Emit accepted tokens
+      for (const tok of accepted) {
+        onToken({ text: tok.text, state: 0, perf: {} });
+        currentPrompt += tok.text;
+        totalTokens++;
+        if (totalTokens >= maxTokens) { done = true; break; }
+      }
+
+      // 4. If mismatch, emit target's correction token
+      if (!done && targetToken) {
+        onToken({ text: targetToken.text, state: 0, perf: {} });
+        currentPrompt += targetToken.text;
+        totalTokens++;
+        if (totalTokens >= maxTokens) done = true;
+      }
+
+      // 5. If no accepted tokens and no target token, generation is complete
+      if (accepted.length === 0 && !targetToken) done = true;
+    }
+
+    onToken({ text: '', state: 2, perf: { prefill_time_ms: 0, prefill_tokens: 0, generate_time_ms: 0, generate_tokens: totalTokens } });
   }
 
   async generate(modelName, prompt, options, onToken, cachePaths = {}) {

@@ -87,7 +87,7 @@ process.on('message', async (msg) => {
   }
 
   else if (msg.type === 'run') {
-    const { prompt, loadCachePath, saveCachePath } = msg;
+    const { prompt, loadCachePath, saveCachePath, infer_mode } = msg;
     if (!engine) {
       process.send({ type: 'error', message: 'No active engine loaded' });
       return;
@@ -101,7 +101,8 @@ process.on('message', async (msg) => {
       } else {
         // Native addon run blocks until completion in its internal thread,
         // but it executes callbacks on our JS thread via ThreadSafeFunction
-        engine.run({ prompt, loadCachePath, saveCachePath }, (res) => {
+        // infer_mode: 0=generate (default), 2=get_logits (speculative decode verification)
+        engine.run({ prompt, loadCachePath, saveCachePath, infer_mode: infer_mode || 0 }, (res) => {
           process.send({ type: 'token', ...res });
         });
       }

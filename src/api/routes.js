@@ -185,7 +185,18 @@ export default async function apiRoutes(fastify, options) {
 
        try {
         const cachePaths = loadCachePath || saveCachePath ? { loadCachePath, saveCachePath } : {};
-        const finalResult = await pool.generate(model, prompt, modelOptions, onToken, cachePaths);
+        // Route to speculative decoding if configured for this model
+        const specMode = saved.speculative_mode;
+        const draftModel = saved.draft_model;
+        const specK = saved.spec_draft_tokens || 4;
+        let finalResult;
+        if (specMode === 'dflash' && draftModel) {
+          console.log(`[Spec] Using speculative decode: target=${model} draft=${draftModel} k=${specK}`);
+          await pool.generateSpeculative(model, draftModel, prompt, modelOptions, onToken, specK);
+          finalResult = { perf: {} };
+        } else {
+          finalResult = await pool.generate(model, prompt, modelOptions, onToken, cachePaths);
+        }
         recordRequest(finalResult.perf);
         if (cacheEnabled && saveCachePath) {
           const nextKey = cacheKey(model, trimmed);
