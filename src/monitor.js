@@ -25,18 +25,26 @@ async function getSmartTbw(device) {
   });
 }
 
-// diskLayout is slow — cache it and refresh every 30 seconds
-let diskLayoutCache = [];
-let diskLayoutLastFetch = 0;
-async function getCachedDiskLayout() {
+// diskLayout + TBW are slow — cache together, refresh every 30 seconds.
+// lastFetch = 0 so the first metrics call fetches immediately.
+let diskCache = [];  // [{ device, type, size, smartStatus, tbw }]
+let diskCacheLastFetch = 0;
+async function getCachedDisks() {
   const now = Date.now();
-  if (now - diskLayoutLastFetch > 30000) {
+  if (now - diskCacheLastFetch > 30000) {
     try {
-      diskLayoutCache = await si.diskLayout();
-      diskLayoutLastFetch = now;
+      const layout = await si.diskLayout();
+      diskCache = await Promise.all(layout.map(async d => ({
+        device: d.device || d.name || '—',
+        type:   d.type   || '—',
+        size:   d.size   || 0,
+        smartStatus: d.smartStatus || 'unknown',
+        tbw: await getSmartTbw(d.device || d.name),
+      })));
+      diskCacheLastFetch = now;
     } catch {}
   }
-  return diskLayoutCache;
+  return diskCache;
 }
 
 /**
@@ -168,14 +176,7 @@ export async function getSystemMetrics() {
   // 7. Disk layout with SMART status + TBW (cached, refreshed every 30s)
   let disks = [];
   try {
-    const layout = await getCachedDiskLayout();
-    disks = await Promise.all(layout.map(async d => ({
-      device: d.device || d.name || '—',
-      type: d.type || '—',
-      size: d.size || 0,
-      smartStatus: d.smartStatus || 'unknown',
-      tbw: await getSmartTbw(d.device || d.name),
-    })));
+    disks = await getCachedDisks();
   } catch (e) {
     // ignore
   }
