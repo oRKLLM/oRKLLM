@@ -190,7 +190,7 @@ export default async function apiRoutes(fastify, options) {
         const draftModel = saved.draft_model;
         const specK = saved.spec_draft_tokens || 4;
         let finalResult;
-        if (specMode === 'dflash' && draftModel) {
+        if (specMode === 'speculative' && draftModel) {
           console.log(`[Spec] Using speculative decode: target=${model} draft=${draftModel} k=${specK}`);
           await pool.generateSpeculative(model, draftModel, prompt, modelOptions, onToken, specK);
           finalResult = { perf: {} };

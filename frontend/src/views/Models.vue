@@ -321,14 +321,14 @@
                       </div>
                       <v-select
                         v-model="settingsForm.speculative_mode"
-                        :items="[{title:'Disabled',value:null},{title:'DFlash (draft model)',value:'dflash'},{title:'Native MTP (Qwen3 only)',value:'native_mtp'}]"
+                        :items="[{title:'Disabled',value:null},{title:'Speculative Decoding (draft model)',value:'speculative'},{title:'Native MTP (Qwen3 only)',value:'native_mtp'}]"
                         label="Speculative Mode"
                         density="compact"
                         variant="outlined"
                         hide-details
                         class="mb-3"
                       ></v-select>
-                      <template v-if="settingsForm.speculative_mode === 'dflash'">
+                      <template v-if="settingsForm.speculative_mode === 'speculative'">
                         <v-select
                           v-model="settingsForm.draft_model"
                           :items="[{title:'(none)',value:null},...models.map(m=>({title:m.id,value:m.id}))]"
