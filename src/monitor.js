@@ -7,17 +7,22 @@ import pool from './pool.js';
 
 const execFileAsync = promisify(execFile);
 
-// Read TBW (total bytes written) from smartctl JSON for a device
+// Read TBW (total bytes written) from smartctl JSON for a device.
+// smartctl exits non-zero on partial success (e.g. some ioctls need root)
+// but still writes valid JSON to stdout — parse it regardless of exit code.
 async function getSmartTbw(device) {
-  try {
-    const { stdout } = await execFileAsync('smartctl', ['-a', device, '-j'], { timeout: 5000 });
-    const d = JSON.parse(stdout);
-    const duw = d.nvme_smart_health_information_log?.data_units_written;
-    // NVMe data_units_written is in 512kB units
-    return duw != null ? Math.round(duw * 512000 / 1e9) / 1000 : null; // TB, 3 decimal places
-  } catch {
-    return null;
-  }
+  return new Promise(resolve => {
+    execFile('/usr/sbin/smartctl', ['-a', device, '-j'], { timeout: 5000 }, (err, stdout) => {
+      try {
+        const d = JSON.parse(stdout || '{}');
+        const duw = d.nvme_smart_health_information_log?.data_units_written;
+        // NVMe data_units_written is in 512 kB units
+        resolve(duw != null ? Math.round(duw * 512000 / 1e9) / 1000 : null);
+      } catch {
+        resolve(null);
+      }
+    });
+  });
 }
 
 // diskLayout is slow — cache it and refresh every 30 seconds
