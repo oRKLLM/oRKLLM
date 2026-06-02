@@ -517,27 +517,29 @@ echo "==> Done! Admin console: http://10.6.0.14:8000/admin"
 
 ## 8a. Model Naming Convention
 
-oRKLLM promotes the following standard across the Rockchip community. When generating filenames, parsing model metadata, or documenting models, always follow this convention.
+oRKLLM promotes a single unified naming standard across the Rockchip community. When generating filenames, parsing model metadata, or documenting models, always follow this convention.
 
-### Repository name (HuggingFace)
-
-```
-{ModelFamily}-{Parameters}-{Variant}-{Chipset}-{Quant}-{Version}-RKLLM
-```
-
-The `-RKLLM` suffix is **required** — oRKLLM's HuggingFace search appends `rkllm` to queries, so this suffix makes models discoverable.
-
-**Example:** `Qwen3-4B-Base-rk3576-w4a16-v1.2.3-RKLLM`
-
-### File name (`.rkllm` inside the repo)
+### Unified format (repo name and filename are identical, filename adds `.rkllm`)
 
 ```
-{ModelFamily}-{Parameters}-{Variant}-{Chipset}-{QuantType}-{Algorithm}-{ToolkitVersion}.rkllm
+{Family}-{Params}-{Variant}-{Chipset}-{Quant}-{Algo}-v{Version}-RKLLM.rkllm
 ```
 
-**Example:** `Qwen3-4B-Base-rk3576-w4a16-grq-1.2.3.rkllm`
+- **HuggingFace repo:** `Qwen3-4B-Base-rk3576-w4a16-grq-v1.2.3-RKLLM`
+- **File inside repo:** `Qwen3-4B-Base-rk3576-w4a16-grq-v1.2.3-RKLLM.rkllm`
 
-The toolkit version in the filename (`1.2.3`) is what `parseRuntimeVersion()` in `config.js` uses to select the matching `librkllmrt.so`. **Always include the version in the filename.**
+| Field | Description | Example |
+|-------|-------------|---------|
+| `Family` | Base model name | `Qwen3`, `Llama3` |
+| `Params` | Parameter count | `4B`, `8B`, `35BA3B` |
+| `Variant` | Model variant | `Base`, `Instruct`, `Chat` |
+| `Chipset` | Target Rockchip SoC | `rk3576`, `rk3588` |
+| `Quant` | Quantization type | `w4a16`, `w8a8` |
+| `Algo` | Quantization algorithm | `grq`, `awq`, `gptq` |
+| `Version` | rkllm-toolkit version (with `v` prefix) | `v1.2.3` |
+| `RKLLM` | Required for HuggingFace discoverability | — |
+
+**`parseRuntimeVersion()` in `src/config.js`** extracts the version from `v{Version}` in the filename to auto-select the correct `librkllmrt.so`. Always include the `v`-prefixed version. Legacy files without the `v` prefix or `-RKLLM` suffix are also matched by the regex for backward compatibility.
 
 ### Required HuggingFace tags
 
@@ -545,7 +547,7 @@ The toolkit version in the filename (`1.2.3`) is what `parseRuntimeVersion()` in
 rkllm  rockchip  npu  rk3576  rk3588  <model-family-lowercase>  rknn
 ```
 
-Include the chipset tag(s) that apply (`rk3576`, `rk3588`, or both). This enables oRKLLM's **Compatible chipset** search filter to surface the model correctly.
+Include the applicable chipset tag(s). This enables oRKLLM's **Compatible chipset** search filter.
 
 ---
 

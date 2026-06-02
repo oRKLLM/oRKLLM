@@ -298,35 +298,31 @@ curl -fsSL \
 
 ## 📐 Model Naming Convention
 
-To help establish consistency across the fragmented Rockchip community, oRKLLM adopts the following naming convention for `.rkllm` model files and their HuggingFace repositories.
+To help establish consistency across the fragmented Rockchip community, oRKLLM adopts a single unified naming convention for both the HuggingFace repository and the `.rkllm` file inside it.
 
-### Repository name
-
-```
-{ModelFamily}-{Parameters}-{Variant}-{Chipset}-{Quant}-{Version}-RKLLM
-```
-
-The `-RKLLM` suffix is required for discoverability — it makes models findable via the HuggingFace search filter built into oRKLLM's downloader.
-
-**Example:** `Qwen3-4B-Base-rk3576-w4a16-v1.2.3-RKLLM`
-
-### File name (inside the repo)
+### Unified format
 
 ```
-{ModelFamily}-{Parameters}-{Variant}-{Chipset}-{QuantType}-{Algorithm}-{ToolkitVersion}.rkllm
+{Family}-{Params}-{Variant}-{Chipset}-{Quant}-{Algo}-v{Version}-RKLLM.rkllm
 ```
 
-**Example:** `Qwen3-4B-Base-rk3576-w4a16-grq-1.2.3.rkllm`
+The HuggingFace repository name is the same string without the `.rkllm` extension.
+
+**Example:** `Qwen3-4B-Base-rk3576-w4a16-grq-v1.2.3-RKLLM`  
+**File inside repo:** `Qwen3-4B-Base-rk3576-w4a16-grq-v1.2.3-RKLLM.rkllm`
 
 | Field | Description | Example |
 | :---- | :---------- | :------ |
-| `ModelFamily` | Base model name | `Qwen3`, `Llama3`, `Gemma2` |
-| `Parameters` | Parameter count | `4B`, `8B`, `0.5B` |
+| `Family` | Base model name | `Qwen3`, `Llama3`, `Gemma2` |
+| `Params` | Parameter count | `4B`, `8B`, `0.5B`, `35BA3B` |
 | `Variant` | Model variant | `Base`, `Instruct`, `Chat` |
 | `Chipset` | Target Rockchip SoC | `rk3576`, `rk3588` |
-| `QuantType` | Quantization type | `w4a16`, `w8a8` |
-| `Algorithm` | Quant algorithm (file only) | `grq`, `awq`, *(omit if standard)* |
-| `Version` | rkllm-toolkit version | `v1.2.3` (repo), `1.2.3` (file) |
+| `Quant` | Quantization type | `w4a16`, `w8a8` |
+| `Algo` | Quantization algorithm | `grq`, `awq`, `gptq` |
+| `Version` | rkllm-toolkit version (with `v` prefix) | `v1.2.3` |
+| `RKLLM` | Required suffix for HuggingFace discoverability | — |
+
+> **Note:** oRKLLM parses the runtime version from the `v{Version}` field in the filename to auto-select the correct `librkllmrt.so`. Always include the version. Legacy files without the `v` prefix and `-RKLLM` suffix are also supported.
 
 ### Recommended HuggingFace tags
 

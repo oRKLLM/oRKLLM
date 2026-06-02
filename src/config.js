@@ -36,7 +36,9 @@ if (!fs.existsSync(RUNTIMES_DIR)) {
 
 // Parse rkllm runtime version from a model filename, e.g. "model-1.2.3.rkllm" → "1.2.3"
 export function parseRuntimeVersion(filename) {
-  const m = filename.match(/[-_](\d+\.\d+\.\d+)\.rkllm$/i);
+  // Supports both new convention: ...-v1.2.3-RKLLM.rkllm
+  // and legacy:                   ...-1.2.3.rkllm
+  const m = filename.match(/[-_]v?(\d+\.\d+\.\d+)(?:-RKLLM)?\.rkllm$/i);
   return m ? m[1] : null;
 }
 
