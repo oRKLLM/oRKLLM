@@ -515,6 +515,40 @@ echo "==> Done! Admin console: http://10.6.0.14:8000/admin"
 
 ---
 
+## 8a. Model Naming Convention
+
+oRKLLM promotes the following standard across the Rockchip community. When generating filenames, parsing model metadata, or documenting models, always follow this convention.
+
+### Repository name (HuggingFace)
+
+```
+{ModelFamily}-{Parameters}-{Variant}-{Chipset}-{Quant}-{Version}-RKLLM
+```
+
+The `-RKLLM` suffix is **required** — oRKLLM's HuggingFace search appends `rkllm` to queries, so this suffix makes models discoverable.
+
+**Example:** `Qwen3-4B-Base-rk3576-w4a16-v1.2.3-RKLLM`
+
+### File name (`.rkllm` inside the repo)
+
+```
+{ModelFamily}-{Parameters}-{Variant}-{Chipset}-{QuantType}-{Algorithm}-{ToolkitVersion}.rkllm
+```
+
+**Example:** `Qwen3-4B-Base-rk3576-w4a16-grq-1.2.3.rkllm`
+
+The toolkit version in the filename (`1.2.3`) is what `parseRuntimeVersion()` in `config.js` uses to select the matching `librkllmrt.so`. **Always include the version in the filename.**
+
+### Required HuggingFace tags
+
+```
+rkllm  rockchip  npu  rk3576  rk3588  <model-family-lowercase>  rknn
+```
+
+Include the chipset tag(s) that apply (`rk3576`, `rk3588`, or both). This enables oRKLLM's **Compatible chipset** search filter to surface the model correctly.
+
+---
+
 ## 9. Implementation Roadmap
 
 | Phase | Status | Description |

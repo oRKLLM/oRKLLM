@@ -296,6 +296,51 @@ curl -fsSL \
 
 ---
 
+## 📐 Model Naming Convention
+
+To help establish consistency across the fragmented Rockchip community, oRKLLM adopts the following naming convention for `.rkllm` model files and their HuggingFace repositories.
+
+### Repository name
+
+```
+{ModelFamily}-{Parameters}-{Variant}-{Chipset}-{Quant}-{Version}-RKLLM
+```
+
+The `-RKLLM` suffix is required for discoverability — it makes models findable via the HuggingFace search filter built into oRKLLM's downloader.
+
+**Example:** `Qwen3-4B-Base-rk3576-w4a16-v1.2.3-RKLLM`
+
+### File name (inside the repo)
+
+```
+{ModelFamily}-{Parameters}-{Variant}-{Chipset}-{QuantType}-{Algorithm}-{ToolkitVersion}.rkllm
+```
+
+**Example:** `Qwen3-4B-Base-rk3576-w4a16-grq-1.2.3.rkllm`
+
+| Field | Description | Example |
+| :---- | :---------- | :------ |
+| `ModelFamily` | Base model name | `Qwen3`, `Llama3`, `Gemma2` |
+| `Parameters` | Parameter count | `4B`, `8B`, `0.5B` |
+| `Variant` | Model variant | `Base`, `Instruct`, `Chat` |
+| `Chipset` | Target Rockchip SoC | `rk3576`, `rk3588` |
+| `QuantType` | Quantization type | `w4a16`, `w8a8` |
+| `Algorithm` | Quant algorithm (file only) | `grq`, `awq`, *(omit if standard)* |
+| `Version` | rkllm-toolkit version | `v1.2.3` (repo), `1.2.3` (file) |
+
+### Recommended HuggingFace tags
+
+Including these tags maximises discoverability and enables oRKLLM's compatible-chipset search filter to surface your model:
+
+| Category | Tags |
+| :------- | :--- |
+| **Core** | `rkllm`, `rockchip`, `npu` |
+| **Chipset** | `rk3576`, `rk3588` *(add whichever applies)* |
+| **Model family** | `qwen3`, `llama`, `gemma` *(lowercase)* |
+| **Format** | `rkllm`, `rknn` |
+
+---
+
 ## 🌿 Contributing & Branch Flow
 
 All development happens on the `alpha` branch. Promotions flow strictly forward — **never commit directly to `beta` or `main`.**
