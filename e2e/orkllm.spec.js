@@ -859,3 +859,157 @@ test('Context window max is 32768 in global-settings', async ({ page }) => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Test 34: New sampling params round-trip via model settings API
+// ---------------------------------------------------------------------------
+test('Model settings: presence_penalty, frequency_penalty, ctx_window round-trip', async ({ page }) => {
+  await login(page);
+
+  const payload = {
+    presence_penalty: 0.5,
+    frequency_penalty: 0.3,
+    ctx_window: 4096,
+  };
+
+  await page.evaluate(async ({ name, data }) => {
+    await fetch(`/api/admin/models/settings/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+  }, { name: dummyModelName, data: payload });
+
+  const saved = await page.evaluate(async (name) => {
+    const r = await fetch(`/api/admin/models/settings/${encodeURIComponent(name)}`);
+    return r.json();
+  }, dummyModelName);
+
+  expect(saved.settings.presence_penalty).toBe(0.5);
+  expect(saved.settings.frequency_penalty).toBe(0.3);
+  expect(saved.settings.ctx_window).toBe(4096);
+});
+
+// ---------------------------------------------------------------------------
+// Test 35: Thinking mode toggle round-trips via model settings API
+// ---------------------------------------------------------------------------
+test('Model settings: thinking_enabled persists and can be toggled', async ({ page }) => {
+  await login(page);
+
+  // Enable thinking
+  await page.evaluate(async (name) => {
+    await fetch(`/api/admin/models/settings/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ thinking_enabled: true }),
+    });
+  }, dummyModelName);
+
+  const on = await page.evaluate(async (name) => {
+    const r = await fetch(`/api/admin/models/settings/${encodeURIComponent(name)}`);
+    return r.json();
+  }, dummyModelName);
+  expect(on.settings.thinking_enabled).toBe(true);
+
+  // Disable thinking
+  await page.evaluate(async (name) => {
+    await fetch(`/api/admin/models/settings/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ thinking_enabled: false }),
+    });
+  }, dummyModelName);
+
+  const off = await page.evaluate(async (name) => {
+    const r = await fetch(`/api/admin/models/settings/${encodeURIComponent(name)}`);
+    return r.json();
+  }, dummyModelName);
+  expect(off.settings.thinking_enabled).toBe(false);
+});
+
+// ---------------------------------------------------------------------------
+// Test 36: Mirostat settings round-trip via model settings API
+// ---------------------------------------------------------------------------
+test('Model settings: mirostat mode and params persist', async ({ page }) => {
+  await login(page);
+
+  await page.evaluate(async (name) => {
+    await fetch(`/api/admin/models/settings/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mirostat: 2, mirostat_tau: 4.0, mirostat_eta: 0.05 }),
+    });
+  }, dummyModelName);
+
+  const saved = await page.evaluate(async (name) => {
+    const r = await fetch(`/api/admin/models/settings/${encodeURIComponent(name)}`);
+    return r.json();
+  }, dummyModelName);
+
+  expect(saved.settings.mirostat).toBe(2);
+  expect(saved.settings.mirostat_tau).toBe(4.0);
+  expect(saved.settings.mirostat_eta).toBe(0.05);
+});
+
+// ---------------------------------------------------------------------------
+// Test 37: Speculative decoding scaffold settings persist
+// ---------------------------------------------------------------------------
+test('Model settings: speculative_mode and draft_model scaffold persists', async ({ page }) => {
+  await login(page);
+
+  await page.evaluate(async (name) => {
+    await fetch(`/api/admin/models/settings/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ speculative_mode: 'dflash', draft_model: 'draft.rkllm', spec_draft_tokens: 4 }),
+    });
+  }, dummyModelName);
+
+  const saved = await page.evaluate(async (name) => {
+    const r = await fetch(`/api/admin/models/settings/${encodeURIComponent(name)}`);
+    return r.json();
+  }, dummyModelName);
+
+  expect(saved.settings.speculative_mode).toBe('dflash');
+  expect(saved.settings.draft_model).toBe('draft.rkllm');
+  expect(saved.settings.spec_draft_tokens).toBe(4);
+
+  // Cleanup
+  await page.evaluate(async (name) => {
+    await fetch(`/api/admin/models/settings/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ speculative_mode: null, draft_model: null }),
+    });
+  }, dummyModelName);
+});
+
+// ---------------------------------------------------------------------------
+// Test 38: Model settings dialog renders new fields in UI
+// ---------------------------------------------------------------------------
+test('Model settings dialog shows Advanced and Speculative Decoding panels', async ({ page }) => {
+  await login(page);
+  await page.goto('/models');
+
+  // Open settings for the dummy model
+  const settingsBtn = page.locator(`.v-list-item:has-text("${dummyModelName}") button[title="Model Settings"]`);
+  await expect(settingsBtn).toBeVisible({ timeout: 5000 });
+  await settingsBtn.click();
+
+  // Dialog opens
+  await expect(page.locator('.v-dialog .v-card')).toBeVisible({ timeout: 3000 });
+
+  // Basic new fields visible
+  await expect(page.locator('.v-dialog text=Presence Penalty')).toBeVisible();
+  await expect(page.locator('.v-dialog text=Frequency Penalty')).toBeVisible();
+  await expect(page.locator('.v-dialog text=Ctx Window')).toBeVisible();
+
+  // Advanced panel exists
+  await expect(page.locator('.v-dialog text=Advanced')).toBeVisible();
+
+  // Speculative Decoding panel exists
+  await expect(page.locator('.v-dialog text=Speculative Decoding')).toBeVisible();
+
+  // Close dialog
+  await page.locator('.v-dialog button:has(.mdi-close)').click();
+});
