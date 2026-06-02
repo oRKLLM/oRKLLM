@@ -1,3 +1,27 @@
+# [0.7.0-alpha.34](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.33...v0.7.0-alpha.34) (2026-06-02)
+
+
+### Bug Fixes
+
+* **addon:** add enable_thinking to stub RKLLMParam for x86 CI compilation ([8e5bfe3](https://github.com/mafischer/oRKLLM/commit/8e5bfe34dcaa41bbd80bf13306ed6ebbd4224d87))
+* **ci:** switch to license-checker-rseidelsohn — maintained fork, no deprecated dependency warnings ([0182d6c](https://github.com/mafischer/oRKLLM/commit/0182d6c7f80ae940862305a230569d1bdf98a512))
+* **monitor:** cache TBW alongside diskLayout so it's available on first metrics tick ([5ba7d11](https://github.com/mafischer/oRKLLM/commit/5ba7d11c59ab9d6ef52f7a803ace59faa1e31e69))
+* **tests:** use scoped locator for dialog fields — text= is not a CSS selector ([5c353b2](https://github.com/mafischer/oRKLLM/commit/5c353b255fec8cd9aa960eb945754271878466f0))
+
+
+### Features
+
+* **ci:** add ClamAV binary signature scan of .deb before APT publish ([5d688cd](https://github.com/mafischer/oRKLLM/commit/5d688cd22a836301f064dffb0503981f94405030))
+* **ci:** add production dependency license check ([59b751a](https://github.com/mafischer/oRKLLM/commit/59b751a8951e929387a6b3ce62b548b9341119ba))
+* **ci:** Node.js version matrix — test against 20, 22, 24 in parallel ([8429680](https://github.com/mafischer/oRKLLM/commit/8429680f858bf061f9974c6670885640f6c23e42))
+* **model-settings:** expand per-model settings to oMLX parity ([eb63fe3](https://github.com/mafischer/oRKLLM/commit/eb63fe355bcd7aae4be8a5847be540fd5b069655))
+* **naming:** unified model naming convention — single format for repo and file ([9eeb121](https://github.com/mafischer/oRKLLM/commit/9eeb121dba102fad8b67d779c0f4aa2393e1ffe7))
+
+
+### Reverts
+
+* remove ClamAV scan from release workflow ([4b29f59](https://github.com/mafischer/oRKLLM/commit/4b29f59e6de5bd70a4d6ff731ecf37d30ff51a58))
+
 # [0.7.0](https://github.com/mafischer/oRKLLM/compare/v0.6.0...v0.7.0) (2026-06-02)
 
 
