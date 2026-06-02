@@ -366,7 +366,7 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
     );
 
     // Spawn background thread to run inference synchronously without blocking the event loop
-    std::thread runThread([prompt, loadCachePath, saveCachePath, ctx]() {
+    std::thread runThread([prompt, loadCachePath, saveCachePath, inferMode, ctx]() {
         // Load prefix KV cache from disk if provided
         if (!loadCachePath.empty() && g_rkllm_load_prompt_cache) {
             g_rkllm_load_prompt_cache(g_handle, loadCachePath.c_str());
