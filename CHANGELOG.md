@@ -1,3 +1,15 @@
+# [0.8.0-alpha.1](https://github.com/mafischer/oRKLLM/compare/v0.7.0...v0.8.0-alpha.1) (2026-06-02)
+
+
+### Bug Fixes
+
+* **addon:** capture inferMode in lambda for RKLLM_INFER_GET_LOGITS mode ([117c223](https://github.com/mafischer/oRKLLM/commit/117c223a4b4d2e2e98f321ba901e129575cfc296))
+
+
+### Features
+
+* **spec-decode:** speculative decoding infrastructure ([1977f3a](https://github.com/mafischer/oRKLLM/commit/1977f3a1af83369e55d803659bcf8a42e6ea698d))
+
 # [0.7.0-alpha.34](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.33...v0.7.0-alpha.34) (2026-06-02)
 
 
