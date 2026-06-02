@@ -999,16 +999,18 @@ test('Model settings dialog shows Advanced and Speculative Decoding panels', asy
   // Dialog opens
   await expect(page.locator('.v-dialog .v-card')).toBeVisible({ timeout: 3000 });
 
+  const dialog = page.locator('.v-dialog .v-card');
+
   // Basic new fields visible
-  await expect(page.locator('.v-dialog text=Presence Penalty')).toBeVisible();
-  await expect(page.locator('.v-dialog text=Frequency Penalty')).toBeVisible();
-  await expect(page.locator('.v-dialog text=Ctx Window')).toBeVisible();
+  await expect(dialog.locator('text=Presence Penalty')).toBeVisible();
+  await expect(dialog.locator('text=Frequency Penalty')).toBeVisible();
+  await expect(dialog.locator('text=Ctx Window')).toBeVisible();
 
   // Advanced panel exists
-  await expect(page.locator('.v-dialog text=Advanced')).toBeVisible();
+  await expect(dialog.locator('text=Advanced')).toBeVisible();
 
   // Speculative Decoding panel exists
-  await expect(page.locator('.v-dialog text=Speculative Decoding')).toBeVisible();
+  await expect(dialog.locator('text=Speculative Decoding')).toBeVisible();
 
   // Close dialog
   await page.locator('.v-dialog button:has(.mdi-close)').click();
