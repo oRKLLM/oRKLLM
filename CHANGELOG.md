@@ -1,3 +1,10 @@
+# [0.8.0-alpha.3](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.2...v0.8.0-alpha.3) (2026-06-02)
+
+
+### Bug Fixes
+
+* **spec-decode:** load draft with max_new_tokens=1; fix token verification logic ([c451b17](https://github.com/mafischer/oRKLLM/commit/c451b17421eaceba4fd658415f02ae53a630c7e4))
+
 # [0.8.0-alpha.2](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.1...v0.8.0-alpha.2) (2026-06-02)
 
 
