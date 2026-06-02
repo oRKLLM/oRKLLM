@@ -138,6 +138,24 @@ export default async function apiRoutes(fastify, options) {
       max_new_tokens: max_tokens
     };
 
+    // Apply per-model settings overrides from model_settings JSON
+    const saved = dbGetModelSettings(model) || {};
+    if (saved.force_sampling) {
+      // Force sampling: stored values override per-request params
+      if (saved.temperature != null)       modelOptions.temperature       = saved.temperature;
+      if (saved.top_p != null)             modelOptions.top_p             = saved.top_p;
+      if (saved.top_k != null)             modelOptions.top_k             = saved.top_k;
+      if (saved.max_new_tokens != null)    modelOptions.max_new_tokens    = saved.max_new_tokens;
+      if (saved.rep_penalty != null)       modelOptions.repeat_penalty    = saved.rep_penalty;
+    }
+    if (saved.presence_penalty != null)    modelOptions.presence_penalty  = saved.presence_penalty;
+    if (saved.frequency_penalty != null)   modelOptions.frequency_penalty = saved.frequency_penalty;
+    if (saved.mirostat)                    modelOptions.mirostat          = saved.mirostat;
+    if (saved.mirostat_tau != null)        modelOptions.mirostat_tau      = saved.mirostat_tau;
+    if (saved.mirostat_eta != null)        modelOptions.mirostat_eta      = saved.mirostat_eta;
+    if (saved.ctx_window != null)          modelOptions.max_context_len   = saved.ctx_window;
+    if (saved.thinking_enabled)            modelOptions.enable_thinking   = true;
+
     const completionId = 'chatcmpl-' + Math.random().toString(36).substring(2, 15);
     const created = Math.floor(Date.now() / 1000);
 

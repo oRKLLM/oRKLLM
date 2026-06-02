@@ -172,7 +172,7 @@
           </v-card>
 
           <!-- Model Settings Dialog -->
-          <v-dialog v-model="settingsDialog" max-width="460" scrollable>
+          <v-dialog v-model="settingsDialog" max-width="580" scrollable>
             <v-card class="glass-card" v-if="settingsTarget">
               <v-card-title class="d-flex align-center justify-space-between pa-4 border-bottom">
                 <div>
@@ -180,7 +180,7 @@
                     <v-icon start color="primary" size="18">mdi-cog-outline</v-icon>
                     Model Settings
                   </div>
-                  <div class="text-caption text-grey text-truncate" style="max-width: 340px;">{{ settingsTarget.id }}</div>
+                  <div class="text-caption text-grey text-truncate" style="max-width: 440px;">{{ settingsTarget.id }}</div>
                 </div>
                 <v-btn icon size="small" variant="text" @click="settingsDialog = false">
                   <v-icon>mdi-close</v-icon>
@@ -188,6 +188,7 @@
               </v-card-title>
 
               <v-card-text class="pa-4">
+                <!-- Display name -->
                 <div class="text-caption text-grey mb-1">Display Name</div>
                 <v-text-field
                   v-model="settingsForm.display_name"
@@ -198,73 +199,154 @@
                   class="mb-4"
                 ></v-text-field>
 
-                <div class="text-subtitle-2 font-weight-bold mb-3 mt-1">Sampling Defaults</div>
-                <div class="text-caption text-grey mb-4">Leave at 0 / empty to use the chat playground sliders.</div>
+                <!-- Sampling defaults -->
+                <div class="text-subtitle-2 font-weight-bold mb-1 mt-1">Sampling Defaults</div>
+                <div class="text-caption text-grey mb-3">Leave at default / 0 to use per-request values.</div>
 
                 <v-row no-gutters class="align-center mb-3">
                   <v-col cols="5" class="text-caption">Temperature</v-col>
-                  <v-col cols="5">
-                    <v-slider v-model="settingsForm.temperature" min="0" max="2" step="0.05" density="compact" color="primary" hide-details></v-slider>
-                  </v-col>
-                  <v-col cols="2" class="pl-2">
-                    <v-text-field v-model.number="settingsForm.temperature" type="number" density="compact" variant="outlined" hide-details min="0" max="2" step="0.05" style="width:56px"></v-text-field>
-                  </v-col>
+                  <v-col cols="5"><v-slider v-model="settingsForm.temperature" min="0" max="2" step="0.05" density="compact" color="primary" hide-details></v-slider></v-col>
+                  <v-col cols="2" class="pl-2"><v-text-field v-model.number="settingsForm.temperature" type="number" density="compact" variant="outlined" hide-details min="0" max="2" step="0.05" style="width:56px"></v-text-field></v-col>
                 </v-row>
 
                 <v-row no-gutters class="align-center mb-3">
                   <v-col cols="5" class="text-caption">Top P</v-col>
-                  <v-col cols="5">
-                    <v-slider v-model="settingsForm.top_p" min="0" max="1" step="0.05" density="compact" color="primary" hide-details></v-slider>
-                  </v-col>
-                  <v-col cols="2" class="pl-2">
-                    <v-text-field v-model.number="settingsForm.top_p" type="number" density="compact" variant="outlined" hide-details min="0" max="1" step="0.05" style="width:56px"></v-text-field>
-                  </v-col>
+                  <v-col cols="5"><v-slider v-model="settingsForm.top_p" min="0" max="1" step="0.05" density="compact" color="primary" hide-details></v-slider></v-col>
+                  <v-col cols="2" class="pl-2"><v-text-field v-model.number="settingsForm.top_p" type="number" density="compact" variant="outlined" hide-details min="0" max="1" step="0.05" style="width:56px"></v-text-field></v-col>
                 </v-row>
 
                 <v-row no-gutters class="align-center mb-3">
                   <v-col cols="5" class="text-caption">Top K <span class="text-grey">(0=off)</span></v-col>
-                  <v-col cols="5">
-                    <v-slider v-model="settingsForm.top_k" min="0" max="100" step="1" density="compact" color="primary" hide-details></v-slider>
-                  </v-col>
-                  <v-col cols="2" class="pl-2">
-                    <v-text-field v-model.number="settingsForm.top_k" type="number" density="compact" variant="outlined" hide-details min="0" max="100" style="width:56px"></v-text-field>
-                  </v-col>
+                  <v-col cols="5"><v-slider v-model="settingsForm.top_k" min="0" max="100" step="1" density="compact" color="primary" hide-details></v-slider></v-col>
+                  <v-col cols="2" class="pl-2"><v-text-field v-model.number="settingsForm.top_k" type="number" density="compact" variant="outlined" hide-details min="0" max="100" style="width:56px"></v-text-field></v-col>
                 </v-row>
 
                 <v-row no-gutters class="align-center mb-3">
                   <v-col cols="5" class="text-caption">Rep. Penalty <span class="text-grey">(1=off)</span></v-col>
-                  <v-col cols="5">
-                    <v-slider v-model="settingsForm.rep_penalty" min="1" max="2" step="0.05" density="compact" color="primary" hide-details></v-slider>
-                  </v-col>
-                  <v-col cols="2" class="pl-2">
-                    <v-text-field v-model.number="settingsForm.rep_penalty" type="number" density="compact" variant="outlined" hide-details min="1" max="2" step="0.05" style="width:56px"></v-text-field>
-                  </v-col>
+                  <v-col cols="5"><v-slider v-model="settingsForm.rep_penalty" min="1" max="2" step="0.05" density="compact" color="primary" hide-details></v-slider></v-col>
+                  <v-col cols="2" class="pl-2"><v-text-field v-model.number="settingsForm.rep_penalty" type="number" density="compact" variant="outlined" hide-details min="1" max="2" step="0.05" style="width:56px"></v-text-field></v-col>
+                </v-row>
+
+                <v-row no-gutters class="align-center mb-3">
+                  <v-col cols="5" class="text-caption">Presence Penalty</v-col>
+                  <v-col cols="5"><v-slider v-model="settingsForm.presence_penalty" min="0" max="2" step="0.05" density="compact" color="primary" hide-details></v-slider></v-col>
+                  <v-col cols="2" class="pl-2"><v-text-field v-model.number="settingsForm.presence_penalty" type="number" density="compact" variant="outlined" hide-details min="0" max="2" step="0.05" style="width:56px"></v-text-field></v-col>
+                </v-row>
+
+                <v-row no-gutters class="align-center mb-3">
+                  <v-col cols="5" class="text-caption">Frequency Penalty</v-col>
+                  <v-col cols="5"><v-slider v-model="settingsForm.frequency_penalty" min="0" max="2" step="0.05" density="compact" color="primary" hide-details></v-slider></v-col>
+                  <v-col cols="2" class="pl-2"><v-text-field v-model.number="settingsForm.frequency_penalty" type="number" density="compact" variant="outlined" hide-details min="0" max="2" step="0.05" style="width:56px"></v-text-field></v-col>
                 </v-row>
 
                 <v-row no-gutters class="align-center mb-3">
                   <v-col cols="5" class="text-caption">Max New Tokens</v-col>
-                  <v-col cols="5">
-                    <v-slider v-model="settingsForm.max_new_tokens" min="128" max="4096" step="128" density="compact" color="primary" hide-details></v-slider>
-                  </v-col>
-                  <v-col cols="2" class="pl-2">
-                    <v-text-field v-model.number="settingsForm.max_new_tokens" type="number" density="compact" variant="outlined" hide-details min="128" max="4096" style="width:56px"></v-text-field>
-                  </v-col>
+                  <v-col cols="5"><v-slider v-model="settingsForm.max_new_tokens" min="128" max="32768" step="128" density="compact" color="primary" hide-details></v-slider></v-col>
+                  <v-col cols="2" class="pl-2"><v-text-field v-model.number="settingsForm.max_new_tokens" type="number" density="compact" variant="outlined" hide-details min="128" max="32768" style="width:56px"></v-text-field></v-col>
                 </v-row>
 
-                <v-divider class="my-4"></v-divider>
+                <v-row no-gutters class="align-center mb-3">
+                  <v-col cols="5" class="text-caption">Ctx Window <span class="text-grey">(0=default)</span></v-col>
+                  <v-col cols="5"><v-slider v-model="settingsForm.ctx_window" min="0" max="32768" step="512" density="compact" color="primary" hide-details></v-slider></v-col>
+                  <v-col cols="2" class="pl-2"><v-text-field v-model.number="settingsForm.ctx_window" type="number" density="compact" variant="outlined" hide-details min="0" max="32768" style="width:56px"></v-text-field></v-col>
+                </v-row>
 
+                <!-- TTL -->
+                <v-divider class="my-4"></v-divider>
                 <div class="text-subtitle-2 font-weight-bold mb-2">Idle Auto-Unload TTL</div>
                 <div class="text-caption text-grey mb-2">Per-model override. 0 = use global setting.</div>
-                <v-row no-gutters class="align-center">
-                  <v-col cols="8">
-                    <v-slider v-model="settingsForm.ttl_minutes" min="0" max="120" step="5" density="compact" color="teal" hide-details></v-slider>
-                  </v-col>
-                  <v-col cols="4" class="pl-3">
-                    <v-chip size="small" class="font-weight-bold">
-                      {{ settingsForm.ttl_minutes === 0 ? 'Global' : `${settingsForm.ttl_minutes}m` }}
-                    </v-chip>
-                  </v-col>
+                <v-row no-gutters class="align-center mb-4">
+                  <v-col cols="8"><v-slider v-model="settingsForm.ttl_minutes" min="0" max="120" step="5" density="compact" color="teal" hide-details></v-slider></v-col>
+                  <v-col cols="4" class="pl-3"><v-chip size="small" class="font-weight-bold">{{ settingsForm.ttl_minutes === 0 ? 'Global' : `${settingsForm.ttl_minutes}m` }}</v-chip></v-col>
                 </v-row>
+
+                <!-- Advanced -->
+                <v-expansion-panels variant="accordion" class="mb-3">
+                  <v-expansion-panel>
+                    <v-expansion-panel-title class="text-subtitle-2 font-weight-bold py-2 px-0">
+                      Advanced
+                    </v-expansion-panel-title>
+                    <v-expansion-panel-text class="pa-0">
+                      <div class="d-flex align-center justify-space-between py-2">
+                        <div>
+                          <div class="text-body-2">Enable Thinking</div>
+                          <div class="text-caption text-grey">Activate reasoning mode (Qwen3 thinking models)</div>
+                        </div>
+                        <v-switch v-model="settingsForm.thinking_enabled" color="primary" hide-details density="compact" class="flex-shrink-0 ml-3"></v-switch>
+                      </div>
+                      <div class="d-flex align-center justify-space-between py-2">
+                        <div>
+                          <div class="text-body-2">Force Sampling</div>
+                          <div class="text-caption text-grey">Override per-request sampling params with stored values</div>
+                        </div>
+                        <v-switch v-model="settingsForm.force_sampling" color="primary" hide-details density="compact" class="flex-shrink-0 ml-3"></v-switch>
+                      </div>
+                      <div class="py-2">
+                        <div class="text-body-2 mb-2">Mirostat Sampler</div>
+                        <v-select
+                          v-model="settingsForm.mirostat"
+                          :items="[{title:'Off',value:0},{title:'Mirostat v1',value:1},{title:'Mirostat v2',value:2}]"
+                          density="compact"
+                          variant="outlined"
+                          hide-details
+                          class="mb-3"
+                        ></v-select>
+                        <template v-if="settingsForm.mirostat > 0">
+                          <v-row no-gutters class="align-center mb-2">
+                            <v-col cols="5" class="text-caption">Tau</v-col>
+                            <v-col cols="5"><v-slider v-model="settingsForm.mirostat_tau" min="0" max="10" step="0.1" density="compact" color="primary" hide-details></v-slider></v-col>
+                            <v-col cols="2" class="pl-2"><v-text-field v-model.number="settingsForm.mirostat_tau" type="number" density="compact" variant="outlined" hide-details min="0" max="10" step="0.1" style="width:56px"></v-text-field></v-col>
+                          </v-row>
+                          <v-row no-gutters class="align-center">
+                            <v-col cols="5" class="text-caption">Eta</v-col>
+                            <v-col cols="5"><v-slider v-model="settingsForm.mirostat_eta" min="0" max="1" step="0.01" density="compact" color="primary" hide-details></v-slider></v-col>
+                            <v-col cols="2" class="pl-2"><v-text-field v-model.number="settingsForm.mirostat_eta" type="number" density="compact" variant="outlined" hide-details min="0" max="1" step="0.01" style="width:56px"></v-text-field></v-col>
+                          </v-row>
+                        </template>
+                      </div>
+                    </v-expansion-panel-text>
+                  </v-expansion-panel>
+
+                  <!-- Speculative Decoding scaffold -->
+                  <v-expansion-panel>
+                    <v-expansion-panel-title class="text-subtitle-2 font-weight-bold py-2 px-0">
+                      Speculative Decoding
+                      <v-chip size="x-small" color="warning" variant="tonal" class="ml-2">Experimental</v-chip>
+                    </v-expansion-panel-title>
+                    <v-expansion-panel-text class="pa-0">
+                      <div class="text-caption text-grey mb-3">
+                        Dual-model NPU speculative decoding. Small draft model generates candidate tokens;
+                        large target model verifies in one pass. Requires both models in memory simultaneously.
+                        <strong>Execution not yet wired — settings stored for upcoming dual-pool feature.</strong>
+                      </div>
+                      <v-select
+                        v-model="settingsForm.speculative_mode"
+                        :items="[{title:'Disabled',value:null},{title:'DFlash (draft model)',value:'dflash'},{title:'Native MTP (Qwen3 only)',value:'native_mtp'}]"
+                        label="Speculative Mode"
+                        density="compact"
+                        variant="outlined"
+                        hide-details
+                        class="mb-3"
+                      ></v-select>
+                      <template v-if="settingsForm.speculative_mode === 'dflash'">
+                        <v-select
+                          v-model="settingsForm.draft_model"
+                          :items="[{title:'(none)',value:null},...models.map(m=>({title:m.id,value:m.id}))]"
+                          label="Draft Model"
+                          density="compact"
+                          variant="outlined"
+                          hide-details
+                          class="mb-3"
+                        ></v-select>
+                        <v-row no-gutters class="align-center">
+                          <v-col cols="6" class="text-caption">Draft tokens per step (k)</v-col>
+                          <v-col cols="4"><v-slider v-model="settingsForm.spec_draft_tokens" min="1" max="8" step="1" density="compact" color="primary" hide-details></v-slider></v-col>
+                          <v-col cols="2" class="pl-2"><v-text-field v-model.number="settingsForm.spec_draft_tokens" type="number" density="compact" variant="outlined" hide-details min="1" max="8" style="width:46px"></v-text-field></v-col>
+                        </v-row>
+                      </template>
+                    </v-expansion-panel-text>
+                  </v-expansion-panel>
+                </v-expansion-panels>
               </v-card-text>
 
               <v-card-actions class="pa-4 border-top justify-end gap-2">
@@ -676,8 +758,19 @@ export default {
       top_p: 0.9,
       top_k: 40,
       rep_penalty: 1.0,
+      presence_penalty: 0,
+      frequency_penalty: 0,
       max_new_tokens: 512,
-      ttl_minutes: 0
+      ctx_window: 0,
+      ttl_minutes: 0,
+      thinking_enabled: false,
+      force_sampling: false,
+      mirostat: 0,
+      mirostat_tau: 5.0,
+      mirostat_eta: 0.1,
+      speculative_mode: null,
+      draft_model: null,
+      spec_draft_tokens: 4,
     },
 
     // Delete confirm
@@ -838,8 +931,19 @@ export default {
         top_p: saved.top_p ?? 0.9,
         top_k: saved.top_k ?? 40,
         rep_penalty: saved.rep_penalty ?? 1.0,
+        presence_penalty: saved.presence_penalty ?? 0,
+        frequency_penalty: saved.frequency_penalty ?? 0,
         max_new_tokens: saved.max_new_tokens ?? 512,
-        ttl_minutes: saved.ttl_minutes ?? 0
+        ctx_window: saved.ctx_window ?? 0,
+        ttl_minutes: saved.ttl_minutes ?? 0,
+        thinking_enabled: saved.thinking_enabled ?? false,
+        force_sampling: saved.force_sampling ?? false,
+        mirostat: saved.mirostat ?? 0,
+        mirostat_tau: saved.mirostat_tau ?? 5.0,
+        mirostat_eta: saved.mirostat_eta ?? 0.1,
+        speculative_mode: saved.speculative_mode ?? null,
+        draft_model: saved.draft_model ?? null,
+        spec_draft_tokens: saved.spec_draft_tokens ?? 4,
       };
       this.settingsDialog = true;
     },

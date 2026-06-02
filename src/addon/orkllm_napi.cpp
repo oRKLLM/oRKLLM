@@ -302,6 +302,7 @@ Napi::Value InitModel(const Napi::CallbackInfo& info) {
     param.mirostat_tau = options.Has("mirostat_tau") ? options.Get("mirostat_tau").As<Napi::Number>().FloatValue() : 5.0f;
     param.mirostat_eta = options.Has("mirostat_eta") ? options.Get("mirostat_eta").As<Napi::Number>().FloatValue() : 0.1f;
     
+    param.enable_thinking = options.Has("enable_thinking") && options.Get("enable_thinking").As<Napi::Boolean>().Value();
     param.skip_special_token = true;
     param.img_start = "";
     param.img_end = "";
