@@ -68,6 +68,7 @@ struct RKLLMParam {
     float mirostat_eta;
     bool skip_special_token;
     bool is_async;
+    bool enable_thinking;
     const char* img_start;
     const char* img_end;
     const char* img_content;
