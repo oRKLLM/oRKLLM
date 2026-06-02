@@ -292,9 +292,11 @@ class EnginePool {
       throw new Error(`Draft model not found: ${draftPath}`);
     }
 
+    // Draft model must generate exactly 1 token per step for speculative decoding
+    const draftOptions = { max_new_tokens: 1 };
     const candidates = EnginePool.runtimeCandidates(draftModelName);
     for (const libPath of candidates) {
-      const result = await this._tryLoadWorker('draft', draftModelName, draftPath, {}, libPath);
+      const result = await this._tryLoadWorker('draft', draftModelName, draftPath, draftOptions, libPath);
       if (result.success) {
         this.draftIsLoaded = true;
         this.draftModel = { name: draftModelName, path: draftPath, isMock: result.isMock, libPath };
@@ -393,46 +395,53 @@ class EnginePool {
 
   // Verify draft tokens with target model using get_logits mode.
   // Returns array of accepted tokens (longest matching prefix).
+  // Verify draft tokens against target model.
+  // Strategy: run target from `prompt`, collect k+1 tokens, find longest
+  // prefix where target_token_id[i] === draft_token_id[i].
+  // Returns { accepted: Token[], targetToken: Token|null }
   _verifyDraftTokens(prompt, draftTokens) {
+    const k = draftTokens.length;
     return new Promise((resolve, reject) => {
       if (!this.worker || !this.isLoaded) {
         return reject(new Error('Target model not loaded'));
       }
 
-      // Feed target: original prompt + all draft tokens concatenated
-      const verifyPrompt = prompt + draftTokens.map(t => t.text).join('');
-      const accepted = [];
-
-      // Run target from the prompt, collect tokens until mismatch or k accepted
-      let draftIdx = 0;
+      const targetTokens = [];
       const onMsg = (msg) => {
-        if (msg.type === 'token') {
-          if (msg.state === 0 && msg.text) {
-            const draft = draftTokens[draftIdx];
-            if (draft && msg.token_id === draft.token_id) {
-              // Tokens match — accept
-              accepted.push({ text: msg.text, token_id: msg.token_id });
-              draftIdx++;
-              if (draftIdx >= draftTokens.length) {
-                // All draft tokens accepted — also include this bonus token
-                this.worker.removeListener('message', onMsg);
-                if (this.worker) this.worker.send({ type: 'abort' });
-                resolve({ accepted, bonus: null, targetToken: null });
-              }
-            } else {
-              // Mismatch — use target's token, reject rest
-              this.worker.removeListener('message', onMsg);
-              if (this.worker) this.worker.send({ type: 'abort' });
-              resolve({ accepted, bonus: null, targetToken: { text: msg.text, token_id: msg.token_id } });
-            }
-          } else if (msg.state === 2 || msg.state === 3) {
+        if (msg.type !== 'token') return;
+        if (msg.state === 0 && msg.text) {
+          targetTokens.push({ text: msg.text, token_id: msg.token_id });
+          // Collected enough to verify all draft tokens + 1 correction token
+          if (targetTokens.length >= k + 1) {
             this.worker.removeListener('message', onMsg);
-            resolve({ accepted, bonus: null, targetToken: null });
+            if (this.worker) this.worker.send({ type: 'abort' });
+            finish();
           }
+        } else if (msg.state === 2 || msg.state === 3) {
+          this.worker.removeListener('message', onMsg);
+          finish();
         }
       };
+
+      const finish = () => {
+        // Find longest matching prefix
+        const accepted = [];
+        for (let i = 0; i < Math.min(draftTokens.length, targetTokens.length); i++) {
+          if (targetTokens[i].token_id === draftTokens[i].token_id) {
+            accepted.push(draftTokens[i]);
+          } else {
+            // Mismatch — use target's token at this position
+            return resolve({ accepted, targetToken: targetTokens[i] });
+          }
+        }
+        // All draft tokens accepted — if target has a bonus next token use it
+        const bonus = targetTokens[draftTokens.length] || null;
+        resolve({ accepted, targetToken: bonus });
+      };
+
       this.worker.on('message', onMsg);
-      this.worker.send({ type: 'run', prompt: verifyPrompt, infer_mode: 0 });
+      // Target generates from original prompt (same starting point as draft)
+      this.worker.send({ type: 'run', prompt });
     });
   }
 
