@@ -1,3 +1,10 @@
+# [0.7.0-alpha.33](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.32...v0.7.0-alpha.33) (2026-06-02)
+
+
+### Bug Fixes
+
+* **monitor:** parse smartctl stdout even on non-zero exit; use absolute path /usr/sbin/smartctl ([db440c6](https://github.com/mafischer/oRKLLM/commit/db440c6e03b049a7623bde72601a8307c67eec5a))
+
 # [0.7.0-alpha.32](https://github.com/mafischer/oRKLLM/compare/v0.7.0-alpha.31...v0.7.0-alpha.32) (2026-06-01)
 
 
