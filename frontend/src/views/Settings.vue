@@ -259,9 +259,9 @@
             v-model="settings.kvCacheQuant"
             :items="[
               { title: 'Off (FP16 — no compression)', value: 'off' },
-              { title: 'Min-Max INT8 (~44% smaller, RMSE 0.05)', value: 'q8' },
+              { title: 'Min-Max INT8 (~44% smaller, RMSE 0.05) — GPU accelerated', value: 'q8' },
               { title: 'Polar INT8 (~49% smaller, RMSE 0.06) — GPU accelerated', value: 'pq8' },
-              { title: 'Polar INT4 (~74% smaller, RMSE 0.86)', value: 'pq4' },
+              { title: 'Polar INT4 (~74% smaller, RMSE 0.86) — GPU accelerated', value: 'pq4' },
             ]"
             density="compact" variant="outlined" hide-details class="mb-4"
             prepend-inner-icon="mdi-archive-arrow-down-outline"

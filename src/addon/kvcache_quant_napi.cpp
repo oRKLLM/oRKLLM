@@ -317,48 +317,91 @@ static std::vector<uint8_t> encode_file(const std::vector<uint8_t>& src,
 
     // ── Polar INT8: try GPU (Vulkan/Mali) first, fall back to NEON ────────
     bool used_gpu = false;
-    if (scheme == Scheme::PQ8) {
 #ifdef HAS_VULKAN
+    if (scheme == Scheme::PQ8 || scheme == Scheme::Q8 || scheme == Scheme::PQ4) {
         auto& vkq = VkQuantizer::get();
         if (vkq.ok()) {
-            // Total vectors across all tokens
             const uint32_t total_vecs = n * VECS_PER_TOKEN;
-            // Gather all FP16 vectors into a contiguous buffer for the GPU
+            // Gather all FP16 into one contiguous buffer
             std::vector<uint16_t> fp16_flat(total_vecs * DIMS);
             for (uint32_t t = 0; t < n; t++) {
                 const uint8_t* tok = src.data() + fixed + (size_t)t * BYTES_PER_TOKEN;
-                const uint8_t* kv  = tok; // vectors start at tok base
                 std::memcpy(fp16_flat.data() + (size_t)t * VECS_PER_TOKEN * DIMS,
-                            kv, VECS_PER_TOKEN * BYTES_FP16_VEC);
+                            tok, VECS_PER_TOKEN * BYTES_FP16_VEC);
             }
-            std::vector<int8_t>   i8_flat(total_vecs * DIMS);
-            std::vector<uint16_t> norm_flat(total_vecs);
 
-            if (vkq.encodePQ8(fp16_flat.data(), total_vecs,
-                              i8_flat.data(), norm_flat.data())) {
-                // Scatter GPU results into the output layout
-                for (uint32_t t = 0; t < n; t++) {
-                    const uint8_t* tok = src.data() + fixed + (size_t)t * BYTES_PER_TOKEN;
-                    for (uint32_t v = 0; v < VECS_PER_TOKEN; v++) {
-                        uint32_t idx = t * VECS_PER_TOKEN + v;
-                        uint16_t norm16 = norm_flat[idx];
-                        const int8_t* i8p = i8_flat.data() + (size_t)idx * DIMS;
-                        *(uint16_t*)wp = norm16; wp += 2;
-                        std::memcpy(wp, i8p, DIMS); wp += DIMS;
-                        // Error tracking
-                        const uint16_t* fp16 = (const uint16_t*)(tok + v * BYTES_FP16_VEC);
-                        decode_pq8(i8p, rec, fp16_to_f32(norm16));
-                        accumulate_error(fp16, rec, st.max_err, st.sum_sq, st.n_vals);
+            bool gpu_ok = false;
+            if (scheme == Scheme::PQ8) {
+                std::vector<int8_t>   i8_flat(total_vecs * DIMS);
+                std::vector<uint16_t> norm_flat(total_vecs);
+                gpu_ok = vkq.encodePQ8(fp16_flat.data(), total_vecs,
+                                       i8_flat.data(), norm_flat.data());
+                if (gpu_ok) {
+                    for (uint32_t t = 0; t < n; t++) {
+                        const uint8_t* tok = src.data() + fixed + (size_t)t * BYTES_PER_TOKEN;
+                        for (uint32_t v = 0; v < VECS_PER_TOKEN; v++) {
+                            uint32_t idx = t * VECS_PER_TOKEN + v;
+                            uint16_t norm16 = norm_flat[idx];
+                            const int8_t* i8p = i8_flat.data() + (size_t)idx * DIMS;
+                            *(uint16_t*)wp = norm16; wp += 2;
+                            std::memcpy(wp, i8p, DIMS); wp += DIMS;
+                            const uint16_t* fp16 = (const uint16_t*)(tok + v * BYTES_FP16_VEC);
+                            decode_pq8(i8p, rec, fp16_to_f32(norm16));
+                            accumulate_error(fp16, rec, st.max_err, st.sum_sq, st.n_vals);
+                        }
+                        const uint8_t* pad = tok + VECS_PER_TOKEN * BYTES_FP16_VEC;
+                        std::copy(pad, pad + PADDING, wp); wp += PADDING;
                     }
-                    // Padding verbatim
-                    const uint8_t* pad = tok + VECS_PER_TOKEN * BYTES_FP16_VEC;
-                    std::copy(pad, pad + PADDING, wp); wp += PADDING;
                 }
-                used_gpu = true;
+            } else if (scheme == Scheme::Q8) {
+                std::vector<int8_t> i8_flat(total_vecs * DIMS);
+                std::vector<float>  scale_flat(total_vecs);
+                gpu_ok = vkq.encodeQ8(fp16_flat.data(), total_vecs,
+                                      i8_flat.data(), scale_flat.data());
+                if (gpu_ok) {
+                    for (uint32_t t = 0; t < n; t++) {
+                        const uint8_t* tok = src.data() + fixed + (size_t)t * BYTES_PER_TOKEN;
+                        for (uint32_t v = 0; v < VECS_PER_TOKEN; v++) {
+                            uint32_t idx = t * VECS_PER_TOKEN + v;
+                            float scale = scale_flat[idx];
+                            const int8_t* i8p = i8_flat.data() + (size_t)idx * DIMS;
+                            *(float*)wp = scale; wp += 4;
+                            std::memcpy(wp, i8p, DIMS); wp += DIMS;
+                            const uint16_t* fp16 = (const uint16_t*)(tok + v * BYTES_FP16_VEC);
+                            decode_q8(i8p, rec, scale);
+                            accumulate_error(fp16, rec, st.max_err, st.sum_sq, st.n_vals);
+                        }
+                        const uint8_t* pad = tok + VECS_PER_TOKEN * BYTES_FP16_VEC;
+                        std::copy(pad, pad + PADDING, wp); wp += PADDING;
+                    }
+                }
+            } else { // PQ4
+                std::vector<uint8_t>  packed_flat(total_vecs * DIMS / 2);
+                std::vector<uint16_t> norm_flat(total_vecs);
+                gpu_ok = vkq.encodePQ4(fp16_flat.data(), total_vecs,
+                                       packed_flat.data(), norm_flat.data());
+                if (gpu_ok) {
+                    for (uint32_t t = 0; t < n; t++) {
+                        const uint8_t* tok = src.data() + fixed + (size_t)t * BYTES_PER_TOKEN;
+                        for (uint32_t v = 0; v < VECS_PER_TOKEN; v++) {
+                            uint32_t idx = t * VECS_PER_TOKEN + v;
+                            uint16_t norm16 = norm_flat[idx];
+                            const uint8_t* pkd = packed_flat.data() + (size_t)idx * (DIMS/2);
+                            *(uint16_t*)wp = norm16; wp += 2;
+                            std::memcpy(wp, pkd, DIMS/2); wp += DIMS/2;
+                            const uint16_t* fp16 = (const uint16_t*)(tok + v * BYTES_FP16_VEC);
+                            decode_pq4(pkd, rec, fp16_to_f32(norm16));
+                            accumulate_error(fp16, rec, st.max_err, st.sum_sq, st.n_vals);
+                        }
+                        const uint8_t* pad = tok + VECS_PER_TOKEN * BYTES_FP16_VEC;
+                        std::copy(pad, pad + PADDING, wp); wp += PADDING;
+                    }
+                }
             }
+            used_gpu = gpu_ok;
         }
-#endif
     }
+#endif
 
     if (!used_gpu) {
         // NEON / scalar path for Q8, PQ4, and PQ8 fallback

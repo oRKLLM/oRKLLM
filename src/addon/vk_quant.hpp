@@ -1,4 +1,4 @@
-// Vulkan compute harness for polar INT8 KV cache quantisation.
+// Vulkan compute harness for KV cache quantisation (three schemes).
 //
 // Targets the Mali-G52 (panvk / Mesa) on RK3576 via UMA:
 //   - Host-visible + device-local buffers (no staging copy on UMA)
@@ -6,13 +6,15 @@
 //   - Sets PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1 automatically
 //   - Falls back gracefully if no compatible GPU is found
 //
+// Schemes:
+//   pq8 — polar INT8:    L2 norm + direction×INT8  (polar_quant_pq8.comp)
+//   q8  — min-max INT8:  max-abs scale + INT8      (minmax_q8.comp)
+//   pq4 — polar INT4:    L2 norm + direction×INT4  (polar_pq4.comp)
+//
 // Usage:
 //   VkQuantizer& q = VkQuantizer::get();
 //   if (q.ok()) q.encodePQ8(fp16_ptr, n_vecs, i8_out, norm_out);
 //   else        /* fall back to NEON */
-//
-// The singleton is initialised on first call to get() and reused for
-// the lifetime of the process.  Thread-safe init via std::call_once.
 
 #pragma once
 #ifdef HAS_VULKAN
@@ -25,6 +27,8 @@
 #include <mutex>
 #include <stdexcept>
 #include "polar_quant_pq8_spv.h"
+#include "minmax_q8_spv.h"
+#include "polar_pq4_spv.h"
 
 // ── helpers ────────────────────────────────────────────────────────────────
 #define VK_CHECK(expr) do {                                   \
@@ -46,21 +50,28 @@ public:
 
     bool ok() const { return ready_; }
 
-    // Encode n_vecs × 128-dim FP16 vectors → INT8 directions + FP16 norms.
-    // fp16_in  : n_vecs × 128 × uint16_t
-    // i8_out   : n_vecs × 128 × int8_t
-    // norm_out : n_vecs × uint16_t
-    bool encodePQ8(const uint16_t* fp16_in,
-                   uint32_t        n_vecs,
-                   int8_t*         i8_out,
-                   uint16_t*       norm_out) {
+    // polar INT8: FP16→ INT8 directions + FP16 norm
+    bool encodePQ8(const uint16_t* fp16_in, uint32_t n_vecs,
+                   int8_t* i8_out, uint16_t* norm_out) {
         if (!ready_) return false;
-        try {
-            run_compute(fp16_in, n_vecs, i8_out, norm_out);
-            return true;
-        } catch (...) {
-            return false;
-        }
+        try { run_pq8(fp16_in, n_vecs, i8_out, norm_out); return true; }
+        catch (...) { return false; }
+    }
+
+    // min-max INT8: FP16 → INT8 values + FP32 scale
+    bool encodeQ8(const uint16_t* fp16_in, uint32_t n_vecs,
+                  int8_t* i8_out, float* scale_out) {
+        if (!ready_) return false;
+        try { run_q8(fp16_in, n_vecs, i8_out, scale_out); return true; }
+        catch (...) { return false; }
+    }
+
+    // polar INT4: FP16 → packed nibbles + FP16 norm
+    bool encodePQ4(const uint16_t* fp16_in, uint32_t n_vecs,
+                   uint8_t* packed_out, uint16_t* norm_out) {
+        if (!ready_) return false;
+        try { run_pq4(fp16_in, n_vecs, packed_out, norm_out); return true; }
+        catch (...) { return false; }
     }
 
     ~VkQuantizer() { cleanup(); }
@@ -79,10 +90,16 @@ private:
     VkQueue               compute_queue_  = VK_NULL_HANDLE;
     uint32_t              queue_family_   = UINT32_MAX;
     VkCommandPool         cmd_pool_       = VK_NULL_HANDLE;
+    // Shared: one descriptor set layout + pipeline layout (3 storage buffer bindings)
     VkDescriptorSetLayout desc_layout_    = VK_NULL_HANDLE;
     VkPipelineLayout      pipe_layout_    = VK_NULL_HANDLE;
-    VkShaderModule        shader_mod_     = VK_NULL_HANDLE;
-    VkPipeline            pipeline_       = VK_NULL_HANDLE;
+    // Per-scheme shader modules and pipelines
+    VkShaderModule        shader_pq8_     = VK_NULL_HANDLE;
+    VkShaderModule        shader_q8_      = VK_NULL_HANDLE;
+    VkShaderModule        shader_pq4_     = VK_NULL_HANDLE;
+    VkPipeline            pipeline_pq8_   = VK_NULL_HANDLE;
+    VkPipeline            pipeline_q8_    = VK_NULL_HANDLE;
+    VkPipeline            pipeline_pq4_   = VK_NULL_HANDLE;
     VkDescriptorPool      desc_pool_      = VK_NULL_HANDLE;
     bool                  ready_          = false;
 
@@ -98,7 +115,7 @@ private:
             create_instance();
             pick_physical_device();
             create_logical_device();
-            create_pipeline();
+            create_pipelines();
             create_descriptor_pool();
             ready_ = true;
         } catch (const std::exception& e) {
@@ -204,15 +221,35 @@ private:
     }
 
     // ── pipeline ────────────────────────────────────────────────────────
-    void create_pipeline() {
-        // Load embedded SPIR-V
-        VkShaderModuleCreateInfo smci{};
-        smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smci.codeSize = kPolarPQ8SpvSize;
-        smci.pCode    = kPolarPQ8Spv;
-        VK_CHECK(vkCreateShaderModule(device_, &smci, nullptr, &shader_mod_));
+    VkShaderModule make_shader(const uint32_t* spv, size_t spv_size) {
+        VkShaderModuleCreateInfo ci{};
+        ci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        ci.codeSize = spv_size;
+        ci.pCode    = spv;
+        VkShaderModule m = VK_NULL_HANDLE;
+        VK_CHECK(vkCreateShaderModule(device_, &ci, nullptr, &m));
+        return m;
+    }
 
-        // Descriptor set layout: 3 storage buffers (in_fp16, out_i8, out_norm)
+    VkPipeline make_pipeline(VkShaderModule shader) {
+        VkPipelineShaderStageCreateInfo stage{};
+        stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+        stage.module = shader;
+        stage.pName  = "main";
+
+        VkComputePipelineCreateInfo cpci{};
+        cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        cpci.stage  = stage;
+        cpci.layout = pipe_layout_;
+
+        VkPipeline p = VK_NULL_HANDLE;
+        VK_CHECK(vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &cpci, nullptr, &p));
+        return p;
+    }
+
+    void create_pipelines() {
+        // Shared descriptor set layout: 3 storage buffers (same for all schemes)
         VkDescriptorSetLayoutBinding bindings[3] = {};
         for (int i = 0; i < 3; i++) {
             bindings[i].binding         = i;
@@ -232,17 +269,12 @@ private:
         plci.pSetLayouts    = &desc_layout_;
         VK_CHECK(vkCreatePipelineLayout(device_, &plci, nullptr, &pipe_layout_));
 
-        VkPipelineShaderStageCreateInfo stage{};
-        stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-        stage.module = shader_mod_;
-        stage.pName  = "main";
-
-        VkComputePipelineCreateInfo cpci{};
-        cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        cpci.stage  = stage;
-        cpci.layout = pipe_layout_;
-        VK_CHECK(vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &cpci, nullptr, &pipeline_));
+        shader_pq8_   = make_shader(kPolarPQ8Spv,  kPolarPQ8SpvSize);
+        shader_q8_    = make_shader(kMinmaxQ8Spv,   kMinmaxQ8SpvSize);
+        shader_pq4_   = make_shader(kPolarPq4Spv,   kPolarPq4SpvSize);
+        pipeline_pq8_ = make_pipeline(shader_pq8_);
+        pipeline_q8_  = make_pipeline(shader_q8_);
+        pipeline_pq4_ = make_pipeline(shader_pq4_);
     }
 
     // Descriptor pool — recreated per-call via reuse strategy
@@ -312,35 +344,9 @@ private:
     }
 
     // ── compute dispatch ─────────────────────────────────────────────────
-    void run_compute(const uint16_t* fp16_in, uint32_t n_vecs,
-                     int8_t* i8_out, uint16_t* norm_out) {
-        const VkDeviceSize in_bytes   = (VkDeviceSize)n_vecs * 128 * sizeof(uint16_t);
-        const VkDeviceSize i8_bytes   = (VkDeviceSize)n_vecs * 128 * sizeof(int8_t);
-        const VkDeviceSize norm_bytes = (VkDeviceSize)n_vecs * sizeof(uint16_t);
-
-        // UMA flags: device-local + host-visible + host-coherent
-        constexpr VkMemoryPropertyFlags UMA_FLAGS =
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT  |
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT  |
-            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-        // Fallback without DEVICE_LOCAL if not available
-        constexpr VkMemoryPropertyFlags HOST_FLAGS =
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT  |
-            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-
-        auto alloc_uma = [&](VkDeviceSize sz, VkBufferUsageFlags usage) -> GpuBuf {
-            try { return alloc_buffer(sz, usage, UMA_FLAGS); }
-            catch (...) { return alloc_buffer(sz, usage, HOST_FLAGS); }
-        };
-
-        auto buf_in   = alloc_uma(in_bytes,   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-        auto buf_i8   = alloc_uma(i8_bytes,   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-        auto buf_norm = alloc_uma(norm_bytes,  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-
-        // Write input directly into mapped GPU memory (UMA — no copy)
-        std::memcpy(buf_in.ptr, fp16_in, in_bytes);
-
-        // Allocate and update descriptor set
+    // Generic helper: bind three buffers, dispatch pipeline, readback.
+    void dispatch(VkPipeline pipeline, uint32_t n_vecs,
+                  GpuBuf& b0, GpuBuf& b1, GpuBuf& b2) {
         VkDescriptorSetAllocateInfo dsai{};
         dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         dsai.descriptorPool     = desc_pool_;
@@ -350,9 +356,9 @@ private:
         VK_CHECK(vkAllocateDescriptorSets(device_, &dsai, &ds));
 
         VkDescriptorBufferInfo dbi[3] = {
-            { buf_in.buf,   0, VK_WHOLE_SIZE },
-            { buf_i8.buf,   0, VK_WHOLE_SIZE },
-            { buf_norm.buf, 0, VK_WHOLE_SIZE },
+            { b0.buf, 0, VK_WHOLE_SIZE },
+            { b1.buf, 0, VK_WHOLE_SIZE },
+            { b2.buf, 0, VK_WHOLE_SIZE },
         };
         VkWriteDescriptorSet writes[3] = {};
         for (int i = 0; i < 3; i++) {
@@ -365,7 +371,6 @@ private:
         }
         vkUpdateDescriptorSets(device_, 3, writes, 0, nullptr);
 
-        // Record and submit command buffer
         VkCommandBufferAllocateInfo cbai{};
         cbai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         cbai.commandPool        = cmd_pool_;
@@ -378,10 +383,10 @@ private:
         cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         VK_CHECK(vkBeginCommandBuffer(cb, &cbbi));
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipe_layout_, 0, 1, &ds, 0, nullptr);
-        vkCmdDispatch(cb, n_vecs, 1, 1); // one workgroup per vector
+        vkCmdDispatch(cb, n_vecs, 1, 1);
         VK_CHECK(vkEndCommandBuffer(cb));
 
         VkFenceCreateInfo fci{};
@@ -390,35 +395,82 @@ private:
         VK_CHECK(vkCreateFence(device_, &fci, nullptr, &fence));
 
         VkSubmitInfo si{};
-        si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         si.commandBufferCount = 1;
         si.pCommandBuffers    = &cb;
         VK_CHECK(vkQueueSubmit(compute_queue_, 1, &si, fence));
         VK_CHECK(vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX));
 
-        // Read results from mapped memory (UMA — no copy needed)
-        std::memcpy(i8_out,   buf_i8.ptr,   i8_bytes);
-        std::memcpy(norm_out, buf_norm.ptr,  norm_bytes);
-
-        // Cleanup per-call resources
         vkDestroyFence(device_, fence, nullptr);
         vkFreeCommandBuffers(device_, cmd_pool_, 1, &cb);
         vkFreeDescriptorSets(device_, desc_pool_, 1, &ds);
-        free_buffer(buf_in);
-        free_buffer(buf_i8);
-        free_buffer(buf_norm);
+    }
+
+    GpuBuf uma_buf(VkDeviceSize sz) {
+        constexpr VkMemoryPropertyFlags UMA =
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        constexpr VkMemoryPropertyFlags HOST =
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        try { return alloc_buffer(sz, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, UMA); }
+        catch (...) { return alloc_buffer(sz, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, HOST); }
+    }
+
+    // polar INT8
+    void run_pq8(const uint16_t* fp16_in, uint32_t n_vecs,
+                 int8_t* i8_out, uint16_t* norm_out) {
+        auto bi   = uma_buf((VkDeviceSize)n_vecs * 128 * 2);
+        auto bo   = uma_buf((VkDeviceSize)n_vecs * 128 * 1);
+        auto bn   = uma_buf((VkDeviceSize)n_vecs * 2);
+        std::memcpy(bi.ptr, fp16_in, n_vecs * 128 * 2);
+        dispatch(pipeline_pq8_, n_vecs, bi, bo, bn);
+        std::memcpy(i8_out,   bo.ptr, n_vecs * 128);
+        std::memcpy(norm_out, bn.ptr, n_vecs * 2);
+        free_buffer(bi); free_buffer(bo); free_buffer(bn);
+    }
+
+    // min-max INT8
+    void run_q8(const uint16_t* fp16_in, uint32_t n_vecs,
+                int8_t* i8_out, float* scale_out) {
+        auto bi   = uma_buf((VkDeviceSize)n_vecs * 128 * 2);
+        auto bo   = uma_buf((VkDeviceSize)n_vecs * 128 * 1);
+        auto bs   = uma_buf((VkDeviceSize)n_vecs * 4);       // FP32 scales
+        std::memcpy(bi.ptr, fp16_in, n_vecs * 128 * 2);
+        dispatch(pipeline_q8_, n_vecs, bi, bo, bs);
+        std::memcpy(i8_out,    bo.ptr, n_vecs * 128);
+        std::memcpy(scale_out, bs.ptr, n_vecs * 4);
+        free_buffer(bi); free_buffer(bo); free_buffer(bs);
+    }
+
+    // polar INT4
+    void run_pq4(const uint16_t* fp16_in, uint32_t n_vecs,
+                 uint8_t* packed_out, uint16_t* norm_out) {
+        auto bi   = uma_buf((VkDeviceSize)n_vecs * 128 * 2);
+        auto bp   = uma_buf((VkDeviceSize)n_vecs * 64);      // packed nibbles
+        auto bn   = uma_buf((VkDeviceSize)n_vecs * 2);
+        std::memcpy(bi.ptr, fp16_in, n_vecs * 128 * 2);
+        dispatch(pipeline_pq4_, n_vecs, bi, bp, bn);
+        std::memcpy(packed_out, bp.ptr, n_vecs * 64);
+        std::memcpy(norm_out,   bn.ptr, n_vecs * 2);
+        free_buffer(bi); free_buffer(bp); free_buffer(bn);
     }
 
     // ── cleanup ──────────────────────────────────────────────────────────
     void cleanup() {
         if (device_) {
             vkDeviceWaitIdle(device_);
-            if (desc_pool_)   vkDestroyDescriptorPool(device_, desc_pool_, nullptr);
-            if (pipeline_)    vkDestroyPipeline(device_, pipeline_, nullptr);
-            if (pipe_layout_) vkDestroyPipelineLayout(device_, pipe_layout_, nullptr);
-            if (desc_layout_) vkDestroyDescriptorSetLayout(device_, desc_layout_, nullptr);
-            if (shader_mod_)  vkDestroyShaderModule(device_, shader_mod_, nullptr);
-            if (cmd_pool_)    vkDestroyCommandPool(device_, cmd_pool_, nullptr);
+            if (desc_pool_)    vkDestroyDescriptorPool(device_, desc_pool_, nullptr);
+            if (pipeline_pq8_) vkDestroyPipeline(device_, pipeline_pq8_, nullptr);
+            if (pipeline_q8_)  vkDestroyPipeline(device_, pipeline_q8_,  nullptr);
+            if (pipeline_pq4_) vkDestroyPipeline(device_, pipeline_pq4_, nullptr);
+            if (pipe_layout_)  vkDestroyPipelineLayout(device_, pipe_layout_, nullptr);
+            if (desc_layout_)  vkDestroyDescriptorSetLayout(device_, desc_layout_, nullptr);
+            if (shader_pq8_)   vkDestroyShaderModule(device_, shader_pq8_, nullptr);
+            if (shader_q8_)    vkDestroyShaderModule(device_, shader_q8_,  nullptr);
+            if (shader_pq4_)   vkDestroyShaderModule(device_, shader_pq4_, nullptr);
+            if (cmd_pool_)     vkDestroyCommandPool(device_, cmd_pool_, nullptr);
             vkDestroyDevice(device_, nullptr);
         }
         if (instance_) vkDestroyInstance(instance_, nullptr);
