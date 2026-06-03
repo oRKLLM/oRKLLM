@@ -1,3 +1,10 @@
+# [0.8.0-alpha.22](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.21...v0.8.0-alpha.22) (2026-06-03)
+
+
+### Features
+
+* **langfuse:** instrument inference with Langfuse tracing (@langfuse/client v5) ([4086df7](https://github.com/oRKLLM/oRKLLM/commit/4086df7c607330a659dbd4441b439c93d7a059f4))
+
 # [0.8.0-alpha.21](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.20...v0.8.0-alpha.21) (2026-06-03)
 
 
