@@ -1,3 +1,10 @@
+# [0.8.0-alpha.21](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.20...v0.8.0-alpha.21) (2026-06-03)
+
+
+### Features
+
+* **ui:** three-state NPU status alert — grey/yellow+spinner/green ([b10786d](https://github.com/oRKLLM/oRKLLM/commit/b10786d43457c51c81eb046d6950def3235f93a7))
+
 # [0.8.0-alpha.20](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.19...v0.8.0-alpha.20) (2026-06-03)
 
 
