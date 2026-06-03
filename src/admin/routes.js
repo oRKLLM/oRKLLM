@@ -426,6 +426,7 @@ export default async function adminRoutes(fastify, options) {
         trustedProxy: dbGetSetting('trusted_proxy') ?? '',
         pinnedModel: dbGetSetting('pinned_model') ?? '',
         autoDownloadRuntimes: dbGetSetting('auto_download_runtimes') === '1',
+        npuPoolSize: parseInt(dbGetSetting('npu_pool_size') ?? '1'),
         langfuseEnabled:    dbGetSetting('langfuse_enabled')    === '1',
         langfuseBaseUrl:    dbGetSetting('langfuse_base_url')   ?? '',
         langfusePublicKey:  dbGetSetting('langfuse_public_key') ?? '',
@@ -440,7 +441,7 @@ export default async function adminRoutes(fastify, options) {
     const { idleTimeoutMinutes, temperature, topP, topK, maxNewTokens, repPenalty, hfToken,
             cacheEnabled, cacheHotLimitMB, cacheColdLimitMB, cacheDir, cacheMaxContextTokens,
             kvCacheQuant,
-            localAuthDisabled, trustedProxy, autoDownloadRuntimes,
+            localAuthDisabled, trustedProxy, autoDownloadRuntimes, npuPoolSize,
             langfuseEnabled, langfuseBaseUrl, langfusePublicKey, langfuseSecretKey,
           } = request.body || {};
     if (typeof idleTimeoutMinutes === 'number') {
@@ -463,6 +464,8 @@ export default async function adminRoutes(fastify, options) {
     if (typeof localAuthDisabled === 'boolean') dbSetSetting('local_auth_disabled', localAuthDisabled ? '1' : '0');
     if (typeof trustedProxy === 'string') dbSetSetting('trusted_proxy', trustedProxy);
     if (typeof autoDownloadRuntimes === 'boolean') dbSetSetting('auto_download_runtimes', autoDownloadRuntimes ? '1' : '0');
+    if (typeof npuPoolSize === 'number' && npuPoolSize >= 1 && npuPoolSize <= 8)
+      dbSetSetting('npu_pool_size', String(npuPoolSize));
     if (typeof langfuseEnabled   === 'boolean') dbSetSetting('langfuse_enabled',    langfuseEnabled ? '1' : '0');
     if (typeof langfuseBaseUrl   === 'string')  dbSetSetting('langfuse_base_url',   langfuseBaseUrl);
     if (typeof langfusePublicKey === 'string')  dbSetSetting('langfuse_public_key', langfusePublicKey);

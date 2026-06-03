@@ -9,29 +9,68 @@ import { syncRuntimes, hasRuntime } from './runtime_sync.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Per-worker slot — each holds one loaded model and one worker process.
+function createSlot(id) {
+  return {
+    id,
+    worker:           null,
+    activeModel:      null,   // { name, path, options, isMock, libPath }
+    isLoaded:         false,
+    loadingPromise:   null,
+    activeGeneration: null,
+    idleTimer:        null,
+  };
+}
+
 class EnginePool {
   constructor() {
-    this.worker = null;
-    this.activeModel = null; // { name, path, options, isMock }
-    this.isLoaded = false;
-    this.loadingPromise = null;
-    this.activeGeneration = null;
-    this.idleTimer = null;
-    this.pinned = false; // when true, idle timer never fires
-
-    // Load idle timeout from DB or default to 5 minutes
     const savedTimeout = dbGetSetting('idle_timeout_minutes');
-    const timeoutVal = savedTimeout !== null ? parseInt(savedTimeout) : 5;
-    this.idleTimeoutMs = timeoutVal * 60 * 1000;
+    this.idleTimeoutMs = (savedTimeout !== null ? parseInt(savedTimeout) : 5) * 60_000;
 
-    this.queue = [];
-    this.processingQueue = false;
+    // Multi-worker pool.  Default size = 1 (single worker, identical to the
+    // original behaviour).  Increase npu_pool_size in Settings to serve
+    // multiple concurrent requests on the RK3576's two NPU cores.
+    const poolSize = Math.max(1, parseInt(dbGetSetting('npu_pool_size') ?? '1') || 1);
+    this._slots = Array.from({ length: poolSize }, (_, i) => createSlot(i));
+
+    this.pinned = false;
+    this.queue  = [];
 
     // Speculative decoding — draft model worker (null when spec decode disabled)
-    this.draftWorker = null;
-    this.draftModel = null; // { name, path, options, isMock }
+    this.draftWorker   = null;
+    this.draftModel    = null;
     this.draftIsLoaded = false;
   }
+
+  // ── Backward-compat accessors pointing at slot 0 ──────────────────────
+  get worker()           { return this._slots[0].worker; }
+  set worker(v)          { this._slots[0].worker = v; }
+  get activeModel()      { return this._slots[0].activeModel; }
+  set activeModel(v)     { this._slots[0].activeModel = v; }
+  get isLoaded()         { return this._slots[0].isLoaded; }
+  set isLoaded(v)        { this._slots[0].isLoaded = v; }
+  get loadingPromise()   { return this._slots[0].loadingPromise; }
+  set loadingPromise(v)  { this._slots[0].loadingPromise = v; }
+  get activeGeneration() { return this._slots[0].activeGeneration; }
+  set activeGeneration(v){ this._slots[0].activeGeneration = v; }
+  get idleTimer()        { return this._slots[0].idleTimer; }
+  set idleTimer(v)       { this._slots[0].idleTimer = v; }
+
+  // Find the best idle slot for a given model.
+  // Priority: idle slot already loaded with model > idle unloaded slot > null.
+  _pickIdleSlot(modelName) {
+    return this._slots.find(s => !s.activeGeneration && s.isLoaded && s.activeModel?.name === modelName)
+        || this._slots.find(s => !s.activeGeneration && !s.loadingPromise);
+  }
+
+  // Number of slots in the pool
+  get poolSize() { return this._slots.length; }
+
+  // Slots loaded with a model (for status/health)
+  get loadedSlots() { return this._slots.filter(s => s.isLoaded); }
+
+  // True if any slot is loaded (replaces the old boolean this.isLoaded for external checks)
+  get anyLoaded() { return this._slots.some(s => s.isLoaded); }
 
   setPin(pinned) {
     this.pinned = pinned;
@@ -128,35 +167,37 @@ class EnginePool {
     this.resetIdleTimer();
   }
 
-  resetIdleTimer() {
-    if (this.idleTimer) {
-      clearTimeout(this.idleTimer);
-      this.idleTimer = null;
-    }
-    if (this.idleTimeoutMs > 0 && this.isLoaded && !this.activeGeneration && !this.pinned) {
-      this.idleTimer = setTimeout(() => {
-        console.log(`[EnginePool] Idle timeout reached. Unloading active model: ${this.activeModel?.name}`);
-        this.unload();
+  // Reset the idle timer for a specific slot (or slot 0 if not given)
+  resetIdleTimer(slot) {
+    const s = slot ?? this._slots[0];
+    if (s.idleTimer) { clearTimeout(s.idleTimer); s.idleTimer = null; }
+    if (this.idleTimeoutMs > 0 && s.isLoaded && !s.activeGeneration && !this.pinned) {
+      s.idleTimer = setTimeout(() => {
+        console.log(`[EnginePool] Idle timeout on slot ${s.id}: unloading ${s.activeModel?.name}`);
+        this._unloadSlot(s);
       }, this.idleTimeoutMs);
     }
   }
 
-  async load(modelName, options = {}) {
-    if (this.loadingPromise) {
-      return this.loadingPromise;
-    }
+  // Load a model, optionally targeting a specific slot.
+  // When called from processQueue a slot is always provided.
+  // When called directly (e.g. from admin API) targets slot 0.
+  async load(modelName, options = {}, slot) {
+    const s = slot ?? this._slots[0];
 
-    this.loadingPromise = (async () => {
+    if (s.loadingPromise) return s.loadingPromise;
+
+    s.loadingPromise = (async () => {
       // If already loaded and it is the same model, reuse it
-      if (this.isLoaded && this.activeModel && this.activeModel.name === modelName) {
-        this.resetIdleTimer();
-        return { status: 0, activeModel: this.activeModel };
+      if (s.isLoaded && s.activeModel?.name === modelName) {
+        this.resetIdleTimer(s);
+        return { status: 0, activeModel: s.activeModel };
       }
 
-      // Otherwise, unload any existing model first
-      await this.unload();
+      // Otherwise, unload existing model on this slot first
+      await this._unloadSlot(s);
 
-      console.log(`[EnginePool] Spawning worker process for model: ${modelName}`);
+      console.log(`[EnginePool] Slot ${s.id}: spawning worker for model: ${modelName}`);
       const modelPath = path.join(MODELS_DIR, modelName);
       if (!fs.existsSync(modelPath)) {
         throw new Error(`Model file not found: ${modelPath}`);
@@ -167,22 +208,20 @@ class EnginePool {
 
       // Try each candidate lib path until one succeeds
       for (const libPath of candidates) {
-        const result = await this._tryLoad(modelName, modelPath, options, libPath);
+        const result = await this._tryLoadSlot(s, modelName, modelPath, options, libPath);
         if (result.success) {
-          // Cache the working lib path so future loads skip straight to it
           const settings = dbGetModelSettings(modelName) || {};
           if (settings.workingLibPath !== libPath) {
             dbSetModelSettings(modelName, { ...settings, workingLibPath: libPath });
           }
-          this.isLoaded = true;
-          this.activeModel = { name: modelName, path: modelPath, options, isMock: result.isMock, libPath };
-          console.log(`[EnginePool] Model loaded: ${modelName} using ${libPath} (isMock: ${result.isMock})`);
-          this.resetIdleTimer();
-          return { status: 0, activeModel: this.activeModel };
+          s.isLoaded = true;
+          s.activeModel = { name: modelName, path: modelPath, options, isMock: result.isMock, libPath };
+          console.log(`[EnginePool] Slot ${s.id}: loaded ${modelName} using ${libPath} (isMock: ${result.isMock})`);
+          this.resetIdleTimer(s);
+          return { status: 0, activeModel: s.activeModel };
         }
         console.warn(`[EnginePool] ${libPath} failed for ${modelName}: ${result.error} — trying next`);
-        // Kill the failed worker before trying next candidate
-        if (this.worker) { this.worker.kill(); this.worker = null; }
+        if (s.worker) { s.worker.kill(); s.worker = null; }
       }
 
       // If auto-download is enabled and we know the required version, try fetching it
@@ -193,17 +232,17 @@ class EnginePool {
         // Rebuild candidates with newly downloaded runtime and retry once
         const freshCandidates = EnginePool.runtimeCandidates(modelName);
         for (const libPath of freshCandidates) {
-          const result = await this._tryLoad(modelName, modelPath, options, libPath);
-          if (result.success) {
+          const result2 = await this._tryLoadSlot(s, modelName, modelPath, options, libPath);
+          if (result2.success) {
             const settings = dbGetModelSettings(modelName) || {};
             dbSetModelSettings(modelName, { ...settings, workingLibPath: libPath });
-            this.isLoaded = true;
-            this.activeModel = { name: modelName, path: modelPath, options, isMock: result.isMock, libPath };
-            console.log(`[EnginePool] Model loaded after runtime sync: ${modelName} using ${libPath}`);
-            this.resetIdleTimer();
-            return { status: 0, activeModel: this.activeModel };
+            s.isLoaded = true;
+            s.activeModel = { name: modelName, path: modelPath, options, isMock: result2.isMock, libPath };
+            console.log(`[EnginePool] Slot ${s.id}: loaded after runtime sync: ${modelName} using ${libPath}`);
+            this.resetIdleTimer(s);
+            return { status: 0, activeModel: s.activeModel };
           }
-          if (this.worker) { this.worker.kill(); this.worker = null; }
+          if (s.worker) { s.worker.kill(); s.worker = null; }
         }
       }
 
@@ -220,28 +259,28 @@ class EnginePool {
     })();
 
     try {
-      return await this.loadingPromise;
+      return await s.loadingPromise;
     } finally {
-      this.loadingPromise = null;
+      s.loadingPromise = null;
     }
   }
 
-  // Attempt to load a model with a specific libPath — resolves with {success, isMock} or {success:false, error}
-  _tryLoad(modelName, modelPath, options, libPath) {
+  // Attempt to load a model on a slot with a specific libPath
+  _tryLoadSlot(slot, modelName, modelPath, options, libPath) {
     return new Promise((resolve) => {
       const workerPath = path.join(__dirname, 'worker.js');
-      this.worker = fork(workerPath);
+      slot.worker = fork(workerPath);
 
       const loadTimeout = setTimeout(() => {
-        console.error(`[EnginePool] Load timeout (60s) with ${libPath}`);
+        console.error(`[EnginePool] Slot ${slot.id}: load timeout (60s) with ${libPath}`);
         resolve({ success: false, error: 'Timeout (60s)' });
       }, 60000);
 
       const onMessage = (msg) => {
         if (msg.type !== 'loaded') return;
         clearTimeout(loadTimeout);
-        this.worker.removeListener('exit', onExit);
-        this.worker.removeListener('message', onMessage);
+        slot.worker.removeListener('exit', onExit);
+        slot.worker.removeListener('message', onMessage);
         if (msg.status === 0) {
           resolve({ success: true, isMock: msg.isMock });
         } else {
@@ -251,32 +290,39 @@ class EnginePool {
 
       const onExit = (code, signal) => {
         clearTimeout(loadTimeout);
-        this.worker.removeListener('message', onMessage);
-        this.worker = null;
-        const reason = signal ? `signal ${signal}` : `code ${code}`;
-        resolve({ success: false, error: `Worker exited (${reason})` });
+        slot.worker.removeListener('message', onMessage);
+        slot.worker = null;
+        resolve({ success: false, error: `Worker exited (${signal ?? code})` });
       };
 
-      this.worker.on('message', onMessage);
-      this.worker.once('exit', onExit);
-      this.worker.send({ type: 'load', modelPath, options, libPath });
+      slot.worker.on('message', onMessage);
+      slot.worker.once('exit', onExit);
+      slot.worker.send({ type: 'load', modelPath, options, libPath });
     });
   }
 
+  // Unload a specific slot
+  async _unloadSlot(slot) {
+    if (slot.idleTimer) { clearTimeout(slot.idleTimer); slot.idleTimer = null; }
+    if (slot.worker) {
+      console.log(`[EnginePool] Slot ${slot.id}: terminating worker for ${slot.activeModel?.name}`);
+      slot.worker.kill();
+      slot.worker = null;
+    }
+    slot.activeModel = null;
+    slot.isLoaded    = false;
+  }
+
+  // Public unload — unloads slot 0 (primary), preserves additional slots
   async unload() {
-    if (this.idleTimer) {
-      clearTimeout(this.idleTimer);
-      this.idleTimer = null;
-    }
+    await this._unloadSlot(this._slots[0]);
+    this.pinned = false;
+    dbSetSetting('pinned_model', '');
+  }
 
-    if (this.worker) {
-      console.log(`[EnginePool] Terminating worker process for model: ${this.activeModel?.name}`);
-      this.worker.kill();
-      this.worker = null;
-    }
-
-    this.activeModel = null;
-    this.isLoaded = false;
+  // Unload all slots (e.g. on server shutdown)
+  async unloadAll() {
+    await Promise.all(this._slots.map(s => this._unloadSlot(s)));
     this.pinned = false;
     dbSetSetting('pinned_model', '');
   }
@@ -562,26 +608,35 @@ class EnginePool {
     });
   }
 
-  async processQueue() {
-    if (this.processingQueue || this.queue.length === 0) return;
-    this.processingQueue = true;
+  // Dispatch queued requests to idle slots concurrently.
+  // Called whenever a slot becomes free or a new request is enqueued.
+  processQueue() {
+    if (this.queue.length === 0) return;
 
-    if (this.idleTimer) {
-      clearTimeout(this.idleTimer);
-      this.idleTimer = null;
+    for (let i = 0; i < this.queue.length; i++) {
+      const req = this.queue[i];
+      const slot = this._pickIdleSlot(req.modelName);
+      if (!slot) continue; // all slots busy — wait for one to finish
+
+      this.queue.splice(i, 1);
+      i--;
+      this._dispatchToSlot(slot, req);
     }
+  }
 
-    const request = this.queue.shift();
-    const { modelName, prompt, options, onToken, cachePaths, resolve, reject } = request;
+  // Run one request on a slot; calls processQueue again when done.
+  async _dispatchToSlot(slot, { modelName, prompt, options, onToken, cachePaths, resolve, reject }) {
+    // Cancel any pending idle-timeout on this slot
+    if (slot.idleTimer) { clearTimeout(slot.idleTimer); slot.idleTimer = null; }
 
     try {
-      await this.load(modelName, options);
+      await this.load(modelName, options, slot);
 
-      this.activeGeneration = new Promise((genResolve, genReject) => {
+      slot.activeGeneration = new Promise((genResolve, genReject) => {
         const tokenHandler = (msg) => {
           if (msg.type === 'token') {
             onToken(msg);
-            if (msg.state === 2 || msg.state === 3) { // Finish or Error
+            if (msg.state === 2 || msg.state === 3) {
               cleanup();
               genResolve(msg);
             }
@@ -593,62 +648,67 @@ class EnginePool {
 
         const exitHandler = () => {
           cleanup();
-          this.isLoaded = false;
-          this.worker = null;
-          this.activeModel = null;
-          genReject(new Error("Worker process exited unexpectedly during generation"));
+          slot.isLoaded    = false;
+          slot.worker      = null;
+          slot.activeModel = null;
+          genReject(new Error('Worker process exited unexpectedly during generation'));
         };
 
         const cleanup = () => {
-          if (this.worker) {
-            this.worker.removeListener('message', tokenHandler);
-            this.worker.removeListener('exit', exitHandler);
-          }
+          slot.worker?.removeListener('message', tokenHandler);
+          slot.worker?.removeListener('exit',    exitHandler);
         };
 
-        this.worker.on('message', tokenHandler);
-        this.worker.on('exit', exitHandler);
-
-        // Send generation task (cache paths are optional; undefined fields are ignored by worker)
-        this.worker.send({
-          type: 'run',
+        slot.worker.on('message', tokenHandler);
+        slot.worker.on('exit',    exitHandler);
+        slot.worker.send({
+          type:          'run',
           prompt,
           loadCachePath: cachePaths?.loadCachePath,
           saveCachePath: cachePaths?.saveCachePath,
         });
       });
 
-      const result = await this.activeGeneration;
+      const result = await slot.activeGeneration;
       resolve(result);
     } catch (e) {
       reject(e);
     } finally {
-      this.activeGeneration = null;
-      this.resetIdleTimer();
-      this.processingQueue = false;
-      this.processQueue(); // trigger next
+      slot.activeGeneration = null;
+      this.resetIdleTimer(slot);
+      this.processQueue(); // try to dispatch next queued request
     }
   }
 
   async abort() {
-    if (this.worker && this.activeGeneration) {
-      this.worker.send({ type: 'abort' });
+    // Abort all active generations across all slots
+    for (const s of this._slots) {
+      if (s.worker && s.activeGeneration) s.worker.send({ type: 'abort' });
     }
   }
 
   async clearCache() {
-    if (this.worker) {
-      this.worker.send({ type: 'clear_cache' });
+    for (const s of this._slots) {
+      if (s.worker) s.worker.send({ type: 'clear_cache' });
     }
   }
 
   getStatus() {
+    // Primary slot (slot 0) drives the single-model status reported to the UI
+    const primary = this._slots[0];
     return {
-      isLoaded: this.isLoaded,
-      model: this.activeModel ? this.activeModel.name : null,
-      isMock: this.activeModel ? this.activeModel.isMock : false,
-      options: this.activeModel ? this.activeModel.options : null,
-      pinned: this.pinned
+      isLoaded:   primary.isLoaded,
+      model:      primary.activeModel?.name  ?? null,
+      isMock:     primary.activeModel?.isMock ?? false,
+      options:    primary.activeModel?.options ?? null,
+      pinned:     this.pinned,
+      poolSize:   this._slots.length,
+      slots:      this._slots.map(s => ({
+        id:      s.id,
+        model:   s.activeModel?.name ?? null,
+        loaded:  s.isLoaded,
+        busy:    !!s.activeGeneration,
+      })),
     };
   }
 }

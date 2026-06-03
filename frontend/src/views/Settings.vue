@@ -187,6 +187,24 @@
           Model Management
         </div>
 
+        <div class="text-subtitle-2 font-weight-medium mb-1">NPU Worker Pool Size</div>
+        <div class="text-caption text-grey mb-3">
+          Number of concurrent worker processes. Each worker loads a model independently into the NPU.
+          The RK3576 has 2 NPU cores — setting this to 2 allows two requests to be served simultaneously
+          at ~50% throughput each. Requires server restart to take effect.
+        </div>
+        <v-row no-gutters class="align-center mb-4">
+          <v-col cols="9">
+            <v-slider v-model="settings.npuPoolSize" :min="1" :max="4" :step="1"
+              color="primary" density="compact" hide-details></v-slider>
+          </v-col>
+          <v-col cols="3" class="pl-3">
+            <v-chip size="small" class="font-weight-bold">{{ settings.npuPoolSize }} worker{{ settings.npuPoolSize > 1 ? 's' : '' }}</v-chip>
+          </v-col>
+        </v-row>
+
+        <v-divider class="mb-4"></v-divider>
+
         <div class="text-subtitle-2 font-weight-medium mb-1">Inactivity Auto-Unload Timeout</div>
         <div class="text-caption text-grey mb-3">Automatically unload the active model after this period of inactivity. Per-model TTL overrides this.</div>
         <v-row no-gutters class="align-center mb-1">
@@ -435,6 +453,7 @@ export default {
     serverInfo: {},
     settings: {
       idleTimeoutMinutes: 5,
+      npuPoolSize: 1,
       temperature: 0.8,
       topP: 0.9,
       topK: 40,
@@ -496,6 +515,7 @@ export default {
         this.serverInfo = data.server || {};
         const s = data.settings || {};
         this.settings.idleTimeoutMinutes = s.idleTimeoutMinutes ?? 5;
+        this.settings.npuPoolSize         = s.npuPoolSize         ?? 1;
         this.settings.temperature = s.temperature ?? 0.8;
         this.settings.topP = s.topP ?? 0.9;
         this.settings.topK = s.topK ?? 40;
