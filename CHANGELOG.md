@@ -1,3 +1,10 @@
+# [0.8.0-alpha.27](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.26...v0.8.0-alpha.27) (2026-06-03)
+
+
+### Bug Fixes
+
+* **autoload:** restore RAM pre-check + evict non-pinned model first ([e527671](https://github.com/oRKLLM/oRKLLM/commit/e527671625c10b459bd1c66d7d49a8eef82126bc))
+
 # [0.8.0-alpha.26](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.25...v0.8.0-alpha.26) (2026-06-03)
 
 
