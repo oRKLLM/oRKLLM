@@ -1,3 +1,10 @@
+# [0.8.0-alpha.13](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.12...v0.8.0-alpha.13) (2026-06-03)
+
+
+### Features
+
+* **kvcache:** add polar INT8 and polar INT4 quantisation schemes ([3f4d655](https://github.com/mafischer/oRKLLM/commit/3f4d65526da72515dde010d395ad5ae5c1bf9a29))
+
 # [0.8.0-alpha.12](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.11...v0.8.0-alpha.12) (2026-06-03)
 
 
