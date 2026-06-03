@@ -1,3 +1,15 @@
+# [0.8.0-alpha.6](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.5...v0.8.0-alpha.6) (2026-06-03)
+
+
+### Bug Fixes
+
+* **e2e:** relax token_id assertion in prefillAndCache test for mock engine ([769f4b9](https://github.com/mafischer/oRKLLM/commit/769f4b944a592a20450c04d8c78b66d98ca0614d))
+
+
+### Features
+
+* **admin:** add /api/admin/infer-with-cache for explicit cache path testing ([3b9838b](https://github.com/mafischer/oRKLLM/commit/3b9838bbe913552f8039859d128b348d451785c4))
+
 # [0.8.0-alpha.5](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.4...v0.8.0-alpha.5) (2026-06-03)
 
 
