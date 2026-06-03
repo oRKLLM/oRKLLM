@@ -1,3 +1,10 @@
+# [0.8.0-alpha.31](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.30...v0.8.0-alpha.31) (2026-06-03)
+
+
+### Features
+
+* **ui:** move Langfuse tracing config to Site Management → Observability tab ([753fed8](https://github.com/oRKLLM/oRKLLM/commit/753fed86e625aa740a75c5b8e0d1d1260af39039))
+
 # [0.8.0-alpha.30](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.29...v0.8.0-alpha.30) (2026-06-03)
 
 
