@@ -1,5 +1,5 @@
 // Auto-generated SPIR-V for polar INT8 quantisation shader
-// Source: src/addon/polar_quant_pq8.comp
+// Source: src/addon/polar_quant_pq8.comp  (Vulkan 1.0, glslang 15.1.0)
 #pragma once
 #include <cstdint>
 static const uint32_t kPolarPQ8Spv[] = {
