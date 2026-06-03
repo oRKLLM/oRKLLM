@@ -10,52 +10,15 @@ import Chat from './views/Chat.vue';
 import SiteManagement from './views/SiteManagement.vue';
 
 const routes = [
-  {
-    path: '/',
-    name: 'Dashboard',
-    component: Dashboard,
-  },
-  {
-    path: '/login',
-    name: 'Login',
-    component: Login,
-  },
-  {
-    path: '/setup',
-    name: 'Setup',
-    component: Setup,
-  },
-  {
-    path: '/settings',
-    name: 'Settings',
-    component: Settings,
-  },
-  {
-    path: '/models',
-    name: 'Models',
-    component: Models,
-  },
-  {
-    path: '/logs',
-    name: 'Logs',
-    component: Logs,
-  },
-  {
-    path: '/bench',
-    name: 'Bench',
-    component: Bench,
-  },
-  {
-    path: '/chat',
-    name: 'Chat',
-    component: Chat,
-  },
-  {
-    path: '/site-management',
-    name: 'SiteManagement',
-    component: SiteManagement,
-    meta: { requireRole: 'admin' },
-  },
+  { path: '/',                name: 'Dashboard',      component: Dashboard,      meta: { title: 'Dashboard' } },
+  { path: '/login',           name: 'Login',          component: Login,          meta: { title: 'Login' } },
+  { path: '/setup',           name: 'Setup',          component: Setup,          meta: { title: 'Setup' } },
+  { path: '/settings',        name: 'Settings',       component: Settings,       meta: { title: 'Settings' } },
+  { path: '/models',          name: 'Models',         component: Models,         meta: { title: 'Models' } },
+  { path: '/logs',            name: 'Logs',           component: Logs,           meta: { title: 'Logs' } },
+  { path: '/bench',           name: 'Bench',          component: Bench,          meta: { title: 'Bench' } },
+  { path: '/chat',            name: 'Chat',           component: Chat,           meta: { title: 'Chat' } },
+  { path: '/site-management', name: 'SiteManagement', component: SiteManagement, meta: { title: 'Site Management', requireRole: 'admin' } },
 ];
 
 const router = createRouter({
@@ -98,6 +61,10 @@ router.beforeEach(async (to, from, next) => {
     // Fallback if backend is loading or unreachable
     next();
   }
+});
+
+router.afterEach((to) => {
+  document.title = to.meta?.title ? `${to.meta.title} — oRKLLM` : 'oRKLLM';
 });
 
 export default router;
