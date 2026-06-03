@@ -1,3 +1,10 @@
+# [0.8.0-alpha.12](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.11...v0.8.0-alpha.12) (2026-06-03)
+
+
+### Bug Fixes
+
+* **kvcache_quant:** use FP32 NEON arithmetic to avoid FP16 extension requirement ([23651aa](https://github.com/mafischer/oRKLLM/commit/23651aa4b81a596c3bba5e4eac0ae5c95ec18f47))
+
 # [0.8.0-alpha.11](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.10...v0.8.0-alpha.11) (2026-06-03)
 
 
