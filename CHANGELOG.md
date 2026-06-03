@@ -1,3 +1,16 @@
+# [0.8.0-alpha.18](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.17...v0.8.0-alpha.18) (2026-06-03)
+
+
+### Bug Fixes
+
+* **ui:** correct GPU accelerated label — pq8 (polar INT8) uses Vulkan, pq4 is NEON-only ([853533b](https://github.com/oRKLLM/oRKLLM/commit/853533b3a7b87821f0b7e938733482d3f1d8538e))
+* **ui:** replace fixed 15ms dequantise estimate with per-MB rate (~0.3 ms/MB) ([89d6fb9](https://github.com/oRKLLM/oRKLLM/commit/89d6fb9656bbf1144b8ba6b7170ef3cb0b918380))
+
+
+### Features
+
+* **vulkan:** add Mali GPU shaders for min-max INT8 and polar INT4 ([4cafe28](https://github.com/oRKLLM/oRKLLM/commit/4cafe28a80b199fe448575315877639d75f8c0fc))
+
 # [0.8.0-alpha.17](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.16...v0.8.0-alpha.17) (2026-06-03)
 
 
