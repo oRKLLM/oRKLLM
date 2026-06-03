@@ -74,35 +74,38 @@ static inline uint16_t f32_to_fp16(float f) {
 }
 
 // ── SIMD vector quantise: 128 FP16 → scale + 128 INT8 ─────────────────────
+// All arithmetic is done in FP32 to avoid requiring the ARMv8.2-A FP16
+// arithmetic extension. Only FP16 load/store + FCVT are used (base AArch64).
 static void quantize_vec(const uint16_t* __restrict__ fp16,
                           int8_t* __restrict__ out_i8,
                           float*               out_scale) {
 #if HAS_NEON
-    // Pass 1: find max |value| across all 128 FP16 lanes
-    float16x8_t maxabs = vdupq_n_f16(0.f);
-    for (int i = 0; i < DIMS; i += 8)
-        maxabs = vmaxq_f16(maxabs, vabsq_f16(vld1q_f16((const __fp16*)(fp16 + i))));
-
-    // Horizontal reduction: 8→4→2→1
-    float16x4_t m4 = vpmax_f16(vget_low_f16(maxabs), vget_high_f16(maxabs));
-    m4 = vpmax_f16(m4, m4);
-    m4 = vpmax_f16(m4, m4);
-    float max_val = (float)vget_lane_f16(m4, 0);
-
-    float scale    = (max_val == 0.f) ? 1.f : max_val / 127.f;
-    *out_scale     = scale;
-    float inv_scale = 1.f / scale;
-    float32x4_t inv4 = vdupq_n_f32(inv_scale);
-
-    // Pass 2: scale → round → saturate to INT8, 8 FP16 per iter → 8 INT8
+    // Pass 1: load FP16, convert to FP32, find max abs — 8 FP16 per iteration
+    float32x4_t maxabs = vdupq_n_f32(0.f);
     for (int i = 0; i < DIMS; i += 8) {
-        float16x8_t v   = vld1q_f16((const __fp16*)(fp16 + i));
-        float32x4_t lo  = vmulq_f32(vcvt_f32_f16(vget_low_f16(v)),  inv4);
-        float32x4_t hi  = vmulq_f32(vcvt_f32_f16(vget_high_f16(v)), inv4);
-        int32x4_t  ilo  = vcvtnq_s32_f32(lo);   // round-to-nearest
+        float16x8_t v8  = vld1q_f16((const __fp16*)(fp16 + i));
+        float32x4_t lo  = vabsq_f32(vcvt_f32_f16(vget_low_f16(v8)));
+        float32x4_t hi  = vabsq_f32(vcvt_f32_f16(vget_high_f16(v8)));
+        maxabs = vmaxq_f32(maxabs, vmaxq_f32(lo, hi));
+    }
+    // FP32 horizontal max: 4→2→1
+    float32x2_t m2 = vpmax_f32(vget_low_f32(maxabs), vget_high_f32(maxabs));
+    m2 = vpmax_f32(m2, m2);
+    float max_val = vget_lane_f32(m2, 0);
+
+    float scale     = (max_val == 0.f) ? 1.f : max_val / 127.f;
+    *out_scale      = scale;
+    float32x4_t inv4 = vdupq_n_f32(1.f / scale);
+
+    // Pass 2: load FP16, convert FP32, scale, round, saturate → INT8
+    for (int i = 0; i < DIMS; i += 8) {
+        float16x8_t v8 = vld1q_f16((const __fp16*)(fp16 + i));
+        float32x4_t lo  = vmulq_f32(vcvt_f32_f16(vget_low_f16(v8)),  inv4);
+        float32x4_t hi  = vmulq_f32(vcvt_f32_f16(vget_high_f16(v8)), inv4);
+        int32x4_t  ilo  = vcvtnq_s32_f32(lo);
         int32x4_t  ihi  = vcvtnq_s32_f32(hi);
-        int16x8_t  i16  = vcombine_s16(vqmovn_s32(ilo), vqmovn_s32(ihi)); // sat→int16
-        vst1_s8(out_i8 + i, vqmovn_s16(i16));   // sat→int8, store 8
+        int16x8_t  i16  = vcombine_s16(vqmovn_s32(ilo), vqmovn_s32(ihi));
+        vst1_s8(out_i8 + i, vqmovn_s16(i16));
     }
 #else
     float vals[DIMS], max_val = 0.f;

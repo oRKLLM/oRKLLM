@@ -48,7 +48,7 @@
           "defines": [ "_HAS_EXCEPTIONS=1" ]
         }],
         [ "target_arch=='arm64'", {
-          "cflags_cc": [ "-std=c++17", "-O3", "-march=armv8.2-a+fp16" ]
+          "cflags_cc": [ "-std=c++17", "-O3" ]
         }]
       ]
     }
