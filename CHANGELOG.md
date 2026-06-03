@@ -1,3 +1,10 @@
+# [0.8.0-alpha.28](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.27...v0.8.0-alpha.28) (2026-06-03)
+
+
+### Features
+
+* **pool:** multi-worker NPU pool — concurrent inference without containers ([ba32b7e](https://github.com/oRKLLM/oRKLLM/commit/ba32b7ef88b03a365f7ba745be70dbc458906b10))
+
 # [0.8.0-alpha.27](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.26...v0.8.0-alpha.27) (2026-06-03)
 
 
