@@ -1,3 +1,10 @@
+# [0.8.0-alpha.26](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.25...v0.8.0-alpha.26) (2026-06-03)
+
+
+### Bug Fixes
+
+* **cache:** empty cache_dir falls back to default; migrate misplaced files ([1a3dbd5](https://github.com/oRKLLM/oRKLLM/commit/1a3dbd5d89765be88c65d373c688edb3fdeba756))
+
 # [0.8.0-alpha.25](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.24...v0.8.0-alpha.25) (2026-06-03)
 
 
