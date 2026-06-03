@@ -1,3 +1,10 @@
+# [0.8.0-alpha.17](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.16...v0.8.0-alpha.17) (2026-06-03)
+
+
+### Bug Fixes
+
+* **ui:** widen spec_draft_tokens text field to match other numeric inputs ([9492098](https://github.com/oRKLLM/oRKLLM/commit/94920981564378295fcfd851fb1bf9b0e771e230))
+
 # [0.8.0-alpha.16](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.15...v0.8.0-alpha.16) (2026-06-03)
 
 
