@@ -1,3 +1,10 @@
+# [0.8.0-alpha.7](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.6...v0.8.0-alpha.7) (2026-06-03)
+
+
+### Bug Fixes
+
+* **admin:** allow empty prompt in infer-with-cache when loadCachePath set ([24bed01](https://github.com/mafischer/oRKLLM/commit/24bed01fea8859ac85023d7f7d8738437f6ea6d7))
+
 # [0.8.0-alpha.6](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.5...v0.8.0-alpha.6) (2026-06-03)
 
 
