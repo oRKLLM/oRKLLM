@@ -1,3 +1,10 @@
+# [0.8.0-alpha.20](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.19...v0.8.0-alpha.20) (2026-06-03)
+
+
+### Features
+
+* **ui:** dynamic browser tab title per page (Dashboard, Models, etc.) ([fb1e6e1](https://github.com/oRKLLM/oRKLLM/commit/fb1e6e1137fbb08361075ca2e28a3d41a3c08b4c))
+
 # [0.8.0-alpha.19](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.18...v0.8.0-alpha.19) (2026-06-03)
 
 
