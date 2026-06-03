@@ -1,3 +1,10 @@
+# [0.8.0-alpha.8](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.7...v0.8.0-alpha.8) (2026-06-03)
+
+
+### Features
+
+* **kvcache:** add INT8 KV cache quantise/dequantise (kvcache_quant.js) ([962e8dd](https://github.com/mafischer/oRKLLM/commit/962e8dda338ed0e7298d6aa21ea6068f7c7370a3))
+
 # [0.8.0-alpha.7](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.6...v0.8.0-alpha.7) (2026-06-03)
 
 
