@@ -1,3 +1,10 @@
+# [0.8.0-alpha.2](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.1...v0.8.0-alpha.2) (2026-06-03)
+
+
+### Bug Fixes
+
+* **vulkan:** correct pack_fp16 mantissa formula in GLSL shader ([c9ea2e3](https://github.com/oRKLLM/oRKLLM/commit/c9ea2e32b3c284b731d1d9f7880671698c2d515f))
+
 # [0.8.0-alpha.1](https://github.com/oRKLLM/oRKLLM/compare/v0.7.0...v0.8.0-alpha.1) (2026-06-03)
 
 
