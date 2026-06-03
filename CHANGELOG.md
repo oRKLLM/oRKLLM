@@ -1,3 +1,11 @@
+# [0.8.0-alpha.32](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.31...v0.8.0-alpha.32) (2026-06-03)
+
+
+### Bug Fixes
+
+* **langfuse:** use langfuse-node for trace/generation API ([0fff4f3](https://github.com/oRKLLM/oRKLLM/commit/0fff4f39d02f1b33fa5b2cdf322458162b1cf91a))
+* **ui:** fix Vue template syntax in Langfuse secret key toggle ([e64e0d5](https://github.com/oRKLLM/oRKLLM/commit/e64e0d501578b9f10b6feadb12d1473e4b150901))
+
 # [0.8.0-alpha.31](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.30...v0.8.0-alpha.31) (2026-06-03)
 
 
