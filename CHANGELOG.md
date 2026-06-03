@@ -1,3 +1,10 @@
+# [0.8.0-alpha.30](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.29...v0.8.0-alpha.30) (2026-06-03)
+
+
+### Bug Fixes
+
+* **pool:** revert domain pinning — base_domain_id has no effect on RK3576 ([d683709](https://github.com/oRKLLM/oRKLLM/commit/d683709eff9906a7404af9aa86d01eaff7fa05a4))
+
 # [0.8.0-alpha.29](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.28...v0.8.0-alpha.29) (2026-06-03)
 
 
