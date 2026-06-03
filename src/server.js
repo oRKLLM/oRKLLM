@@ -208,6 +208,31 @@ async function autoLoadPinnedModel() {
   }
 }
 
+// One-time migration: if cache files landed in the package CWD (due to an
+// empty cache_dir setting) move them to the correct default location.
+function migrateMisplacedCache() {
+  const DEFAULT_CACHE = path.join(os.homedir(), '.config', 'orkllm', 'cache');
+  const CWD_COLD = path.join(process.cwd(), 'cold');
+  const CWD_LRU  = path.join(process.cwd(), 'lru.json');
+  if (!fs.existsSync(CWD_COLD)) return;
+  try {
+    const destCold = path.join(DEFAULT_CACHE, 'cold');
+    fs.mkdirSync(destCold, { recursive: true });
+    for (const f of fs.readdirSync(CWD_COLD)) {
+      const src = path.join(CWD_COLD, f);
+      const dst = path.join(destCold, f);
+      if (!fs.existsSync(dst)) fs.renameSync(src, dst);
+    }
+    fs.rmdirSync(CWD_COLD, { recursive: false });
+    if (fs.existsSync(CWD_LRU)) {
+      fs.renameSync(CWD_LRU, path.join(DEFAULT_CACHE, 'lru.json'));
+    }
+    fastify.log.info('[Cache] Migrated misplaced cache files to default location');
+  } catch (e) {
+    fastify.log.warn(`[Cache] Migration failed (non-fatal): ${e.message}`);
+  }
+}
+
 // Bootstrap Server
 const start = async () => {
   const host = process.env.ORKLLM_HOST || '127.0.0.1';
@@ -216,6 +241,7 @@ const start = async () => {
   try {
     await fastify.listen({ port, host });
     fastify.log.info(`oRKLLM server started at http://${host}:${port}`);
+    migrateMisplacedCache();  // fix empty cache_dir path bug from earlier versions
     await autoLoadPinnedModel();
     // Background runtime sync (non-blocking)
     if (dbGetSetting('auto_download_runtimes') === '1') {

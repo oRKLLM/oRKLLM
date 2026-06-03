@@ -27,7 +27,7 @@ function settings() {
     enabled:       dbGetSetting('cache_enabled') === '1',
     hotLimitMB:    parseInt(dbGetSetting('cache_hot_limit_mb')  ?? DEFAULT_HOT_LIMIT_MB),
     coldLimitMB:   parseInt(dbGetSetting('cache_cold_limit_mb') ?? DEFAULT_COLD_LIMIT_MB),
-    cacheDir:      dbGetSetting('cache_dir') ?? DEFAULT_CACHE_DIR,
+    cacheDir:      dbGetSetting('cache_dir') || DEFAULT_CACHE_DIR,
     maxContextTokens: parseInt(dbGetSetting('cache_max_context_tokens') ?? '8192'),
     kvCacheQuant:  dbGetSetting('kv_cache_quant') ?? 'off',
   };
