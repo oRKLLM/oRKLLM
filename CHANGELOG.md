@@ -1,3 +1,10 @@
+# [0.8.0-alpha.14](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.13...v0.8.0-alpha.14) (2026-06-03)
+
+
+### Features
+
+* **kvcache:** Vulkan compute path for polar INT8 on Mali-G52 (panvk/Mesa) ([4c7bfa3](https://github.com/mafischer/oRKLLM/commit/4c7bfa32ab9fa7adbd429d5f182752eacaa172a3))
+
 # [0.8.0-alpha.13](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.12...v0.8.0-alpha.13) (2026-06-03)
 
 
