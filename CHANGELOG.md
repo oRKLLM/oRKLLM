@@ -1,3 +1,12 @@
+# [0.8.0-alpha.19](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.18...v0.8.0-alpha.19) (2026-06-03)
+
+
+### Bug Fixes
+
+* **cache,ui:** hot→cold overflow + Models page live status poll ([623cbb9](https://github.com/oRKLLM/oRKLLM/commit/623cbb90e35adc758f5053b80d32925cb4af470e))
+* **cache:** hot=0 writes to cold directly; hot→cold overflow instead of delete ([f5755ec](https://github.com/oRKLLM/oRKLLM/commit/f5755ec81117ac7a6b4ae6c48afe04100d9a1306))
+* **spec-decode:** detect single-NPU deadlock and fall back to standard generate ([fcd898f](https://github.com/oRKLLM/oRKLLM/commit/fcd898f4bdd6ff137e2ee4f4febdb5823176e886))
+
 # [0.8.0-alpha.18](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.17...v0.8.0-alpha.18) (2026-06-03)
 
 
