@@ -5,6 +5,7 @@ import pool from '../pool.js';
 import { recordRequest } from '../stats.js';
 import { dbGetModelSettings, dbSetModelSettings } from '../db.js';
 import { cacheKey, getCachePath, putCachePath, tmpCachePath, isCacheEnabled, getMaxContextTokens } from '../cache.js';
+import { traceInference } from '../langfuse.js';
 
 // Rough token estimate: ~4 chars per token
 function estimateTokens(messages) {
@@ -159,6 +160,19 @@ export default async function apiRoutes(fastify, options) {
     const completionId = 'chatcmpl-' + Math.random().toString(36).substring(2, 15);
     const created = Math.floor(Date.now() / 1000);
 
+    // Open a Langfuse trace for this request (no-op if Langfuse not configured)
+    const lfSpan = traceInference({
+      model,
+      messages: trimmed,
+      modelParameters: {
+        temperature:    modelOptions.temperature,
+        top_p:          modelOptions.top_p,
+        top_k:          modelOptions.top_k,
+        max_new_tokens: modelOptions.max_new_tokens,
+      },
+      metadata: { cache_hit: !!loadCachePath },
+    });
+
     if (stream) {
       reply.raw.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -166,8 +180,10 @@ export default async function apiRoutes(fastify, options) {
         'Connection': 'keep-alive'
       });
 
+      let streamText = '';
       const onToken = (msg) => {
         if (msg.text) {
+          streamText += msg.text;
           const chunk = {
             id: completionId,
             object: 'chat.completion.chunk',
@@ -202,7 +218,15 @@ export default async function apiRoutes(fastify, options) {
           const nextKey = cacheKey(model, trimmed);
           putCachePath(nextKey, saveCachePath, saved.kv_cache_quant ?? null);
         }
-        
+        lfSpan.end({
+          output:         streamText,
+          prefillTokens:  finalResult.perf?.prefill_tokens,
+          generateTokens: finalResult.perf?.generate_tokens,
+          prefillMs:      finalResult.perf?.prefill_time_ms,
+          generateMs:     finalResult.perf?.generate_time_ms,
+          cacheHit:       !!loadCachePath,
+        });
+
         const stopChunk = {
           id: completionId,
           object: 'chat.completion.chunk',
@@ -219,6 +243,7 @@ export default async function apiRoutes(fastify, options) {
         reply.raw.write('data: [DONE]\n\n');
         reply.raw.end();
       } catch (err) {
+        lfSpan.end({ error: err });
         const errorChunk = {
           error: { message: err.message, type: 'invalid_request_error' }
         };
@@ -240,6 +265,14 @@ export default async function apiRoutes(fastify, options) {
           const nextKey = cacheKey(model, trimmed);
           putCachePath(nextKey, saveCachePath, saved.kv_cache_quant ?? null);
         }
+        lfSpan.end({
+          output:         accumulatedText,
+          prefillTokens:  finalResult.perf?.prefill_tokens,
+          generateTokens: finalResult.perf?.generate_tokens,
+          prefillMs:      finalResult.perf?.prefill_time_ms,
+          generateMs:     finalResult.perf?.generate_time_ms,
+          cacheHit:       !!loadCachePath,
+        });
         return {
           id: completionId,
           object: 'chat.completion',
@@ -258,6 +291,7 @@ export default async function apiRoutes(fastify, options) {
           perf: finalResult.perf
         };
       } catch (err) {
+        lfSpan.end({ error: err });
         return reply.status(500).send({ error: err.message });
       }
     }

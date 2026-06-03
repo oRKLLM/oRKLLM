@@ -319,6 +319,33 @@ export default async function adminRoutes(fastify, options) {
     return { success: true, pinned: false, model: pool.getStatus().model };
   });
 
+  // POST /api/admin/langfuse/test — verify Langfuse connectivity
+  fastify.post('/langfuse/test', async (request, reply) => {
+    const { baseUrl, publicKey, secretKey } = request.body || {};
+    const resolvedBaseUrl   = baseUrl   || dbGetSetting('langfuse_base_url')   || '';
+    const resolvedPublicKey = publicKey || dbGetSetting('langfuse_public_key') || '';
+    const resolvedSecretKey = secretKey || dbGetSetting('langfuse_secret_key') || '';
+    if (!resolvedBaseUrl || !resolvedPublicKey || !resolvedSecretKey)
+      return reply.status(400).send({ error: 'Langfuse credentials not configured' });
+    try {
+      const { LangfuseClient } = await import('@langfuse/client');
+      const lf = new LangfuseClient({
+        publicKey: resolvedPublicKey,
+        secretKey: resolvedSecretKey,
+        baseUrl:   resolvedBaseUrl,
+      });
+      // Healthcheck: list projects (v3 API endpoint available on all Langfuse versions)
+      const res = await fetch(`${resolvedBaseUrl}/api/public/health`, {
+        headers: { Authorization: 'Basic ' + Buffer.from(`${resolvedPublicKey}:${resolvedSecretKey}`).toString('base64') },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) return reply.status(502).send({ error: `Langfuse returned ${res.status}` });
+      return { ok: true };
+    } catch (e) {
+      return reply.status(502).send({ error: e.message });
+    }
+  });
+
   // POST /api/admin/prefill-cache { prompt, savePath }
   // Runs prefill for a prompt, aborts after first decode token, saves KV cache.
   // Returns { firstToken, savedPath } — use firstToken to detect whether saved
@@ -399,6 +426,10 @@ export default async function adminRoutes(fastify, options) {
         trustedProxy: dbGetSetting('trusted_proxy') ?? '',
         pinnedModel: dbGetSetting('pinned_model') ?? '',
         autoDownloadRuntimes: dbGetSetting('auto_download_runtimes') === '1',
+        langfuseEnabled:    dbGetSetting('langfuse_enabled')    === '1',
+        langfuseBaseUrl:    dbGetSetting('langfuse_base_url')   ?? '',
+        langfusePublicKey:  dbGetSetting('langfuse_public_key') ?? '',
+        langfuseSecretKey:  dbGetSetting('langfuse_secret_key') ?? '',
       },
       cacheStats: getCacheStats()
     };
@@ -409,7 +440,9 @@ export default async function adminRoutes(fastify, options) {
     const { idleTimeoutMinutes, temperature, topP, topK, maxNewTokens, repPenalty, hfToken,
             cacheEnabled, cacheHotLimitMB, cacheColdLimitMB, cacheDir, cacheMaxContextTokens,
             kvCacheQuant,
-            localAuthDisabled, trustedProxy, autoDownloadRuntimes } = request.body || {};
+            localAuthDisabled, trustedProxy, autoDownloadRuntimes,
+            langfuseEnabled, langfuseBaseUrl, langfusePublicKey, langfuseSecretKey,
+          } = request.body || {};
     if (typeof idleTimeoutMinutes === 'number') {
       pool.setIdleTimeout(idleTimeoutMinutes);
     }
@@ -430,6 +463,11 @@ export default async function adminRoutes(fastify, options) {
     if (typeof localAuthDisabled === 'boolean') dbSetSetting('local_auth_disabled', localAuthDisabled ? '1' : '0');
     if (typeof trustedProxy === 'string') dbSetSetting('trusted_proxy', trustedProxy);
     if (typeof autoDownloadRuntimes === 'boolean') dbSetSetting('auto_download_runtimes', autoDownloadRuntimes ? '1' : '0');
+    if (typeof langfuseEnabled   === 'boolean') dbSetSetting('langfuse_enabled',    langfuseEnabled ? '1' : '0');
+    if (typeof langfuseBaseUrl   === 'string')  dbSetSetting('langfuse_base_url',   langfuseBaseUrl);
+    if (typeof langfusePublicKey === 'string')  dbSetSetting('langfuse_public_key', langfusePublicKey);
+    if (typeof langfuseSecretKey === 'string' && langfuseSecretKey)
+      dbSetSetting('langfuse_secret_key', langfuseSecretKey);
     logAudit(request, 'settings_change', null);
     return { success: true };
   });
