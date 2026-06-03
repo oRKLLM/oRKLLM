@@ -138,7 +138,7 @@ graph TD
 | `src/worker.js` | Process-isolated inference worker; receives `load`/`run`/`unload` IPC commands from pool |
 | `src/pool.js` | Single-active-model lock, auto-swap, idle timeout, pin-to-keep-loaded; runtime version auto-discovery (`getAvailableRuntimes`, `readSoVersion`, `runtimeCandidates`, `_tryLoad`); caches winning lib path in model_settings; `prefillAndCache(prompt, savePath)` — abort-after-first-token KV warm; `generateSpeculative(model, draft, prompt, opts, onToken, k)` — draft+target spec decode (research, no speedup on single NPU); `loadDraft`/`unloadDraft` for second worker slot |
 | `src/admin/conversations.js` | 6 REST endpoints for conversation CRUD + message append (`/api/admin/conversations/…`) |
-| `src/runtime_sync.js` | Downloads aarch64 `librkllmrt.so` versions from `oRKLLM/rkllm-runtimes` mirror into `RUNTIMES_DIR`; skips non-ARM64-Linux; called on startup, on model load failure, and via `POST /api/admin/runtimes/sync` |
+| `src/runtime_sync.js` | Downloads aarch64 `librkllmrt.so` versions from configurable mirror list (`RUNTIME_MIRRORS` from `config.js`, override via `ORKLLM_RUNTIME_MIRRORS` env var) into `RUNTIMES_DIR`; tries each mirror in order, first hit wins; skips non-ARM64-Linux; called on startup, on model load failure, and via `POST /api/admin/runtimes/sync` |
 | `src/monitor.js` | Polls CPU, RAM, SoC Temp, NPU load, GPU load (Mali), disk utilization; Rockchip-native on ARM64 Linux, simulated elsewhere |
 | `src/stats.js` | Records prefill/generation tokens and latencies in SQLite |
 | `src/db.js` | SQLite + PRAGMA user_version migration runner; 2 versioned migrations; all table accessors |
@@ -255,6 +255,7 @@ npm run dev:server
 | `ORKLLM_MODELS_DIR` | `./models` | Directory scanned for `.rkllm` files |
 | `ORKLLM_DB_PATH` | `~/.config/orkllm/auth.db` | SQLite database path |
 | `ORKLLM_RUNTIMES_DIR` | `~/.config/orkllm/runtimes` | Directory of versioned `librkllmrt-aarch64-vX.Y.Z.so` files for auto-matching |
+| `ORKLLM_RUNTIME_MIRRORS` | `oRKLLM/rkllm-runtimes,mafischer/rkllm-runtimes` | Comma-separated GitHub repo slugs tried in order when downloading runtime `.so` files — first mirror with the version wins |
 
 ---
 

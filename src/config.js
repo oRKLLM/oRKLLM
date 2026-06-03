@@ -25,6 +25,14 @@ if (!fs.existsSync(MODELS_DIR)) {
 // RKLLM Shared Library Path on the board
 export const LIBRKLLMRT_PATH = process.env.ORKLLM_LIB_PATH || '/usr/lib/librkllmrt.so';
 
+// Ordered list of GitHub repo slugs to try when downloading runtime .so files.
+// First mirror that has the requested version wins.
+// Override with ORKLLM_RUNTIME_MIRRORS=owner/repo,owner2/repo2 (comma-separated).
+export const RUNTIME_MIRRORS = (
+  process.env.ORKLLM_RUNTIME_MIRRORS ||
+  'oRKLLM/rkllm-runtimes,mafischer/rkllm-runtimes'
+).split(',').map(s => s.trim()).filter(Boolean);
+
 // Directory where versioned runtimes are stored (librkllmrt-aarch64-v1.2.3.so etc.)
 export const RUNTIMES_DIR = process.env.ORKLLM_RUNTIMES_DIR ||
   (process.env.ORKLLM_DB_PATH

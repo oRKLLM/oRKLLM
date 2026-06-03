@@ -1,11 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import https from 'https';
-import { RUNTIMES_DIR } from './config.js';
+import { RUNTIMES_DIR, RUNTIME_MIRRORS } from './config.js';
 
-// TODO: switch to oRKLLM/rkllm-runtimes once CDN routing settles on the new org repo
-const MIRROR_API = 'https://api.github.com/repos/mafischer/rkllm-runtimes/releases';
 const ARCH = 'aarch64'; // oRKLLM targets ARM64
+
+function mirrorApi(slug) {
+  return `https://api.github.com/repos/${slug}/releases`;
+}
 
 function httpsGet(url) {
   return new Promise((resolve, reject) => {
@@ -84,33 +86,49 @@ export async function syncRuntimes(requiredVersion = null) {
   }
 
   console.log(requiredVersion
-    ? `[RuntimeSync] Fetching runtime ${requiredVersion}...`
-    : '[RuntimeSync] Checking for new rkllm runtime versions...');
+    ? `[RuntimeSync] Fetching runtime ${requiredVersion} (mirrors: ${RUNTIME_MIRRORS.join(', ')})...`
+    : `[RuntimeSync] Checking for new runtimes (mirrors: ${RUNTIME_MIRRORS.join(', ')})...`);
 
-  let releases;
-  try {
-    const res = await httpsGet(MIRROR_API + '?per_page=50');
-    if (res.status !== 200) {
-      console.warn(`[RuntimeSync] Failed to fetch releases: HTTP ${res.status}`);
-      return;
+  // Collect the union of releases across all mirrors, deduplicated by asset name.
+  // Assets that appear in an earlier mirror take precedence.
+  const seen = new Set();          // asset filenames already queued
+  const queue = [];                // { asset, mirrorSlug }
+
+  for (const mirrorSlug of RUNTIME_MIRRORS) {
+    let releases;
+    try {
+      const res = await httpsGet(mirrorApi(mirrorSlug) + '?per_page=50');
+      if (res.status !== 200) {
+        console.warn(`[RuntimeSync] Mirror ${mirrorSlug}: HTTP ${res.status} — skipping`);
+        continue;
+      }
+      releases = JSON.parse(res.body.toString());
+    } catch (e) {
+      console.warn(`[RuntimeSync] Mirror ${mirrorSlug}: ${e.message} — skipping`);
+      continue;
     }
-    releases = JSON.parse(res.body.toString());
-  } catch (e) {
-    console.warn(`[RuntimeSync] Failed to fetch release list: ${e.message}`);
+
+    for (const release of releases) {
+      const asset = release.assets?.find(a => a.name.includes(ARCH));
+      if (!asset || seen.has(asset.name)) continue;
+      seen.add(asset.name);
+      queue.push({ asset, mirrorSlug });
+    }
+  }
+
+  if (queue.length === 0) {
+    console.log('[RuntimeSync] No mirrors reachable or no assets found');
     return;
   }
 
   let downloaded = 0;
-  for (const release of releases) {
-    const asset = release.assets?.find(a => a.name.includes(ARCH));
-    if (!asset) continue;
-
+  for (const { asset, mirrorSlug } of queue) {
     const dest = path.join(RUNTIMES_DIR, asset.name);
     if (fs.existsSync(dest)) continue;
 
-    console.log(`[RuntimeSync] Downloading ${asset.name}...`);
+    console.log(`[RuntimeSync] Downloading ${asset.name} from ${mirrorSlug}...`);
     syncState.active = true;
-    syncState.version = release.tag_name;
+    syncState.version = asset.name.match(/v[\d.]+/)?.[0] ?? null;
     syncState.filename = asset.name;
     syncState.bytesDown = 0;
     syncState.totalBytes = asset.size ?? 0;
@@ -123,7 +141,7 @@ export async function syncRuntimes(requiredVersion = null) {
       console.log(`[RuntimeSync] Downloaded ${asset.name}`);
       downloaded++;
     } catch (e) {
-      console.error(`[RuntimeSync] Failed to download ${asset.name}: ${e.message}`);
+      console.error(`[RuntimeSync] Failed to download ${asset.name} from ${mirrorSlug}: ${e.message}`);
       try { fs.unlinkSync(dest + '.tmp'); } catch {}
     } finally {
       syncState.active = false;
