@@ -1,3 +1,10 @@
+# [0.8.0-alpha.34](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.33...v0.8.0-alpha.34) (2026-06-03)
+
+
+### Features
+
+* **ui:** add Eagle-3 draft heads filter to HuggingFace model search ([2f6537d](https://github.com/oRKLLM/oRKLLM/commit/2f6537d249645e363608975fff31bd8422e89ebb))
+
 # [0.8.0-alpha.33](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.32...v0.8.0-alpha.33) (2026-06-03)
 
 
