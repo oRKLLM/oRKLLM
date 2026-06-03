@@ -1,3 +1,23 @@
+# [0.8.0-alpha.16](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.15...v0.8.0-alpha.16) (2026-06-03)
+
+
+### Bug Fixes
+
+* **ci:** fetch semantic-release Git notes before release ([66f664c](https://github.com/oRKLLM/oRKLLM/commit/66f664c39a75315d107d90a582ba08bbb4a32cc1))
+* **release:** correct target_commitish on migrated releases — semantic-release should now find v0.8.0-alpha.1 ([ef11f6c](https://github.com/oRKLLM/oRKLLM/commit/ef11f6c50a740c04ccff14c4f3ac53aa6e2fb8c4))
+* **runtime_sync:** temp revert to mafischer mirror — oRKLLM CDN settling ([218b56b](https://github.com/oRKLLM/oRKLLM/commit/218b56b533cc3ca694920803e3ff87c4abdc30ad))
+* **vulkan:** add memoryBarrierShared() in parallel reduction ([02567ec](https://github.com/oRKLLM/oRKLLM/commit/02567ecd651575b37a837fe9295dd3243a6176e7))
+* **vulkan:** correct pack_fp16 mantissa formula in GLSL shader ([c9ea2e3](https://github.com/oRKLLM/oRKLLM/commit/c9ea2e32b3c284b731d1d9f7880671698c2d515f))
+* **vulkan:** deploy polar quant with corrected GPU shader ([67511a3](https://github.com/oRKLLM/oRKLLM/commit/67511a37faae8ab63402cd36d97ae65f609f969d))
+* **vulkan:** trigger alpha.16 release with corrected polar INT8 GPU shader ([6ca22e9](https://github.com/oRKLLM/oRKLLM/commit/6ca22e991914abed7b0689c394701e77b16ac06a))
+
+
+### Features
+
+* **ci:** move badge JSON to gh-pages/assets/ — drop GIST_TOKEN ([4ef2e97](https://github.com/oRKLLM/oRKLLM/commit/4ef2e977efd940510c9b1050f1eb0cbd24698100))
+* **kvcache:** KV cache compression — UI settings + automatic quantisation ([51b0101](https://github.com/oRKLLM/oRKLLM/commit/51b0101f5cc123d827eac5811acc93b283d23f4a))
+* **runtime_sync:** configurable mirror list with fallthrough ([321ca42](https://github.com/oRKLLM/oRKLLM/commit/321ca4274bce69835f5572b2a09c52fecb1b5b53))
+
 # [0.8.0-alpha.1](https://github.com/oRKLLM/oRKLLM/compare/v0.7.0...v0.8.0-alpha.1) (2026-06-03)
 
 
