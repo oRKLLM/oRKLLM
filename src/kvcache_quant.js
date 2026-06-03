@@ -25,10 +25,10 @@ import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
 let _native = null;
 try {
-  _native = _require('../../build/Release/kvcache_quant_napi.node');
+  _native = _require('../build/Release/kvcache_quant_napi.node');
 } catch {
   try {
-    _native = _require('../../build/Debug/kvcache_quant_napi.node');
+    _native = _require('../build/Debug/kvcache_quant_napi.node');
   } catch { /* pure-JS fallback */ }
 }
 
