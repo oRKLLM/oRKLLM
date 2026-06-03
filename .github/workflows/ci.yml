@@ -266,7 +266,7 @@ jobs:
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
           echo "color=$COLOR" >> "$GITHUB_OUTPUT"
 
-  # Update shields.io endpoint badges in a gist (only on main, requires GIST_TOKEN secret)
+  # Update shields.io endpoint badges — stored in gh-pages/assets/ (no external token needed)
   badges:
     name: Update Badges
     runs-on: ubuntu-latest
@@ -274,49 +274,43 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     steps:
-      - name: Update dynamic badges in Gist
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Write badge JSON to assets/
         env:
-          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
-          GIST_ID: 1da454f93b1363fff7f67f731e579a2f
           TESTS_PASSED: ${{ needs.test.outputs.tests_passed }}
           TESTS_TOTAL: ${{ needs.test.outputs.tests_total }}
           VULN_COUNT: ${{ needs.scan.outputs.vuln_count }}
           VULN_COLOR: ${{ needs.scan.outputs.vuln_color }}
         run: |
-          [ -z "$GIST_TOKEN" ] && { echo "GIST_TOKEN not set — skipping badge update"; exit 0; }
-          [ -z "$GIST_ID" ]    && { echo "GIST_ID not set — skipping badge update"; exit 0; }
-
+          mkdir -p assets
           TEST_COLOR=brightgreen
           [ "$TESTS_PASSED" != "$TESTS_TOTAL" ] && TEST_COLOR=red
 
           node << 'EOF'
-          const https = require('https');
+          const fs = require('fs');
           const badge = (label, message, color) =>
-            JSON.stringify({ schemaVersion: 1, label, message, color });
-          const files = {
-            'orkllm-tests.json': {
-              content: badge('tests',
-                `${process.env.TESTS_PASSED}/${process.env.TESTS_TOTAL} passing`,
-                process.env.TEST_COLOR || 'brightgreen')
-            },
-            'orkllm-vulns.json': {
-              content: badge('vulnerabilities',
-                `${process.env.VULN_COUNT} HIGH/CRIT`,
-                process.env.VULN_COLOR)
-            },
-          };
-          const payload = JSON.stringify({ files });
-          const req = https.request(
-            `https://api.github.com/gists/${process.env.GIST_ID}`,
-            { method: 'PATCH', headers: {
-              'Authorization': `token ${process.env.GIST_TOKEN}`,
-              'Content-Type': 'application/json',
-              'Accept': 'application/vnd.github+json',
-              'User-Agent': 'orkllm-ci',
-              'Content-Length': Buffer.byteLength(payload),
-            }},
-            res => { console.log('Badge gist updated:', res.statusCode); res.resume(); }
-          );
-          req.on('error', e => { console.error(e); process.exit(1); });
-          req.end(payload);
+            JSON.stringify({ schemaVersion: 1, label, message, color }, null, 2);
+          fs.writeFileSync('assets/orkllm-tests.json',
+            badge('tests',
+              `${process.env.TESTS_PASSED}/${process.env.TESTS_TOTAL} passing`,
+              process.env.TEST_COLOR || 'brightgreen'));
+          fs.writeFileSync('assets/orkllm-vulns.json',
+            badge('vulnerabilities',
+              `${process.env.VULN_COUNT} HIGH/CRIT`,
+              process.env.VULN_COLOR));
+          console.log('Badge JSON written to assets/');
           EOF
+
+      - name: Commit and push to gh-pages
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add assets/
+          git diff --cached --quiet && echo "No badge changes" && exit 0
+          git commit -m "chore: update badge assets [skip ci]"
+          git push
