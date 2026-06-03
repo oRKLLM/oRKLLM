@@ -793,7 +793,7 @@
                   :type="langfuse.showSecret && !langfuse.secretKey.startsWith('••') ? 'text' : 'password'"
                   placeholder="sk-lf-… (leave blank to keep existing)"
                   :append-inner-icon="langfuse.secretKey.startsWith('••') ? 'mdi-lock-outline' : (langfuse.showSecret ? 'mdi-eye-off' : 'mdi-eye')"
-                  @click:append-inner="if (!langfuse.secretKey.startsWith('••')) langfuse.showSecret = !langfuse.showSecret"
+                  @click:append-inner="toggleLangfuseSecret"
                   class="font-mono"
                 ></v-text-field>
               </v-col>
@@ -1032,6 +1032,9 @@ export default {
         else this.notify('Failed to save', 'error');
       } catch (e) { this.notify('Network error', 'error'); }
       finally { this.langfuse.saving = false; }
+    },
+    toggleLangfuseSecret() {
+      if (!this.langfuse.secretKey.startsWith('••')) this.langfuse.showSecret = !this.langfuse.showSecret;
     },
     async testLangfuse() {
       this.langfuse.testing = true;
