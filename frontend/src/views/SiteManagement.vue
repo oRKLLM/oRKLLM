@@ -790,10 +790,10 @@
                 <v-text-field
                   v-model="langfuse.secretKey"
                   density="compact" variant="outlined" hide-details
-                  :type="langfuse.showSecret ? 'text' : 'password'"
-                  placeholder="sk-lf-..."
-                  :append-inner-icon="langfuse.showSecret ? 'mdi-eye-off' : 'mdi-eye'"
-                  @click:append-inner="langfuse.showSecret = !langfuse.showSecret"
+                  :type="langfuse.showSecret && !langfuse.secretKey.startsWith('••') ? 'text' : 'password'"
+                  placeholder="sk-lf-… (leave blank to keep existing)"
+                  :append-inner-icon="langfuse.secretKey.startsWith('••') ? 'mdi-lock-outline' : (langfuse.showSecret ? 'mdi-eye-off' : 'mdi-eye')"
+                  @click:append-inner="if (!langfuse.secretKey.startsWith('••')) langfuse.showSecret = !langfuse.showSecret"
                   class="font-mono"
                 ></v-text-field>
               </v-col>

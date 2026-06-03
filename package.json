@@ -33,6 +33,7 @@
     "better-sqlite3": "^12.10.0",
     "dotenv": "^16.4.5",
     "fastify": "^5.2.1",
+    "langfuse-node": "^3.38.20",
     "node-addon-api": "^8.3.0",
     "openid-client": "^6.8.4",
     "samlify": "^2.13.1",

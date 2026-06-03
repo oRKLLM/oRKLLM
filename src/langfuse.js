@@ -8,7 +8,7 @@
 // The singleton is recreated if settings change, so edits take effect
 // without a server restart.
 
-import { LangfuseClient } from '@langfuse/client';
+import Langfuse from 'langfuse-node';
 import { dbGetSetting } from './db.js';
 
 let _client     = null;
@@ -35,7 +35,7 @@ export function getLangfuse() {
 
   const hash = `${cfg.baseUrl}|${cfg.publicKey}|${cfg.secretKey}`;
   if (hash !== _configHash) {
-    _client = new LangfuseClient({
+    _client = new Langfuse({
       publicKey:     cfg.publicKey,
       secretKey:     cfg.secretKey,
       baseUrl:       cfg.baseUrl,
@@ -77,15 +77,15 @@ export function traceInference({ model, messages, modelParameters, metadata = {}
 
     end({ output, prefillTokens, generateTokens, prefillMs, generateMs, cacheHit, error } = {}) {
       if (error) {
-        generation.update({ level: 'ERROR', statusMessage: String(error) });
-        generation.end();
+        generation.end({ level: 'ERROR', statusMessage: String(error) });
         trace.update({ output: { error: String(error) } });
       } else {
-        generation.update({
+        generation.end({
           output,
-          usage_details: {
+          usage: {
             input:  prefillTokens  ?? 0,
             output: generateTokens ?? 0,
+            total:  (prefillTokens ?? 0) + (generateTokens ?? 0),
           },
           metadata: {
             prefill_time_ms:  prefillMs,
@@ -93,7 +93,6 @@ export function traceInference({ model, messages, modelParameters, metadata = {}
             cache_hit:        cacheHit,
           },
         });
-        generation.end();
         trace.update({ output });
       }
       // Flush in background — never block the HTTP response
