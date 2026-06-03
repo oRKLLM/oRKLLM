@@ -1,3 +1,10 @@
+# [0.8.0-alpha.2](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.1...v0.8.0-alpha.2) (2026-06-03)
+
+
+### Features
+
+* **kvcache:** KV cache compression — UI settings + automatic quantisation ([51b0101](https://github.com/oRKLLM/oRKLLM/commit/51b0101f5cc123d827eac5811acc93b283d23f4a))
+
 # [0.8.0-alpha.1](https://github.com/oRKLLM/oRKLLM/compare/v0.7.0...v0.8.0-alpha.1) (2026-06-03)
 
 
