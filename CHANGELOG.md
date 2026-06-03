@@ -1,3 +1,10 @@
+# [0.8.0-alpha.9](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.8...v0.8.0-alpha.9) (2026-06-03)
+
+
+### Bug Fixes
+
+* **kvcache_quant:** derive fixed_overhead dynamically per file ([b645f18](https://github.com/mafischer/oRKLLM/commit/b645f18f49c2b64c2226979646d52e2ce43cd6a4))
+
 # [0.8.0-alpha.8](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.7...v0.8.0-alpha.8) (2026-06-03)
 
 
