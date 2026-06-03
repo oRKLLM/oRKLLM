@@ -253,7 +253,7 @@
           <div class="text-subtitle-2 font-weight-medium mb-1">KV Cache Compression</div>
           <div class="text-caption text-grey mb-3">
             Quantise saved KV cache files to reduce SSD storage. Compression runs in the background after each response;
-            decompression (~15 ms) runs before loading a cache hit. Requires ARM64 with the native addon.
+            dequantisation (~0.3 ms per MB of context) runs before loading a cache hit. Requires ARM64 with the native addon.
           </div>
           <v-select
             v-model="settings.kvCacheQuant"

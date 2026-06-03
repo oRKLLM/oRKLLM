@@ -315,7 +315,7 @@
                     <v-expansion-panel-text class="pa-0">
                       <div class="text-caption text-grey mb-3">
                         Override the global KV cache compression setting for this model.
-                        Quantised caches save SSD space at the cost of a ~15 ms dequantise on cache hit.
+                        Quantised caches save SSD space; dequantisation (~0.3 ms per MB of context) runs before each cache hit.
                       </div>
                       <v-select
                         v-model="settingsForm.kv_cache_quant"
