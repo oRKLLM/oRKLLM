@@ -42,10 +42,12 @@ void main() {
     float val    = unpack_fp16(in_fp16[in_idx]);
 
     shared_sq[dim] = val * val;
+    memoryBarrierShared();  // flush shared write before reduction reads
     barrier();
 
     for (uint stride = 64u; stride > 0u; stride >>= 1u) {
         if (dim < stride) shared_sq[dim] += shared_sq[dim + stride];
+        memoryBarrierShared();  // flush partial sums each step
         barrier();
     }
 
