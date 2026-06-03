@@ -55,7 +55,7 @@ Inspired by [jundot/oMLX](https://github.com/jundot/omlx) (which does the same f
 * **Prefix KV Cache**: Tiered SSD hot/cold LRU cache saves KV state between conversation turns. Sliding context window (configurable up to 32,768 tokens, default 8,192) prevents NPU OOM on long conversations.
 * **Process-Isolated Execution**: Inference engine runs in a dedicated child process. Model unload/swap terminates the process, guaranteeing full NPU driver memory cleanup.
 * **Smart Resource Management**: Single active model lock, auto-swap, configurable idle timeout, pin-to-keep-loaded.
-* **Runtime Version Auto-Matching & Auto-Download**: oRKLLM reads the embedded version from each `librkllmrt.so` (via `strings`), matches it against the version in the model filename, and retries all candidates until one succeeds — caching the winner per model. On first setup, opt in to automatically download all versioned runtimes from [mafischer/rkllm-runtimes](https://github.com/mafischer/rkllm-runtimes) (Apache 2.0). Opted-out users are prompted with a disclaimer dialog in the UI; API callers receive HTTP 422 `RUNTIME_MISSING` with the required version. Toggle in Settings after setup.
+* **Runtime Version Auto-Matching & Auto-Download**: oRKLLM reads the embedded version from each `librkllmrt.so` (via `strings`), matches it against the version in the model filename, and retries all candidates until one succeeds — caching the winner per model. On first setup, opt in to automatically download all versioned runtimes from [oRKLLM/rkllm-runtimes](https://github.com/oRKLLM/rkllm-runtimes) (Apache 2.0). Opted-out users are prompted with a disclaimer dialog in the UI; API callers receive HTTP 422 `RUNTIME_MISSING` with the required version. Toggle in Settings after setup.
 * **APT Distribution Channels**: Three channels — `stable` (main), `beta`, `alpha` — with separate `dists/<channel>/` directories on gh-pages. Users pin to their preferred channel.
 * **Trusted Proxy**: Supports `true`, single IP/CIDR, or comma-separated list (SAN-style) passed directly to Fastify's `trustProxy`.
 * **Database Migrations**: PRAGMA user_version migration runner — schema changes (v1–v3) apply automatically on startup, safe across upgrades from any previous version.
@@ -273,7 +273,7 @@ When opted out, the UI shows a disclaimer dialog before downloading, and API cal
 
 Pre-built `librkllmrt.so` binaries for `aarch64` and `armhf` are published at:
 
-**[github.com/mafischer/rkllm-runtimes](https://github.com/mafischer/rkllm-runtimes)**
+**[github.com/oRKLLM/rkllm-runtimes](https://github.com/oRKLLM/rkllm-runtimes)**
 
 The mirror syncs from [airockchip/rknn-llm](https://github.com/airockchip/rknn-llm) nightly. All versions from v1.0.1 onward are available.
 
@@ -284,13 +284,13 @@ VERSION=v1.2.3
 ARCH=aarch64   # or armhf
 
 curl -fsSL \
-  https://github.com/mafischer/rkllm-runtimes/releases/download/${VERSION}/librkllmrt-${ARCH}-${VERSION}.so \
+  https://github.com/oRKLLM/rkllm-runtimes/releases/download/${VERSION}/librkllmrt-${ARCH}-${VERSION}.so \
   -o ~/.config/orkllm/runtimes/librkllmrt-${ARCH}-${VERSION}.so
 ```
 
 ### Licensing
 
-`librkllmrt.so` is Rockchip proprietary software distributed by Airockchip under the **[Apache 2.0 License](https://github.com/airockchip/rknn-llm/blob/main/LICENSE)** as part of the [rknn-llm](https://github.com/airockchip/rknn-llm) repository. The Apache 2.0 license explicitly permits redistribution with attribution. The mirror at `mafischer/rkllm-runtimes` reproduces this license in full on every release.
+`librkllmrt.so` is Rockchip proprietary software distributed by Airockchip under the **[Apache 2.0 License](https://github.com/airockchip/rknn-llm/blob/main/LICENSE)** as part of the [rknn-llm](https://github.com/airockchip/rknn-llm) repository. The Apache 2.0 license explicitly permits redistribution with attribution. The mirror at `oRKLLM/rkllm-runtimes` reproduces this license in full on every release.
 
 > **oRKLLM does not modify the binaries.** They are downloaded verbatim from the upstream repository and re-published as properly versioned GitHub release artifacts for programmatic access.
 
