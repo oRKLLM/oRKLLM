@@ -1,3 +1,10 @@
+# [0.8.0-alpha.10](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.9...v0.8.0-alpha.10) (2026-06-03)
+
+
+### Features
+
+* **kvcache:** add NEON SIMD N-API addon for async KV cache quant/dequant ([b3593a9](https://github.com/mafischer/oRKLLM/commit/b3593a9e3d5eed3d692556a0ae891078c75b2ab2))
+
 # [0.8.0-alpha.9](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.8...v0.8.0-alpha.9) (2026-06-03)
 
 
