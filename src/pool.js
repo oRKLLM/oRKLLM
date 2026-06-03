@@ -500,9 +500,24 @@ class EnginePool {
 
   // Speculative decoding generation loop
   async generateSpeculative(modelName, draftModelName, prompt, options, onToken, k = 4) {
-    // Ensure both models are loaded
+    // Ensure target is loaded first
     await this.load(modelName, options);
-    await this.loadDraft(draftModelName);
+
+    // Attempt to load draft — on a single NPU the second rkllm_init will block
+    // indefinitely.  We try with a short timeout and fall back to standard
+    // generate if the draft cannot load (single-NPU boards like RK3576).
+    try {
+      await Promise.race([
+        this.loadDraft(draftModelName),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Draft model load timeout — single NPU likely blocked')), 15000)
+        ),
+      ]);
+    } catch (e) {
+      console.warn(`[EnginePool] Speculative decode unavailable (${e.message}), falling back to standard generate`);
+      await this.unloadDraft();
+      return this.generate(modelName, prompt, options, onToken);
+    }
 
     let currentPrompt = prompt;
     let totalTokens = 0;
