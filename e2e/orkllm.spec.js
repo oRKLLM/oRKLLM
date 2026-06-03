@@ -1015,3 +1015,72 @@ test('Model settings dialog shows Advanced and Speculative Decoding panels', asy
   // Close dialog
   await page.locator('.v-dialog button:has(.mdi-close)').click();
 });
+
+// ---------------------------------------------------------------------------
+// Test 39: POST /api/admin/prefill-cache returns JSON (not HTML SPA fallback)
+// ---------------------------------------------------------------------------
+test('prefillAndCache: endpoint returns JSON with firstToken when model is loaded', async ({ page }) => {
+  await login(page);
+  await loadModel(page);
+
+  const result = await page.evaluate(async () => {
+    const r = await fetch('/api/admin/prefill-cache', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: 'Hello', savePath: '/tmp/test_prefill_e2e.rkllmcache' }),
+    });
+    return { status: r.status, contentType: r.headers.get('content-type'), body: await r.json() };
+  });
+
+  expect(result.status).toBe(200);
+  expect(result.contentType).toContain('application/json');
+  expect(result.body).toHaveProperty('firstToken');
+  expect(result.body).toHaveProperty('savedPath', '/tmp/test_prefill_e2e.rkllmcache');
+  // firstToken must have text and token_id
+  expect(result.body.firstToken).toHaveProperty('text');
+  expect(typeof result.body.firstToken.token_id).toBe('number');
+
+  await unloadModel(page);
+});
+
+// ---------------------------------------------------------------------------
+// Test 40: POST /api/admin/prefill-cache returns 409 when no model is loaded
+// ---------------------------------------------------------------------------
+test('prefillAndCache: endpoint returns 409 when no model loaded', async ({ page }) => {
+  await login(page);
+
+  // Ensure no model is loaded
+  await page.evaluate(async () => {
+    await fetch('/api/admin/unload', { method: 'POST' });
+  });
+  await page.waitForTimeout(500);
+
+  const result = await page.evaluate(async () => {
+    const r = await fetch('/api/admin/prefill-cache', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: 'Hello', savePath: '/tmp/nope.rkllmcache' }),
+    });
+    return { status: r.status };
+  });
+
+  expect(result.status).toBe(409);
+});
+
+// ---------------------------------------------------------------------------
+// Test 41: POST /api/admin/prefill-cache returns 400 when body is missing fields
+// ---------------------------------------------------------------------------
+test('prefillAndCache: endpoint returns 400 when prompt or savePath missing', async ({ page }) => {
+  await login(page);
+
+  const result = await page.evaluate(async () => {
+    const r = await fetch('/api/admin/prefill-cache', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: 'Hello' }),
+    });
+    return { status: r.status };
+  });
+
+  expect(result.status).toBe(400);
+});
