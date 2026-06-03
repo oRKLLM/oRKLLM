@@ -65,14 +65,39 @@ function dirSizeMB(dir) {
   return total / (1024 * 1024);
 }
 
-function evictLru(tier, tierDir, limitMB, lru) {
-  while (dirSizeMB(tierDir) > limitMB) {
+// Evict oldest entries from tier.  When overflowDir is provided (hot→cold),
+// move the file there instead of deleting it.
+function evictLru(tier, tierDir, limitMB, lru, overflowDir, overflowTier, overflowLimitMB) {
+  while (limitMB >= 0 && dirSizeMB(tierDir) > limitMB) {
     const entries = Object.entries(lru[tier]);
     if (!entries.length) break;
     entries.sort((a, b) => a[1] - b[1]); // oldest first
     const [oldestKey] = entries[0];
-    for (const ext of CACHE_EXTS) {
-      try { fs.unlinkSync(path.join(tierDir, oldestKey + ext)); } catch {}
+
+    if (overflowDir) {
+      // Move to overflow tier (hot → cold) instead of deleting
+      ensureDir(overflowDir);
+      let moved = false;
+      for (const ext of CACHE_EXTS) {
+        const src = path.join(tierDir, oldestKey + ext);
+        if (fs.existsSync(src)) {
+          const dst = path.join(overflowDir, oldestKey + ext);
+          try { fs.renameSync(src, dst); moved = true; } catch {
+            try { fs.copyFileSync(src, dst); fs.unlinkSync(src); moved = true; } catch {}
+          }
+          break;
+        }
+      }
+      if (moved) {
+        lru[overflowTier] = lru[overflowTier] || {};
+        lru[overflowTier][oldestKey] = lru[tier][oldestKey];
+        // Evict from cold if it's also over limit
+        if (overflowLimitMB != null) evictLru(overflowTier, overflowDir, overflowLimitMB, lru);
+      }
+    } else {
+      for (const ext of CACHE_EXTS) {
+        try { fs.unlinkSync(path.join(tierDir, oldestKey + ext)); } catch {}
+      }
     }
     delete lru[tier][oldestKey];
   }
@@ -149,37 +174,51 @@ export function putCachePath(key, tmpFile, modelQuantOverride) {
 
   const hotDir  = path.join(cfg.cacheDir, 'hot');
   const coldDir = path.join(cfg.cacheDir, 'cold');
-  ensureDir(hotDir);
   ensureDir(coldDir);
 
-  const fp16Dest = path.join(hotDir, key + '.rkllmcache');
+  // When hot limit is 0 (disabled), write directly to cold
+  const useHot = cfg.hotLimitMB > 0;
+  const destDir = useHot ? hotDir : coldDir;
+  const destTier = useHot ? 'hot' : 'cold';
+  if (useHot) ensureDir(hotDir);
+
+  const fp16Dest = path.join(destDir, key + '.rkllmcache');
   try { fs.renameSync(tmpFile, fp16Dest); }
   catch (e) {
     try { fs.copyFileSync(tmpFile, fp16Dest); fs.unlinkSync(tmpFile); } catch { return; }
   }
 
   const lru = readLru(cfg.cacheDir);
-  lru.hot[key] = Date.now();
-  evictLru('hot', hotDir, cfg.hotLimitMB, lru);
+  lru[destTier][key] = Date.now();
 
-  const overflowKeys = Object.keys(lru.hot)
-    .filter(k => !findCacheFile(hotDir, k));
-  for (const k of overflowKeys) delete lru.hot[k];
+  if (useHot) {
+    // Evict oldest hot → overflow to cold, then evict cold if needed
+    evictLru('hot', hotDir, cfg.hotLimitMB, lru, coldDir, 'cold', cfg.coldLimitMB);
+    // Remove stale hot keys (files that were evicted/moved and no longer in hot)
+    for (const k of Object.keys(lru.hot)) {
+      if (!findCacheFile(hotDir, k)) delete lru.hot[k];
+    }
+  } else {
+    evictLru('cold', coldDir, cfg.coldLimitMB, lru);
+  }
 
-  evictLru('cold', coldDir, cfg.coldLimitMB, lru);
   writeLru(cfg.cacheDir, lru);
 
-  // Background quantisation — fire and forget, replace FP16 file when done
+  // Background quantisation — only start after the file is safely in place
+  // (eviction already ran above, so fp16Dest is either still there or was moved)
   const scheme = kvCacheQuant(modelQuantOverride);
   if (scheme !== 'off' && hasNativeAddon) {
-    const { fn, ext } = QUANT_SCHEMES[scheme];
-    const quantDest = path.join(hotDir, key + ext);
-    fn(fp16Dest, quantDest)
-      .then(() => {
-        try { fs.unlinkSync(fp16Dest); } catch {}
-        console.log(`[Cache] Quantised ${key} → ${ext} (${scheme})`);
-      })
-      .catch(e => console.warn(`[Cache] Quantise failed for ${key}:`, e.message));
+    const actualFile = findCacheFile(destDir, key) || findCacheFile(coldDir, key);
+    if (actualFile && actualFile.endsWith('.rkllmcache')) {
+      const { fn, ext } = QUANT_SCHEMES[scheme];
+      const quantDest = actualFile.replace('.rkllmcache', ext);
+      fn(actualFile, quantDest)
+        .then(() => {
+          try { fs.unlinkSync(actualFile); } catch {}
+          console.log(`[Cache] Quantised ${key} → ${ext} (${scheme})`);
+        })
+        .catch(e => console.warn(`[Cache] Quantise failed for ${key}:`, e.message));
+    }
   }
 }
 
