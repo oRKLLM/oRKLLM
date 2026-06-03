@@ -281,6 +281,39 @@ class EnginePool {
     dbSetSetting('pinned_model', '');
   }
 
+  // ── Prefill-only cache warming ──────────────────────────────────────────
+  // Runs inference, aborts after the first decode token, saves KV cache.
+  // Returns { firstToken, savedPath } so callers can detect whether the
+  // saved cache includes the first decode token (case B) or is clean (case A).
+  async prefillAndCache(prompt, savePath) {
+    if (!this.isLoaded) throw new Error('No model loaded');
+    return new Promise((resolve, reject) => {
+      let firstToken = null;
+      let abortSent = false;
+
+      const onMsg = (msg) => {
+        if (msg.type !== 'token') return;
+
+        if (msg.state === 0 && msg.text && !abortSent) {
+          // First decode token — KV cache for prompt is fully built
+          firstToken = { text: msg.text, token_id: msg.token_id };
+          abortSent = true;
+          if (this.worker) this.worker.send({ type: 'abort' });
+        }
+
+        if (msg.state === 2 || msg.state === 3) {
+          // Generation stopped (naturally or via abort) — cache should be saved
+          this.worker?.removeListener('message', onMsg);
+          console.log(`[EnginePool] prefillAndCache done: saved to ${savePath}, firstToken="${firstToken?.text}"`);
+          resolve({ firstToken, savedPath: savePath });
+        }
+      };
+
+      this.worker.on('message', onMsg);
+      this.worker.send({ type: 'run', prompt, saveCachePath: savePath });
+    });
+  }
+
   // ── Draft model management ──────────────────────────────────────────────
 
   async loadDraft(draftModelName) {

@@ -319,6 +319,22 @@ export default async function adminRoutes(fastify, options) {
     return { success: true, pinned: false, model: pool.getStatus().model };
   });
 
+  // POST /api/admin/prefill-cache { prompt, savePath }
+  // Runs prefill for a prompt, aborts after first decode token, saves KV cache.
+  // Returns { firstToken, savedPath } — use firstToken to detect whether saved
+  // cache includes decode state (case B) or is a clean prefill snapshot (case A).
+  fastify.post('/prefill-cache', async (request, reply) => {
+    const { prompt, savePath } = request.body || {};
+    if (!prompt || !savePath) return reply.status(400).send({ error: 'prompt and savePath required' });
+    if (!pool.isLoaded) return reply.status(409).send({ error: 'No model loaded' });
+    try {
+      const result = await pool.prefillAndCache(prompt, savePath);
+      return result;
+    } catch (e) {
+      return reply.status(500).send({ error: e.message });
+    }
+  });
+
   // POST /api/admin/timeout
   fastify.post('/timeout', async (request, reply) => {
     const { timeout } = request.body || {};
