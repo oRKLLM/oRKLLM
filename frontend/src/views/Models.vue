@@ -365,7 +365,7 @@
                         <v-row no-gutters class="align-center">
                           <v-col cols="6" class="text-caption">Draft tokens per step (k)</v-col>
                           <v-col cols="4"><v-slider v-model="settingsForm.spec_draft_tokens" min="1" max="8" step="1" density="compact" color="primary" hide-details></v-slider></v-col>
-                          <v-col cols="2" class="pl-2"><v-text-field v-model.number="settingsForm.spec_draft_tokens" type="number" density="compact" variant="outlined" hide-details min="1" max="8" style="width:46px"></v-text-field></v-col>
+                          <v-col cols="2" class="pl-2"><v-text-field v-model.number="settingsForm.spec_draft_tokens" type="number" density="compact" variant="outlined" hide-details min="1" max="8" step="1" style="width:56px"></v-text-field></v-col>
                         </v-row>
                       </template>
                     </v-expansion-panel-text>
