@@ -1,7 +1,7 @@
 {
   "name": "orkllm-frontend",
   "private": true,
-  "version": "0.8.0-alpha.28",
+  "version": "0.8.0-alpha.29",
   "type": "module",
   "scripts": {
     "dev": "vite",

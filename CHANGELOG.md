@@ -1,3 +1,10 @@
+# [0.8.0-alpha.29](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.28...v0.8.0-alpha.29) (2026-06-03)
+
+
+### Features
+
+* **pool:** auto-assign NPU domain per slot for clean parallel execution ([e900f55](https://github.com/oRKLLM/oRKLLM/commit/e900f557b7c528a7b93562a5f017e486c3c5dbd2))
+
 # [0.8.0-alpha.28](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.27...v0.8.0-alpha.28) (2026-06-03)
 
 
