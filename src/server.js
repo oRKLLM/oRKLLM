@@ -167,31 +167,42 @@ if (fs.existsSync(distPath)) {
   });
 }
 
-// Auto-load pinned model on startup if RAM is sufficient
+// Auto-load pinned model on startup.
+// The RKLLM runtime manages its own memory allocation — we let it
+// attempt the load and fail gracefully rather than blocking on a
+// conservative pre-check that uses unreliable free-memory estimates.
 async function autoLoadPinnedModel() {
   const pinnedName = pool.constructor.getPinnedModel();
   if (!pinnedName) return;
 
-  const modelPath = path.join(MODELS_DIR, pinnedName);
+  // Resolve: check flat models dir first, then subdirectories
+  let modelPath = path.join(MODELS_DIR, pinnedName);
   if (!fs.existsSync(modelPath)) {
-    fastify.log.warn(`[Autoload] Pinned model not found on disk: ${pinnedName}`);
-    return;
+    // Try scanning subdirectories (models stored as repo/file.rkllm)
+    const subPath = (() => {
+      try {
+        for (const entry of fs.readdirSync(MODELS_DIR)) {
+          const candidate = path.join(MODELS_DIR, entry, pinnedName);
+          if (fs.existsSync(candidate)) return candidate;
+        }
+      } catch {}
+      return null;
+    })();
+    if (!subPath) {
+      fastify.log.warn(`[Autoload] Pinned model not found on disk: ${pinnedName}`);
+      return;
+    }
+    modelPath = subPath;
   }
 
-  const modelSize = fs.statSync(modelPath).size;
-  const freeMem = os.freemem();
-  // Require at least 1.2× the model file size free to attempt load
-  if (freeMem < modelSize * 1.2) {
-    fastify.log.warn(`[Autoload] Insufficient RAM to auto-load pinned model ${pinnedName} ` +
-      `(free: ${Math.round(freeMem / 1024 / 1024)}MB, model: ${Math.round(modelSize / 1024 / 1024)}MB)`);
-    return;
-  }
-
-  fastify.log.info(`[Autoload] Loading pinned model: ${pinnedName}`);
+  const modelSizeMB = Math.round(fs.statSync(modelPath).size / 1024 / 1024);
+  const freeMB      = Math.round(os.freemem() / 1024 / 1024);
+  fastify.log.info(`[Autoload] Loading pinned model: ${pinnedName} ` +
+    `(${modelSizeMB} MB, ${freeMB} MB free)`);
   try {
     await pool.load(pinnedName);
     pool.setPin(true);
-    fastify.log.info(`[Autoload] Pinned model loaded: ${pinnedName}`);
+    fastify.log.info(`[Autoload] Pinned model loaded successfully: ${pinnedName}`);
   } catch (e) {
     fastify.log.error(`[Autoload] Failed to load pinned model ${pinnedName}: ${e.message}`);
   }
