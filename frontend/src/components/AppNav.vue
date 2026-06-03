@@ -20,10 +20,8 @@
       <span class="text-primary d-none d-sm-flex" style="font-size: 0.65rem; line-height: 1; margin-top: 2px; opacity: 0.7;">v{{ appVersion }}</span>
     </v-app-bar-title>
 
-    <v-spacer></v-spacer>
-
-    <!-- Desktop/tablet nav buttons (hidden on xs) -->
-    <div class="d-none d-sm-flex align-center gap-1 mx-1">
+    <!-- Desktop/tablet nav buttons — absolutely centred so left (brand) and right (account) widths don't matter -->
+    <div class="nav-center d-none d-sm-flex align-center gap-1">
       <v-btn
         v-for="nav in navItems"
         :key="nav.path"
@@ -34,12 +32,11 @@
         :color="isActive(nav.path) ? 'primary' : 'default'"
         :class="['nav-btn', isActive(nav.path) ? 'nav-btn--active' : '']"
       >
-        <!-- Hide labels on small screens to save space -->
         <span class="d-none d-md-inline">{{ nav.label }}</span>
       </v-btn>
     </div>
 
-    <v-spacer class="d-none d-sm-flex"></v-spacer>
+    <v-spacer></v-spacer>
 
     <v-btn icon color="primary" variant="tonal" size="36" @click="drawerOpen = !drawerOpen">
       <v-icon size="20">mdi-account</v-icon>
@@ -176,6 +173,13 @@ export default {
 </script>
 
 <style scoped>
+/* True centre regardless of left/right element widths */
+.nav-center {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
 .glass-nav {
   background: rgba(17, 24, 39, 0.8) !important;
   backdrop-filter: blur(12px);
