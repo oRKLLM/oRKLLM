@@ -1,3 +1,10 @@
+# [0.8.0-alpha.4](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.3...v0.8.0-alpha.4) (2026-06-03)
+
+
+### Bug Fixes
+
+* **spec-decode:** wait for state=2 after abort to flush IPC before next run ([d7b2f7f](https://github.com/mafischer/oRKLLM/commit/d7b2f7fde50ff564e1c285b32c0972bc57e36264))
+
 # [0.8.0-alpha.3](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.2...v0.8.0-alpha.3) (2026-06-02)
 
 
