@@ -1,3 +1,10 @@
+# [0.8.0-alpha.15](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.14...v0.8.0-alpha.15) (2026-06-03)
+
+
+### Bug Fixes
+
+* **kvcache:** rebuild kvcache_quant_napi with Vulkan support on ARM64 ([a23761c](https://github.com/mafischer/oRKLLM/commit/a23761cf6582790201902ac15966c2323568fbce))
+
 # [0.8.0-alpha.14](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.13...v0.8.0-alpha.14) (2026-06-03)
 
 
