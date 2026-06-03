@@ -482,6 +482,13 @@
                 hide-details
                 color="primary"
               ></v-checkbox>
+              <v-checkbox
+                v-model="searchEagle3Only"
+                label="Eagle-3 draft heads only"
+                density="compact"
+                hide-details
+                color="primary"
+              ></v-checkbox>
             </div>
 
             <v-alert v-if="searchError" type="error" variant="tonal" density="compact" class="mb-3 text-caption">
@@ -856,6 +863,7 @@ export default {
     searchSort: 'downloads',
     searchRkllmOnly: true,
     searchPlatformOnly: true,
+    searchEagle3Only: false,
     detectedPlatform: null,
     searchLoading: false,
     searchLoadingMore: false,
@@ -1184,8 +1192,12 @@ export default {
       }
     },
     _buildSearchParams(offset = 0) {
+      // Build query string: append eagle3/platform tags to user's query
+      let q = this.searchQuery.trim();
+      if (this.searchEagle3Only) q = `${q} eagle3`.trim();
+
       const params = new URLSearchParams({
-        q:      this.searchQuery.trim(),
+        q,
         sort:   this.searchSort,
         rkllm:  this.searchRkllmOnly ? 'true' : 'false',
         limit:  String(this.searchPageSize),
@@ -1196,7 +1208,7 @@ export default {
       return params;
     },
     async searchHf() {
-      if (!this.searchQuery.trim() && !this.searchRkllmOnly && !this.searchPlatformOnly) return;
+      if (!this.searchQuery.trim() && !this.searchRkllmOnly && !this.searchPlatformOnly && !this.searchEagle3Only) return;
       this.searchLoading = true;
       this.searchError = '';
       this.searchResults = [];
