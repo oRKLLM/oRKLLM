@@ -1,102 +1,77 @@
-// Langfuse observability — uses @langfuse/client (official SDK v5).
+// Langfuse inference tracing — @langfuse/tracing + @langfuse/otel (v5).
 //
-// Configuration priority (per @langfuse/client convention):
-//   1. DB settings  (Site Settings → Observability UI)
-//   2. Environment variables:
-//        LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_BASE_URL
-//
-// The singleton is recreated if settings change, so edits take effect
-// without a server restart.
+// traceInference(params, inferFn) wraps an inference call in a
+// Langfuse Trace + Generation observation.  inferFn receives a `gen`
+// helper with a .setOutput() method for recording results.
+// Returns whatever inferFn returns, or the inferFn's return value on error.
 
-import Langfuse from 'langfuse-node';
-import { dbGetSetting } from './db.js';
+import { startActiveObservation } from '@langfuse/tracing';
+import { langfuseSpanProcessor, isTracingEnabled } from './instrumentation.js';
 
-let _client     = null;
-let _configHash = null;
+export async function traceInference(
+  { model, messages, modelParameters, metadata = {} },
+  inferFn
+) {
+  // No-op when tracing is disabled
+  if (!isTracingEnabled()) return inferFn({ setOutput: () => {} });
 
-function currentConfig() {
-  // Check DB first, fall back to env vars that @langfuse/client also reads natively
-  const enabled =
-    dbGetSetting('langfuse_enabled') === '1' ||
-    process.env.LANGFUSE_ENABLED === 'true';
-  if (!enabled) return null;
+  return startActiveObservation(
+    'chat-completion',
+    async (trace) => {
+      // Root trace — set input and metadata
+      trace.update({
+        input:    messages,
+        metadata: { model, ...metadata },
+      });
 
-  const publicKey = dbGetSetting('langfuse_public_key') || process.env.LANGFUSE_PUBLIC_KEY || '';
-  const secretKey = dbGetSetting('langfuse_secret_key') || process.env.LANGFUSE_SECRET_KEY || '';
-  const baseUrl   = dbGetSetting('langfuse_base_url')   || process.env.LANGFUSE_BASE_URL   || '';
+      // Nested generation span for the LLM call
+      return startActiveObservation(
+        'rkllm-generate',
+        async (gen) => {
+          gen.update({
+            model,
+            input:           messages,
+            modelParameters: modelParameters ?? {},
+          });
 
-  if (!publicKey || !secretKey || !baseUrl) return null;
-  return { publicKey, secretKey, baseUrl };
-}
+          // Helper passed to the caller for recording output + usage
+          const genHelper = {
+            setOutput(output, {
+              promptTokens = 0,
+              completionTokens = 0,
+              prefillMs,
+              generateMs,
+              cacheHit,
+            } = {}) {
+              gen.update({
+                output,
+                usageDetails: {
+                  input:  promptTokens,
+                  output: completionTokens,
+                  total:  promptTokens + completionTokens,
+                },
+                metadata: {
+                  prefill_time_ms:  prefillMs,
+                  generate_time_ms: generateMs,
+                  cache_hit:        cacheHit,
+                },
+              });
+            },
+          };
 
-export function getLangfuse() {
-  const cfg = currentConfig();
-  if (!cfg) { _client = null; _configHash = null; return null; }
+          const result = await inferFn(genHelper);
 
-  const hash = `${cfg.baseUrl}|${cfg.publicKey}|${cfg.secretKey}`;
-  if (hash !== _configHash) {
-    _client = new Langfuse({
-      publicKey:     cfg.publicKey,
-      secretKey:     cfg.secretKey,
-      baseUrl:       cfg.baseUrl,
-      flushAt:       15,
-      flushInterval: 5000,
-    });
-    _configHash = hash;
-    console.log(`[Langfuse] Client initialised → ${cfg.baseUrl}`);
-  }
-  return _client;
-}
+          // Mirror output on trace root for quick visibility
+          trace.update({
+            output: typeof result === 'string' ? result : undefined,
+          });
 
-// ── Per-request inference tracer ──────────────────────────────────────────
-// Creates one Trace + one Generation per /v1/chat/completions call.
-// Returns { end(result), traceId } — call .end() after inference completes.
-// Returns a no-op object when Langfuse is not configured.
-
-export function traceInference({ model, messages, modelParameters, metadata = {} }) {
-  const lf = getLangfuse();
-  if (!lf) return { end: () => {}, traceId: null };
-
-  const trace = lf.trace({
-    name:     'chat-completion',
-    input:    messages,
-    metadata: { model, ...metadata },
-    tags:     ['orkllm'],
+          return result;
+        },
+        { asType: 'generation' }
+      );
+    }
+  ).finally(() => {
+    langfuseSpanProcessor?.forceFlush().catch(() => {});
   });
-
-  const generation = trace.generation({
-    name:            'rkllm-generate',
-    model,
-    input:           messages,
-    modelParameters,
-    startTime:       new Date(),
-  });
-
-  return {
-    traceId: trace.id,
-
-    end({ output, prefillTokens, generateTokens, prefillMs, generateMs, cacheHit, error } = {}) {
-      if (error) {
-        generation.end({ level: 'ERROR', statusMessage: String(error) });
-        trace.update({ output: { error: String(error) } });
-      } else {
-        generation.end({
-          output,
-          usage: {
-            input:  prefillTokens  ?? 0,
-            output: generateTokens ?? 0,
-            total:  (prefillTokens ?? 0) + (generateTokens ?? 0),
-          },
-          metadata: {
-            prefill_time_ms:  prefillMs,
-            generate_time_ms: generateMs,
-            cache_hit:        cacheHit,
-          },
-        });
-        trace.update({ output });
-      }
-      // Flush in background — never block the HTTP response
-      lf.flushAsync().catch(() => {});
-    },
-  };
 }

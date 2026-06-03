@@ -7,6 +7,7 @@ import { dbGetModelSettings, dbSetModelSettings } from '../db.js';
 import { cacheKey, getCachePath, putCachePath, tmpCachePath, isCacheEnabled, getMaxContextTokens } from '../cache.js';
 import { traceInference } from '../langfuse.js';
 
+
 // Rough token estimate: ~4 chars per token
 function estimateTokens(messages) {
   return messages.reduce((n, m) => n + Math.ceil((m.content?.length ?? 0) / 4) + 4, 0);
@@ -160,8 +161,7 @@ export default async function apiRoutes(fastify, options) {
     const completionId = 'chatcmpl-' + Math.random().toString(36).substring(2, 15);
     const created = Math.floor(Date.now() / 1000);
 
-    // Open a Langfuse trace for this request (no-op if Langfuse not configured)
-    const lfSpan = traceInference({
+    const traceParams = {
       model,
       messages: trimmed,
       modelParameters: {
@@ -171,7 +171,7 @@ export default async function apiRoutes(fastify, options) {
         max_new_tokens: modelOptions.max_new_tokens,
       },
       metadata: { cache_hit: !!loadCachePath },
-    });
+    };
 
     if (stream) {
       reply.raw.writeHead(200, {
@@ -180,118 +180,93 @@ export default async function apiRoutes(fastify, options) {
         'Connection': 'keep-alive'
       });
 
-      let streamText = '';
-      const onToken = (msg) => {
-        if (msg.text) {
-          streamText += msg.text;
-          const chunk = {
-            id: completionId,
-            object: 'chat.completion.chunk',
-            created,
-            model,
-            choices: [{
-              index: 0,
-              delta: { content: msg.text },
-              finish_reason: null
-            }]
+      await traceInference(traceParams, async (gen) => {
+        let streamText = '';
+        const onToken = (msg) => {
+          if (msg.text) {
+            streamText += msg.text;
+            const chunk = {
+              id: completionId, object: 'chat.completion.chunk', created, model,
+              choices: [{ index: 0, delta: { content: msg.text }, finish_reason: null }]
+            };
+            reply.raw.write(`data: ${JSON.stringify(chunk)}\n\n`);
+          }
+        };
+
+        try {
+          const cachePaths = loadCachePath || saveCachePath ? { loadCachePath, saveCachePath } : {};
+          const specMode = saved.speculative_mode;
+          const draftModel = saved.draft_model;
+          const specK = saved.spec_draft_tokens || 4;
+          let finalResult;
+          if (specMode === 'speculative' && draftModel) {
+            console.log(`[Spec] Using speculative decode: target=${model} draft=${draftModel} k=${specK}`);
+            await pool.generateSpeculative(model, draftModel, prompt, modelOptions, onToken, specK);
+            finalResult = { perf: {} };
+          } else {
+            finalResult = await pool.generate(model, prompt, modelOptions, onToken, cachePaths);
+          }
+          recordRequest(finalResult.perf);
+          if (cacheEnabled && saveCachePath)
+            putCachePath(cacheKey(model, trimmed), saveCachePath, saved.kv_cache_quant ?? null);
+
+          gen.setOutput(streamText, {
+            promptTokens:    finalResult.perf?.prefill_tokens,
+            completionTokens: finalResult.perf?.generate_tokens,
+            prefillMs:       finalResult.perf?.prefill_time_ms,
+            generateMs:      finalResult.perf?.generate_time_ms,
+            cacheHit:        !!loadCachePath,
+          });
+
+          const stopChunk = {
+            id: completionId, object: 'chat.completion.chunk', created, model,
+            choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+            perf: finalResult.perf
           };
-          reply.raw.write(`data: ${JSON.stringify(chunk)}\n\n`);
+          reply.raw.write(`data: ${JSON.stringify(stopChunk)}\n\n`);
+          reply.raw.write('data: [DONE]\n\n');
+          reply.raw.end();
+        } catch (err) {
+          reply.raw.write(`data: ${JSON.stringify({ error: { message: err.message, type: 'invalid_request_error' } })}\n\n`);
+          reply.raw.end();
+          throw err;
         }
-      };
+      }).catch(() => {});
 
-       try {
-        const cachePaths = loadCachePath || saveCachePath ? { loadCachePath, saveCachePath } : {};
-        // Route to speculative decoding if configured for this model
-        const specMode = saved.speculative_mode;
-        const draftModel = saved.draft_model;
-        const specK = saved.spec_draft_tokens || 4;
-        let finalResult;
-        if (specMode === 'speculative' && draftModel) {
-          console.log(`[Spec] Using speculative decode: target=${model} draft=${draftModel} k=${specK}`);
-          await pool.generateSpeculative(model, draftModel, prompt, modelOptions, onToken, specK);
-          finalResult = { perf: {} };
-        } else {
-          finalResult = await pool.generate(model, prompt, modelOptions, onToken, cachePaths);
-        }
-        recordRequest(finalResult.perf);
-        if (cacheEnabled && saveCachePath) {
-          const nextKey = cacheKey(model, trimmed);
-          putCachePath(nextKey, saveCachePath, saved.kv_cache_quant ?? null);
-        }
-        lfSpan.end({
-          output:         streamText,
-          prefillTokens:  finalResult.perf?.prefill_tokens,
-          generateTokens: finalResult.perf?.generate_tokens,
-          prefillMs:      finalResult.perf?.prefill_time_ms,
-          generateMs:     finalResult.perf?.generate_time_ms,
-          cacheHit:       !!loadCachePath,
-        });
-
-        const stopChunk = {
-          id: completionId,
-          object: 'chat.completion.chunk',
-          created,
-          model,
-          choices: [{
-            index: 0,
-            delta: {},
-            finish_reason: 'stop'
-          }],
-          perf: finalResult.perf
-        };
-        reply.raw.write(`data: ${JSON.stringify(stopChunk)}\n\n`);
-        reply.raw.write('data: [DONE]\n\n');
-        reply.raw.end();
-      } catch (err) {
-        lfSpan.end({ error: err });
-        const errorChunk = {
-          error: { message: err.message, type: 'invalid_request_error' }
-        };
-        reply.raw.write(`data: ${JSON.stringify(errorChunk)}\n\n`);
-        reply.raw.end();
-      }
       return reply;
     } else {
-      let accumulatedText = "";
-      const onToken = (msg) => {
-        if (msg.text) accumulatedText += msg.text;
-      };
+      let accumulatedText = '';
+      const onToken = (msg) => { if (msg.text) accumulatedText += msg.text; };
 
       try {
-        const cachePaths = loadCachePath || saveCachePath ? { loadCachePath, saveCachePath } : {};
-        const finalResult = await pool.generate(model, prompt, modelOptions, onToken, cachePaths);
-        recordRequest(finalResult.perf);
-        if (cacheEnabled && saveCachePath) {
-          const nextKey = cacheKey(model, trimmed);
-          putCachePath(nextKey, saveCachePath, saved.kv_cache_quant ?? null);
-        }
-        lfSpan.end({
-          output:         accumulatedText,
-          prefillTokens:  finalResult.perf?.prefill_tokens,
-          generateTokens: finalResult.perf?.generate_tokens,
-          prefillMs:      finalResult.perf?.prefill_time_ms,
-          generateMs:     finalResult.perf?.generate_time_ms,
-          cacheHit:       !!loadCachePath,
+        const finalResult = await traceInference(traceParams, async (gen) => {
+          const cachePaths = loadCachePath || saveCachePath ? { loadCachePath, saveCachePath } : {};
+          const result = await pool.generate(model, prompt, modelOptions, onToken, cachePaths);
+          recordRequest(result.perf);
+          if (cacheEnabled && saveCachePath)
+            putCachePath(cacheKey(model, trimmed), saveCachePath, saved.kv_cache_quant ?? null);
+
+          gen.setOutput(accumulatedText, {
+            promptTokens:    result.perf?.prefill_tokens,
+            completionTokens: result.perf?.generate_tokens,
+            prefillMs:       result.perf?.prefill_time_ms,
+            generateMs:      result.perf?.generate_time_ms,
+            cacheHit:        !!loadCachePath,
+          });
+          return result;
         });
+
         return {
-          id: completionId,
-          object: 'chat.completion',
-          created,
-          model,
-          choices: [{
-            index: 0,
-            message: { role: 'assistant', content: accumulatedText },
-            finish_reason: 'stop'
-          }],
+          id: completionId, object: 'chat.completion', created, model,
+          choices: [{ index: 0, message: { role: 'assistant', content: accumulatedText }, finish_reason: 'stop' }],
           usage: {
-            prompt_tokens: finalResult.perf?.prefill_tokens || 0,
-            completion_tokens: finalResult.perf?.generate_tokens || 0,
-            total_tokens: (finalResult.perf?.prefill_tokens || 0) + (finalResult.perf?.generate_tokens || 0)
+            prompt_tokens:     finalResult.perf?.prefill_tokens     || 0,
+            completion_tokens: finalResult.perf?.generate_tokens    || 0,
+            total_tokens:      (finalResult.perf?.prefill_tokens || 0) + (finalResult.perf?.generate_tokens || 0),
           },
           perf: finalResult.perf
         };
       } catch (err) {
-        lfSpan.end({ error: err });
         return reply.status(500).send({ error: err.message });
       }
     }

@@ -1,3 +1,6 @@
+// Langfuse OTel instrumentation — must be first before any other imports
+import './instrumentation.js';
+
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
