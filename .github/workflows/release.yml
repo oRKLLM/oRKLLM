@@ -82,7 +82,7 @@ jobs:
             node:22-bookworm-slim \
             bash -c "
               apt-get update -q &&
-              apt-get install -y -q python3 make g++ &&
+              apt-get install -y -q python3 make g++ libvulkan-dev &&
               npm ci --omit=dev
             "
           sudo chown -R "$(id -u):$(id -g)" arm64_deps/node_modules arm64_deps/build
