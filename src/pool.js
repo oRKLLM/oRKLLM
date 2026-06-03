@@ -206,12 +206,10 @@ class EnginePool {
       const candidates = EnginePool.runtimeCandidates(modelName);
       console.log(`[EnginePool] Runtime candidates for ${modelName}: ${candidates.join(', ')}`);
 
-      // Derive NPU domain assignment:
-      //   - Single worker (poolSize=1): base_domain_id=1 → both cores, max throughput
-      //   - Multi-worker: pin each slot to its own core (slot 0→1, slot 1→2, etc.)
-      const baseDomainId = this._slots.length === 1 ? 1 : (s.id % 2) + 1;
-      const slotOptions = { ...options, base_domain_id: baseDomainId };
-      console.log(`[EnginePool] Slot ${s.id}: NPU domain ${baseDomainId} (pool size ${this._slots.length})`);
+      // NPU domain: always 1. Testing showed base_domain_id=2 does not restrict
+      // the model to a single core — both workers still report npu_core_num=2 and
+      // there is no throughput benefit from domain pinning on RK3576.
+      const slotOptions = { ...options, base_domain_id: 1 };
 
       // Try each candidate lib path until one succeeds
       for (const libPath of candidates) {

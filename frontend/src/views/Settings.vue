@@ -189,9 +189,10 @@
 
         <div class="text-subtitle-2 font-weight-medium mb-1">NPU Worker Pool Size</div>
         <div class="text-caption text-grey mb-3">
-          Number of concurrent worker processes. Each worker loads a model independently into the NPU.
-          The RK3576 has 2 NPU cores — setting this to 2 allows two requests to be served simultaneously
-          at ~50% throughput each. Requires server restart to take effect.
+          Number of concurrent worker processes. The RK3576 NPU allows multiple models to be loaded
+          simultaneously — each worker runs independently. With 2 workers, two requests are served
+          in parallel: the slower request completes ~38% faster (6.5s wall vs 10.5s sequential) with
+          each worker running at slightly reduced throughput. Requires server restart to take effect.
         </div>
         <v-row no-gutters class="align-center mb-4">
           <v-col cols="9">
