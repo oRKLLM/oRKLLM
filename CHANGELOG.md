@@ -1,3 +1,10 @@
+# [0.8.0-alpha.23](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.22...v0.8.0-alpha.23) (2026-06-03)
+
+
+### Features
+
+* **ui:** HF search — scrollable container with infinite scroll pagination ([24b3e58](https://github.com/oRKLLM/oRKLLM/commit/24b3e5885a7ac8b4be790640e8ff98ecb80d6e77))
+
 # [0.8.0-alpha.22](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.21...v0.8.0-alpha.22) (2026-06-03)
 
 
