@@ -30,8 +30,9 @@
         <v-tabs-window-item value="manager">
 
           <!-- Active Status -->
+          <!-- Loaded -->
           <v-alert
-            v-if="status.isLoaded"
+            v-if="status.isLoaded && !loadingModelId"
             type="success"
             variant="tonal"
             border="start"
@@ -41,9 +42,27 @@
             <div class="font-weight-bold text-truncate">Loaded: {{ status.model }}</div>
             <div class="text-caption">Platform: {{ status.isMock ? 'Mock Engine' : 'Rockchip NPU' }}</div>
           </v-alert>
+          <!-- Loading -->
+          <v-alert
+            v-else-if="loadingModelId"
+            type="warning"
+            variant="tonal"
+            border="start"
+            class="mb-4"
+            density="comfortable"
+          >
+            <div class="d-flex align-center gap-2">
+              <v-progress-circular indeterminate size="18" width="2" color="warning" class="mr-2"></v-progress-circular>
+              <div>
+                <div class="font-weight-bold text-truncate">Loading: {{ loadingModelId }}</div>
+                <div class="text-caption">Initialising NPU…</div>
+              </div>
+            </div>
+          </v-alert>
+          <!-- Nothing loaded -->
           <v-alert
             v-else
-            type="warning"
+            color="grey"
             variant="tonal"
             border="start"
             class="mb-4"
