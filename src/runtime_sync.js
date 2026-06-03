@@ -3,7 +3,8 @@ import path from 'path';
 import https from 'https';
 import { RUNTIMES_DIR } from './config.js';
 
-const MIRROR_API = 'https://api.github.com/repos/oRKLLM/rkllm-runtimes/releases';
+// TODO: switch to oRKLLM/rkllm-runtimes once CDN routing settles on the new org repo
+const MIRROR_API = 'https://api.github.com/repos/mafischer/rkllm-runtimes/releases';
 const ARCH = 'aarch64'; // oRKLLM targets ARM64
 
 function httpsGet(url) {
