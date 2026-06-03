@@ -5,12 +5,12 @@ Codename: alpha
 Architectures: arm64
 Components: main
 Description: oRKLLM APT Repository — OpenAI-compatible LLM inference for Rockchip NPU
-Date: Wed, 03 Jun 2026 15:26:09 +0000
+Date: Wed, 03 Jun 2026 15:38:55 +0000
 MD5Sum:
- 619feaa89f38d20066264b77373f90a5 775 main/binary-arm64/Packages
- 25783c49475f3e7b34a4a8bcdb1dc9c5 586 main/binary-arm64/Packages.bz2
- d3a0999d945e42040f2441622d0e4d62 540 main/binary-arm64/Packages.gz
+ 677dd2c656c32d28b8d8157a5a6610e9 775 main/binary-arm64/Packages
+ 667f9794093856108ff4e25d7a38310e 589 main/binary-arm64/Packages.bz2
+ fafb15d531faeea376992e38ca7d3fad 541 main/binary-arm64/Packages.gz
 SHA256:
- bea795b93515eec31d2df9548ed74532acd2cd244c79bf7474bf637f83102e46 775 main/binary-arm64/Packages
- d599dd8590f4637b4390c5b1ea0e6285770072839ae6c508abe093d011387bea 586 main/binary-arm64/Packages.bz2
- b382a5e66f96b41f3e5516a16efb21480c5e2e599d9e5fa3bf891a878cc6dace 540 main/binary-arm64/Packages.gz
+ 38391f8c77491b4b510824f0966ad92572f8b6b807e522effeb0d15d525b503e 775 main/binary-arm64/Packages
+ fee3c71b3efd9502258541c9748d99d62e0f4fbef4958d4ba41629ab488c010f 589 main/binary-arm64/Packages.bz2
+ d142d0c665c5d084022efa933e0fea9d2dc495776bf1065699a32b69418abe14 541 main/binary-arm64/Packages.gz
