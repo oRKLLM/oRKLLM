@@ -18,6 +18,19 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { createRequire } from 'module';
+
+// Prefer the native N-API addon (ARM NEON SIMD, runs on libuv thread pool).
+// Falls back to pure-JS on macOS / x86 dev machines.
+const _require = createRequire(import.meta.url);
+let _native = null;
+try {
+  _native = _require('../../build/Release/kvcache_quant_napi.node');
+} catch {
+  try {
+    _native = _require('../../build/Debug/kvcache_quant_napi.node');
+  } catch { /* pure-JS fallback */ }
+}
 
 const BYTES_PER_TOKEN   = 147472;   // FP16 bytes per token slot (2*36L*8H*128D*2 + 16 pad)
 const DIMS              = 128;      // head dimension
@@ -69,8 +82,12 @@ function parseFixedOverhead(buf) {
   return { n_tokens: n, fixed_overhead: fixed };
 }
 
-// Quantise .rkllmcache → .q8cache
+// Quantise .rkllmcache → .q8cache  (async when native addon is available)
 export function quantize(srcPath, dstPath) {
+  if (_native) return _native.quantize(srcPath, dstPath); // Promise, NEON on ARM64
+  return Promise.resolve(_quantizeJS(srcPath, dstPath));
+}
+function _quantizeJS(srcPath, dstPath) {
   const src = fs.readFileSync(srcPath);
   const { n_tokens: n, fixed_overhead } = parseFixedOverhead(src);
 
@@ -128,8 +145,12 @@ export function quantize(srcPath, dstPath) {
   };
 }
 
-// Dequantise .q8cache → temp .rkllmcache (FP16) for RKLLM to load
+// Dequantise .q8cache → temp .rkllmcache (FP16) for RKLLM to load  (async when native)
 export function dequantize(srcPath, dstPath) {
+  if (_native) return _native.dequantize(srcPath, dstPath); // Promise, NEON on ARM64
+  return Promise.resolve(_dequantizeJS(srcPath, dstPath));
+}
+function _dequantizeJS(srcPath, dstPath) {
   const src = fs.readFileSync(srcPath);
   if (src.readUInt32LE(0) !== MAGIC)
     throw new Error('Not a .q8cache file (bad magic)');
@@ -171,8 +192,10 @@ export function dequantize(srcPath, dstPath) {
 }
 
 // Convenience: dequantize to a temp file and return its path
-export function dequantizeToTemp(q8Path) {
+export async function dequantizeToTemp(q8Path) {
   const tmp = path.join(os.tmpdir(), `rkllm_dequant_${Date.now()}.rkllmcache`);
-  dequantize(q8Path, tmp);
+  await dequantize(q8Path, tmp);
   return tmp;
 }
+
+export const hasNativeAddon = _native !== null;
