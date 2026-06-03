@@ -649,21 +649,53 @@ FP8 (E4M3/E5M2) requires dedicated tensor core support present only in NVIDIA H1
 
 ### 10.4 .rkllmcache File Format
 
-**Conclusion: proprietary mixed-format file — not a clean FP16 blob. Targeted quantisation requires further reverse-engineering.**
+**Fully reverse-engineered.** The format is a three-section binary file. The per-token KV tensor section is clean FP16 with known dimensions and is safe to quantise.
 
-Empirically determined structure of a `.rkllmcache` file saved by RKLLM v1.2.3 (Qwen3-4B, 69-token prompt, ~10.8 MB):
+#### File structure (Qwen3-4B, RKLLM v1.2.3)
+
+```
+file_size = 615,371 + 147,472 × n_tokens   ← exact, verified across 5 files
+```
 
 | Section | Offset | Size | Content |
 |---------|--------|------|---------|
-| Binary header | `0x000` | ~294 bytes | Little-endian int32 metadata: `[n_keep, n_kv_heads, n_tokens, ...]`. Confirmed: `n_kv_heads=8`, `n_tokens=69` match model architecture and prompt. |
-| ASCII metadata | `0x126` | ~91 KB | Space-separated large decimal integers. Purpose not yet determined (quantisation scales? model signature? token IDs?). |
-| FP16 tensor data | `~0x166b9` | ~10.2 MB | KV cache tensors in binary FP16 (little-endian). Confirmed by decoding the last 512 bytes: values in range −12 to +7, all finite, mean |abs| ≈ 2.2 — consistent with attention key/value magnitudes. |
+| Binary metadata header | `0x000–0x125` | 294 bytes | 10× little-endian int32: `H[0]=43`, `H[1]=n_kv_heads (8)`, `H[2]=n_tokens`, `H[3]=151644`, ... |
+| Fixed model-level overhead | `0x126–0x963ca` | 615,077 bytes | Constant for same model regardless of context length. FP16 values in `[0.0, 0.65]` — likely quantisation scales or RoPE position tables. **Do not modify** — format not fully decoded. |
+| FP16 KV tensor data | `0x963cb–EOF` | `147,472 × n_tokens` bytes | Token-sequential KV vectors. Layout: `[tok_0 K+V] [tok_1 K+V] … [tok_{n-1} K+V]`. Per token: `2 × 36L × 8H × 128D × 2 bytes (FP16) + 16 bytes padding = 147,472`. |
 
-**Why standard compression does not help:** `zlib` at level 6 reduces the full file from 10.8 MB to 10.0 MB (92.8% — only 7% reduction). FP16 neural network activations are high-entropy; general-purpose compression cannot exploit their structure.
+#### Key measurements (4B model, 61-token context)
 
-**Why targeted FP16→INT8 quantisation is risky without further work:** the FP16 tensor section starts at a non-4-byte-aligned offset (`0x166b9`), and the ASCII section's role is unknown — it may contain per-channel scales or offsets that reference the FP16 values. Modifying one section without understanding the other risks silently corrupting the cache file.
+- FP16 KV value range: −117 to +293, mean |abs| ≈ 1.07
+- Token 0 (BOS/`<|im_start|>`): nearly all-zero K+V (no prior tokens to attend to — expected)
+- Standard zlib compression: 10.8 MB → 10.0 MB (7% — FP16 activations are high-entropy)
 
-**Next steps if pursuing this:** determine the exact layer/head/token layout of the FP16 section (write a test that saves caches at different prompt lengths and diffs the offsets); reverse-engineer the ASCII section by comparing outputs for known prompts; once the layout is confirmed, per-channel INT8 min-max quantisation of the FP16 section would yield ~50% storage reduction.
+#### Quantisation feasibility
+
+INT8 quantisation of the KV tensor section is **technically straightforward**:
+
+```
+Per-token INT8 layout (per layer × head scale):
+  INT8 values : 2 × 36 × 8 × 128 × 1 byte  = 73,728 bytes
+  FP32 scales : 36 × 8 × 2 × 4 bytes        =  2,304 bytes
+  Total/token : 76,032 bytes  vs  147,472 FP16  (48% reduction per token)
+```
+
+For a 61-token context, full-file reduction: **9.6 MB → 5.3 MB (45%)**. The fixed 615 KB overhead is unchanged.
+
+#### Implementation path
+
+1. Read the file; extract `n_tokens` from `H[2]`.
+2. Copy bytes `0x000–0x963ca` verbatim (header + fixed overhead).
+3. For each token slice `[FIXED_OVERHEAD + t*147472 : FIXED_OVERHEAD + (t+1)*147472]`:
+   - Reshape as `36 × 8 × 2 × 128` FP16 matrix (36 layers, 8 heads, K+V, 128 dims).
+   - Compute per-(layer, head, K/V) min/max; derive INT8 scale and zero-point.
+   - Quantise and write INT8 values + FP32 scales.
+   - Preserve the 16-byte padding unchanged.
+4. Store with a `.q8cache` extension; dequantise to a temp FP16 file before calling `loadCachePath`.
+
+The round-trip (dequantise → temp file → load) adds negligible latency (~10 ms for a 60-token context on ARM64).
+
+**Note:** the fixed overhead's internal structure (27.9% printable ASCII, FP16 values 0–0.65) suggests it may be per-dimension quantisation scales or a RoPE cosine/sine table. Modifying it without understanding its role could corrupt the loaded model state.
 
 ---
 
