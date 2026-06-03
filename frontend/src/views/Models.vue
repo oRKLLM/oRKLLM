@@ -762,6 +762,7 @@ export default {
     loadingRepoId: null,
     showRuntimeSyncDialog: false,
     runtimeSyncState: { active: false, version: null, filename: null, bytesDown: 0, totalBytes: 0 },
+    statusPoller: null,
     runtimeSyncPoller: null,
 
     // Runtime download prompt
@@ -867,9 +868,12 @@ export default {
     this.fetchGlobalSettings();
     this.fetchPlatform();
     this.refreshDownloadQueue();
+    // Poll server state so the loaded-model indicator stays current across tabs
+    this.statusPoller = setInterval(() => this.fetchStatus(), 5000);
   },
   beforeUnmount() {
     if (this.dlPollTimer) clearInterval(this.dlPollTimer);
+    if (this.statusPoller) clearInterval(this.statusPoller);
     this.stopRuntimeSyncPoller?.();
   },
   watch: {
