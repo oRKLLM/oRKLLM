@@ -312,12 +312,18 @@ Napi::Value InitModel(const Napi::CallbackInfo& info) {
     param.img_end = "";
     param.img_content = "";
 
-    param.extend_param.base_domain_id = 1;
+    // base_domain_id selects which NPU compute domain (core) to use.
+    // 1 = domain 1 (default, uses both cores for single-model max throughput)
+    // 2 = domain 2 (pin to second core for multi-worker parallel serving)
+    param.extend_param.base_domain_id =
+        options.Has("base_domain_id")
+            ? options.Get("base_domain_id").As<Napi::Number>().Int32Value()
+            : 1;
     param.extend_param.embed_flash = 1;
     param.extend_param.n_batch = 1;
     param.extend_param.use_cross_attn = 0;
     param.extend_param.enabled_cpus_num = 4;
-    
+
     if (options.Has("enabled_cpus_mask")) {
         param.extend_param.enabled_cpus_mask = options.Get("enabled_cpus_mask").As<Napi::Number>().Uint32Value();
     } else {

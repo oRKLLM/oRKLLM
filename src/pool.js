@@ -206,9 +206,16 @@ class EnginePool {
       const candidates = EnginePool.runtimeCandidates(modelName);
       console.log(`[EnginePool] Runtime candidates for ${modelName}: ${candidates.join(', ')}`);
 
+      // Derive NPU domain assignment:
+      //   - Single worker (poolSize=1): base_domain_id=1 → both cores, max throughput
+      //   - Multi-worker: pin each slot to its own core (slot 0→1, slot 1→2, etc.)
+      const baseDomainId = this._slots.length === 1 ? 1 : (s.id % 2) + 1;
+      const slotOptions = { ...options, base_domain_id: baseDomainId };
+      console.log(`[EnginePool] Slot ${s.id}: NPU domain ${baseDomainId} (pool size ${this._slots.length})`);
+
       // Try each candidate lib path until one succeeds
       for (const libPath of candidates) {
-        const result = await this._tryLoadSlot(s, modelName, modelPath, options, libPath);
+        const result = await this._tryLoadSlot(s, modelName, modelPath, slotOptions, libPath);
         if (result.success) {
           const settings = dbGetModelSettings(modelName) || {};
           if (settings.workingLibPath !== libPath) {
@@ -232,7 +239,7 @@ class EnginePool {
         // Rebuild candidates with newly downloaded runtime and retry once
         const freshCandidates = EnginePool.runtimeCandidates(modelName);
         for (const libPath of freshCandidates) {
-          const result2 = await this._tryLoadSlot(s, modelName, modelPath, options, libPath);
+          const result2 = await this._tryLoadSlot(s, modelName, modelPath, slotOptions, libPath);
           if (result2.success) {
             const settings = dbGetModelSettings(modelName) || {};
             dbSetModelSettings(modelName, { ...settings, workingLibPath: libPath });
