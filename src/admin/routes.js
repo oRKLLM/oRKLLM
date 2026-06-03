@@ -624,18 +624,20 @@ export default async function adminRoutes(fastify, options) {
     return { success: true, modelId, settings };
   });
 
-  // GET /api/admin/hf/search?q=<query>&sort=downloads&rkllm=true&platform=rk3576&limit=20
+  // GET /api/admin/hf/search?q=<query>&sort=downloads&rkllm=true&platform=rk3576&limit=20&offset=0
   fastify.get('/hf/search', async (request, reply) => {
-    const { q = '', sort = 'downloads', rkllm = 'false', platform = '', limit = '20' } = request.query;
+    const { q = '', sort = 'downloads', rkllm = 'false', platform = '', limit = '20', offset = '0' } = request.query;
     const hfToken = dbGetSetting('hf_token') ?? '';
     let search = q;
     if (rkllm === 'true') search = `${search} rkllm`.trim();
     if (platform) search = `${search} ${platform}`.trim();
+    const pageSize = Math.min(parseInt(limit) || 20, 50);
     const params = new URLSearchParams({
       search,
       sort,
       direction: '-1',
-      limit: String(Math.min(parseInt(limit) || 20, 50)),
+      limit: String(pageSize),
+      offset: String(Math.max(0, parseInt(offset) || 0)),
       full: 'true',
     });
     const headers = { 'User-Agent': 'oRKLLM/1.0' };

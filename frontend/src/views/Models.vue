@@ -488,37 +488,54 @@
               {{ searchError }}
             </v-alert>
 
-            <v-list v-if="searchResults.length" class="pa-0" bg-color="transparent">
-              <v-list-item
-                v-for="model in searchResults"
-                :key="model.id"
-                class="border-bottom py-2 px-0"
-              >
-                <template v-slot:prepend>
-                  <v-icon color="grey" class="mr-2">mdi-robot-outline</v-icon>
-                </template>
-                <v-list-item-title class="text-body-2 font-weight-bold text-truncate">{{ model.id }}</v-list-item-title>
-                <v-list-item-subtitle class="text-caption">
-                  <v-icon size="12" class="mr-1">mdi-download-outline</v-icon>{{ formatNum(model.downloads) }}
-                  <span class="mx-2">·</span>
-                  <v-icon size="12" class="mr-1">mdi-heart-outline</v-icon>{{ formatNum(model.likes) }}
-                  <template v-if="model.storageBytes">
-                    <span class="mx-2">·</span>
-                    <v-icon size="12" class="mr-1">mdi-harddisk</v-icon>{{ formatBytes(model.storageBytes) }}
+            <!-- Scrollable results container -->
+            <div v-if="searchResults.length || searchLoading"
+              ref="searchScrollContainer"
+              class="search-results-scroll"
+              @scroll="onSearchScroll"
+            >
+              <v-list class="pa-0" bg-color="transparent">
+                <v-list-item
+                  v-for="model in searchResults"
+                  :key="model.id"
+                  class="border-bottom py-2 px-0"
+                >
+                  <template v-slot:prepend>
+                    <v-icon color="grey" class="mr-2">mdi-robot-outline</v-icon>
                   </template>
-                  <template v-if="model.paramCount">
+                  <v-list-item-title class="text-body-2 font-weight-bold text-truncate">{{ model.id }}</v-list-item-title>
+                  <v-list-item-subtitle class="text-caption">
+                    <v-icon size="12" class="mr-1">mdi-download-outline</v-icon>{{ formatNum(model.downloads) }}
                     <span class="mx-2">·</span>
-                    <v-icon size="12" class="mr-1">mdi-weight</v-icon>{{ formatParams(model.paramCount) }} params
+                    <v-icon size="12" class="mr-1">mdi-heart-outline</v-icon>{{ formatNum(model.likes) }}
+                    <template v-if="model.storageBytes">
+                      <span class="mx-2">·</span>
+                      <v-icon size="12" class="mr-1">mdi-harddisk</v-icon>{{ formatBytes(model.storageBytes) }}
+                    </template>
+                    <template v-if="model.paramCount">
+                      <span class="mx-2">·</span>
+                      <v-icon size="12" class="mr-1">mdi-weight</v-icon>{{ formatParams(model.paramCount) }} params
+                    </template>
+                    <span v-for="tag in model.tags.slice(0,3)" :key="tag" class="ml-2">
+                      <v-chip size="x-small" variant="tonal">{{ tag }}</v-chip>
+                    </span>
+                  </v-list-item-subtitle>
+                  <template v-slot:append>
+                    <v-btn size="small" color="primary" variant="tonal" :loading="loadingRepoId === model.id" @click="selectModel(model.id)">Download</v-btn>
                   </template>
-                  <span v-for="tag in model.tags.slice(0,3)" :key="tag" class="ml-2">
-                    <v-chip size="x-small" variant="tonal">{{ tag }}</v-chip>
-                  </span>
-                </v-list-item-subtitle>
-                <template v-slot:append>
-                  <v-btn size="small" color="primary" variant="tonal" :loading="loadingRepoId === model.id" @click="selectModel(model.id)">Download</v-btn>
-                </template>
-              </v-list-item>
-            </v-list>
+                </v-list-item>
+              </v-list>
+              <!-- Loading more indicator -->
+              <div v-if="searchLoadingMore" class="d-flex justify-center py-3">
+                <v-progress-circular indeterminate size="20" width="2" color="primary"></v-progress-circular>
+              </div>
+              <div v-else-if="searchHasMore && !searchLoadingMore" class="text-center text-caption text-grey py-2">
+                Scroll for more
+              </div>
+              <div v-else-if="searchResults.length && !searchHasMore" class="text-center text-caption text-grey py-2">
+                {{ searchResults.length }} results
+              </div>
+            </div>
 
             <div v-if="searchResults.length === 0 && !searchLoading && searchQuery" class="text-caption text-grey py-2">
               No results. Try a different query.
@@ -841,7 +858,11 @@ export default {
     searchPlatformOnly: true,
     detectedPlatform: null,
     searchLoading: false,
+    searchLoadingMore: false,
     searchResults: [],
+    searchOffset: 0,
+    searchHasMore: false,
+    searchPageSize: 20,
     searchError: '',
 
     // Collection browser
@@ -1162,30 +1183,57 @@ export default {
         this.$notify('Network error saving timeout', 'error');
       }
     },
+    _buildSearchParams(offset = 0) {
+      const params = new URLSearchParams({
+        q:      this.searchQuery.trim(),
+        sort:   this.searchSort,
+        rkllm:  this.searchRkllmOnly ? 'true' : 'false',
+        limit:  String(this.searchPageSize),
+        offset: String(offset),
+      });
+      if (this.searchPlatformOnly && this.detectedPlatform)
+        params.set('platform', this.detectedPlatform);
+      return params;
+    },
     async searchHf() {
       if (!this.searchQuery.trim() && !this.searchRkllmOnly && !this.searchPlatformOnly) return;
       this.searchLoading = true;
       this.searchError = '';
       this.searchResults = [];
+      this.searchOffset = 0;
+      this.searchHasMore = false;
       try {
-        const params = new URLSearchParams({
-          q: this.searchQuery.trim(),
-          sort: this.searchSort,
-          rkllm: this.searchRkllmOnly ? 'true' : 'false',
-          limit: '25',
-        });
-        if (this.searchPlatformOnly && this.detectedPlatform) {
-          params.set('platform', this.detectedPlatform);
-        }
-        const res = await fetch(`/api/admin/hf/search?${params}`);
+        const res = await fetch(`/api/admin/hf/search?${this._buildSearchParams(0)}`);
         const data = await res.json();
         if (!res.ok) { this.searchError = data.error || 'Search failed'; return; }
         this.searchResults = data;
+        this.searchOffset = data.length;
+        this.searchHasMore = data.length >= this.searchPageSize;
       } catch (e) {
         this.searchError = 'Network error: ' + e.message;
       } finally {
         this.searchLoading = false;
       }
+    },
+    async loadMoreSearch() {
+      if (this.searchLoadingMore || !this.searchHasMore) return;
+      this.searchLoadingMore = true;
+      try {
+        const res = await fetch(`/api/admin/hf/search?${this._buildSearchParams(this.searchOffset)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        this.searchResults = [...this.searchResults, ...data];
+        this.searchOffset += data.length;
+        this.searchHasMore = data.length >= this.searchPageSize;
+      } catch { /* silent */ } finally {
+        this.searchLoadingMore = false;
+      }
+    },
+    onSearchScroll(e) {
+      const el = e.target;
+      const threshold = 120; // px from bottom
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold)
+        this.loadMoreSearch();
     },
     async browseCollection() {
       if (!this.collectionUrl.trim()) return;
@@ -1352,6 +1400,16 @@ export default {
 </script>
 
 <style scoped>
+.search-results-scroll {
+  max-height: 480px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-radius: 4px;
+  scrollbar-width: thin;
+}
+.search-results-scroll::-webkit-scrollbar { width: 4px; }
+.search-results-scroll::-webkit-scrollbar-thumb { background: rgba(128,128,128,0.4); border-radius: 2px; }
+
 .bg-slate-page {
   background: #0B0F19 !important;
 }
