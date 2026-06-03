@@ -365,72 +365,7 @@
         </v-row>
       </v-card>
 
-      <!-- Observability -->
-      <v-card class="glass-card pa-5 mb-5">
-        <div class="section-heading mb-1">
-          <v-icon color="primary" size="18" class="mr-2">mdi-chart-timeline-variant</v-icon>
-          Observability
-        </div>
-        <div class="text-caption text-grey mb-4">
-          Send inference traces to a <a href="https://langfuse.com" target="_blank">Langfuse</a> instance.
-          Each chat completion creates one trace with a generation span including model, parameters, token counts and latency.
-        </div>
 
-        <div class="d-flex align-center mb-4">
-          <v-switch v-model="settings.langfuseEnabled" color="primary" hide-details density="compact" class="mr-3"></v-switch>
-          <div>
-            <div class="text-subtitle-2 font-weight-medium">Enable Langfuse Tracing</div>
-            <div class="text-caption text-grey">Traces are sent asynchronously and never block inference.</div>
-          </div>
-        </div>
-
-        <template v-if="settings.langfuseEnabled">
-          <div class="text-subtitle-2 font-weight-medium mb-1">Langfuse Host</div>
-          <div class="text-caption text-grey mb-2">URL of your self-hosted or cloud Langfuse instance.</div>
-          <v-text-field
-            v-model="settings.langfuseBaseUrl"
-            density="compact" variant="outlined" hide-details
-            placeholder="http://10.3.0.241:3000"
-            prepend-inner-icon="mdi-server-network"
-            class="mb-4 font-mono"
-          ></v-text-field>
-
-          <v-row>
-            <v-col cols="12" sm="6">
-              <div class="text-subtitle-2 font-weight-medium mb-1">Public Key</div>
-              <v-text-field
-                v-model="settings.langfusePublicKey"
-                density="compact" variant="outlined" hide-details
-                placeholder="pk-lf-..."
-                class="font-mono"
-              ></v-text-field>
-            </v-col>
-            <v-col cols="12" sm="6">
-              <div class="text-subtitle-2 font-weight-medium mb-1">Secret Key</div>
-              <v-text-field
-                v-model="settings.langfuseSecretKey"
-                density="compact" variant="outlined" hide-details
-                :type="showLangfuseSecret ? 'text' : 'password'"
-                placeholder="sk-lf-..."
-                :append-inner-icon="showLangfuseSecret ? 'mdi-eye-off' : 'mdi-eye'"
-                @click:append-inner="showLangfuseSecret = !showLangfuseSecret"
-                class="font-mono"
-              ></v-text-field>
-            </v-col>
-          </v-row>
-
-          <div class="mt-4">
-            <v-btn size="small" variant="outlined" prepend-icon="mdi-connection"
-              :loading="langfuseTestLoading" @click="testLangfuse">
-              Test Connection
-            </v-btn>
-            <v-chip v-if="langfuseTestResult" size="small" class="ml-3"
-              :color="langfuseTestResult === 'ok' ? 'success' : 'error'">
-              {{ langfuseTestResult === 'ok' ? 'Connected' : langfuseTestResult }}
-            </v-chip>
-          </div>
-        </template>
-      </v-card>
 
       <!-- Save -->
       <div class="d-flex justify-end mb-8">
@@ -467,10 +402,6 @@ export default {
       cacheDir: '',
       cacheMaxContextTokens: 8192,
       kvCacheQuant: 'off',
-      langfuseEnabled:   false,
-      langfuseBaseUrl:   '',
-      langfusePublicKey: '',
-      langfuseSecretKey: '',
       trustedProxy: '',
       autoDownloadRuntimes: true,
       savedAutoDownloadRuntimes: true,
@@ -482,9 +413,6 @@ export default {
     passwordSaving: false,
     saving: false,
     hfTokenSaving: false,
-    showLangfuseSecret: false,
-    langfuseTestLoading: false,
-    langfuseTestResult: null,
     showHfToken: false,
     snackbar: { show: false, text: '', color: 'success' },
     appVersion: __APP_VERSION__,
@@ -529,11 +457,6 @@ export default {
         this.settings.cacheDir              = s.cacheDir ?? '';
         this.settings.cacheMaxContextTokens = s.cacheMaxContextTokens ?? 8192;
         this.settings.kvCacheQuant          = s.kvCacheQuant ?? 'off';
-        this.settings.langfuseEnabled       = s.langfuseEnabled   ?? false;
-        this.settings.langfuseBaseUrl       = s.langfuseBaseUrl   ?? '';
-        this.settings.langfusePublicKey     = s.langfusePublicKey ?? '';
-        // Secret key is write-only — mask it if already set
-        this.settings.langfuseSecretKey     = s.langfuseSecretKey ? '••••••••' : '';
         this.settings.trustedProxy          = s.trustedProxy ?? '';
         this.settings.autoDownloadRuntimes  = s.autoDownloadRuntimes ?? true;
         this.savedAutoDownloadRuntimes       = this.settings.autoDownloadRuntimes;
@@ -562,13 +485,10 @@ export default {
 
       this.saving = true;
       try {
-        // Don't send the masked secret key placeholder back
-        const payload = { ...this.settings };
-        if (payload.langfuseSecretKey?.startsWith('••')) delete payload.langfuseSecretKey;
         const res = await fetch('/api/admin/global-settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
+          body: JSON.stringify(this.settings),
         });
         if (res.ok) {
           this.savedAutoDownloadRuntimes = this.settings.autoDownloadRuntimes;
@@ -585,25 +505,6 @@ export default {
         this.notify('Network error', 'error');
       } finally {
         this.saving = false;
-      }
-    },
-    async testLangfuse() {
-      this.langfuseTestLoading = true;
-      this.langfuseTestResult  = null;
-      try {
-        const res = await fetch('/api/admin/langfuse/test', { method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            baseUrl:   this.settings.langfuseBaseUrl,
-            publicKey: this.settings.langfusePublicKey,
-            secretKey: this.settings.langfuseSecretKey.startsWith('••') ? null : this.settings.langfuseSecretKey,
-          }),
-        });
-        this.langfuseTestResult = res.ok ? 'ok' : `HTTP ${res.status}`;
-      } catch (e) {
-        this.langfuseTestResult = e.message;
-      } finally {
-        this.langfuseTestLoading = false;
       }
     },
     async saveHfToken() {

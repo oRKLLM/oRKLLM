@@ -31,6 +31,10 @@
           <v-icon start>mdi-clipboard-text-clock-outline</v-icon>
           Audit Log
         </v-tab>
+        <v-tab value="observability">
+          <v-icon start>mdi-chart-timeline-variant</v-icon>
+          Observability
+        </v-tab>
       </v-tabs>
 
       <v-tabs-window v-model="tab">
@@ -738,6 +742,80 @@
           </v-card>
         </v-tabs-window-item>
 
+        <!-- Observability -->
+        <v-tabs-window-item value="observability">
+          <v-card class="glass-card pa-5 mb-5">
+            <div class="section-heading mb-1">
+              <v-icon color="primary" size="18" class="mr-2">mdi-chart-timeline-variant</v-icon>
+              Langfuse Tracing
+            </div>
+            <div class="text-caption text-grey mb-4">
+              Send inference traces to a <a href="https://langfuse.com" target="_blank" class="text-primary">Langfuse</a> instance.
+              Each chat completion creates one trace with a generation span including model, parameters, token counts and latency.
+              Traces are flushed asynchronously and never block inference.
+            </div>
+
+            <div class="d-flex align-center mb-4">
+              <v-switch v-model="langfuse.enabled" color="primary" hide-details density="compact" class="mr-3"
+                @update:modelValue="saveLangfuse"></v-switch>
+              <div>
+                <div class="text-subtitle-2 font-weight-medium">Enable Langfuse Tracing</div>
+              </div>
+            </div>
+
+            <v-divider class="mb-4"></v-divider>
+
+            <div class="text-subtitle-2 font-weight-medium mb-1">Langfuse Host</div>
+            <div class="text-caption text-grey mb-2">URL of your self-hosted or Langfuse Cloud instance.</div>
+            <v-text-field
+              v-model="langfuse.baseUrl"
+              density="compact" variant="outlined" hide-details
+              placeholder="http://10.3.0.241:3000"
+              prepend-inner-icon="mdi-server-network"
+              class="mb-4 font-mono"
+            ></v-text-field>
+
+            <v-row class="mb-4">
+              <v-col cols="12" sm="6">
+                <div class="text-subtitle-2 font-weight-medium mb-1">Public Key</div>
+                <v-text-field
+                  v-model="langfuse.publicKey"
+                  density="compact" variant="outlined" hide-details
+                  placeholder="pk-lf-..."
+                  class="font-mono"
+                ></v-text-field>
+              </v-col>
+              <v-col cols="12" sm="6">
+                <div class="text-subtitle-2 font-weight-medium mb-1">Secret Key</div>
+                <v-text-field
+                  v-model="langfuse.secretKey"
+                  density="compact" variant="outlined" hide-details
+                  :type="langfuse.showSecret ? 'text' : 'password'"
+                  placeholder="sk-lf-..."
+                  :append-inner-icon="langfuse.showSecret ? 'mdi-eye-off' : 'mdi-eye'"
+                  @click:append-inner="langfuse.showSecret = !langfuse.showSecret"
+                  class="font-mono"
+                ></v-text-field>
+              </v-col>
+            </v-row>
+
+            <div class="d-flex align-center gap-3">
+              <v-btn color="primary" variant="flat" :loading="langfuse.saving" @click="saveLangfuse"
+                prepend-icon="mdi-content-save-outline">
+                Save
+              </v-btn>
+              <v-btn variant="outlined" :loading="langfuse.testing" @click="testLangfuse"
+                prepend-icon="mdi-connection">
+                Test Connection
+              </v-btn>
+              <v-chip v-if="langfuse.testResult" size="small"
+                :color="langfuse.testResult === 'ok' ? 'success' : 'error'">
+                {{ langfuse.testResult === 'ok' ? 'Connected' : langfuse.testResult }}
+              </v-chip>
+            </div>
+          </v-card>
+        </v-tabs-window-item>
+
       </v-tabs-window>
     </v-container>
   </v-main>
@@ -751,6 +829,10 @@ export default {
   components: { AppNav },
   data: () => ({
     tab: 'users',
+    langfuse: {
+      enabled: false, baseUrl: '', publicKey: '', secretKey: '',
+      showSecret: false, saving: false, testing: false, testResult: null,
+    },
     currentUser: { username: 'admin', role: 'admin', authProvider: 'local' },
     appVersion: __APP_VERSION__,
     themeName: localStorage.getItem('orkllm-theme') || 'customDarkTheme',
@@ -923,7 +1005,49 @@ export default {
         const data = await res.json();
         const localAuthDisabled = data.settings?.localAuthDisabled ?? false;
         this.localAuthEnabled = !localAuthDisabled;
+        // Langfuse config
+        const s = data.settings || {};
+        this.langfuse.enabled   = s.langfuseEnabled   ?? false;
+        this.langfuse.baseUrl   = s.langfuseBaseUrl   ?? '';
+        this.langfuse.publicKey = s.langfusePublicKey ?? '';
+        this.langfuse.secretKey = s.langfuseSecretKey ? '••••••••' : '';
       } catch (e) {}
+    },
+    async saveLangfuse() {
+      this.langfuse.saving = true;
+      try {
+        const payload = {
+          langfuseEnabled:   this.langfuse.enabled,
+          langfuseBaseUrl:   this.langfuse.baseUrl,
+          langfusePublicKey: this.langfuse.publicKey,
+        };
+        if (!this.langfuse.secretKey.startsWith('••')) {
+          payload.langfuseSecretKey = this.langfuse.secretKey;
+        }
+        const res = await fetch('/api/admin/global-settings', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) this.notify('Langfuse settings saved', 'success');
+        else this.notify('Failed to save', 'error');
+      } catch (e) { this.notify('Network error', 'error'); }
+      finally { this.langfuse.saving = false; }
+    },
+    async testLangfuse() {
+      this.langfuse.testing = true;
+      this.langfuse.testResult = null;
+      try {
+        const res = await fetch('/api/admin/langfuse/test', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            baseUrl:   this.langfuse.baseUrl,
+            publicKey: this.langfuse.publicKey,
+            secretKey: this.langfuse.secretKey.startsWith('••') ? null : this.langfuse.secretKey,
+          }),
+        });
+        this.langfuse.testResult = res.ok ? 'ok' : `HTTP ${res.status}`;
+      } catch (e) { this.langfuse.testResult = e.message; }
+      finally { this.langfuse.testing = false; }
     },
     async fetchAuditLog() {
       this.loadingAuditLog = true;
