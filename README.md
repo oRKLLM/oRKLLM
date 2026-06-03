@@ -1,13 +1,13 @@
 # oRKLLM
 
-[![CI](https://github.com/mafischer/oRKLLM/actions/workflows/ci.yml/badge.svg)](https://github.com/mafischer/oRKLLM/actions/workflows/ci.yml)
-[![Release](https://github.com/mafischer/oRKLLM/actions/workflows/release.yml/badge.svg)](https://github.com/mafischer/oRKLLM/actions/workflows/release.yml)
-[![GitHub release](https://img.shields.io/github/v/release/mafischer/oRKLLM?logo=github)](https://github.com/mafischer/oRKLLM/releases/latest)
+[![CI](https://github.com/oRKLLM/oRKLLM/actions/workflows/ci.yml/badge.svg)](https://github.com/oRKLLM/oRKLLM/actions/workflows/ci.yml)
+[![Release](https://github.com/oRKLLM/oRKLLM/actions/workflows/release.yml/badge.svg)](https://github.com/oRKLLM/oRKLLM/actions/workflows/release.yml)
+[![GitHub release](https://img.shields.io/github/v/release/oRKLLM/oRKLLM?logo=github)](https://github.com/oRKLLM/oRKLLM/releases/latest)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen?logo=node.js)](https://nodejs.org)
-[![License](https://img.shields.io/github/license/mafischer/oRKLLM)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-RK3576%20%7C%20RK3588-blueviolet?logo=linux)](https://github.com/mafischer/oRKLLM)
-[![Tests](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/mafischer/1da454f93b1363fff7f67f731e579a2f/raw/orkllm-tests.json)](https://github.com/mafischer/oRKLLM/actions/workflows/ci.yml)
-[![Vulnerabilities](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/mafischer/1da454f93b1363fff7f67f731e579a2f/raw/orkllm-vulns.json)](https://github.com/mafischer/oRKLLM/security/code-scanning)
+[![License](https://img.shields.io/github/license/oRKLLM/oRKLLM)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-RK3576%20%7C%20RK3588-blueviolet?logo=linux)](https://github.com/oRKLLM/oRKLLM)
+[![Tests](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/mafischer/1da454f93b1363fff7f67f731e579a2f/raw/orkllm-tests.json)](https://github.com/oRKLLM/oRKLLM/actions/workflows/ci.yml)
+[![Vulnerabilities](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/mafischer/1da454f93b1363fff7f67f731e579a2f/raw/orkllm-vulns.json)](https://github.com/oRKLLM/oRKLLM/security/code-scanning)
 
 ```
               )       (
@@ -97,7 +97,7 @@ graph TD
 
 ## 📦 Installing from a Release Package (Ubuntu / Armbian ARM64)
 
-Pre-built `.deb` packages for ARM64 are available via the oRKLLM APT repository or directly from the [GitHub Releases page](https://github.com/mafischer/oRKLLM/releases).
+Pre-built `.deb` packages for ARM64 are available via the oRKLLM APT repository or directly from the [GitHub Releases page](https://github.com/oRKLLM/oRKLLM/releases).
 
 ### Option A — APT repository (recommended)
 
@@ -111,12 +111,12 @@ Three channels are available:
 
 ```bash
 # Trust the oRKLLM signing key
-curl -fsSL https://mafischer.github.io/oRKLLM/orkllm.gpg \
+curl -fsSL https://oRKLLM.github.io/oRKLLM/orkllm.gpg \
   | sudo gpg --dearmor -o /usr/share/keyrings/orkllm.gpg
 
 # Add the repository — replace 'stable' with 'beta' or 'alpha' to follow pre-releases
 echo "deb [arch=arm64 signed-by=/usr/share/keyrings/orkllm.gpg] \
-  https://mafischer.github.io/oRKLLM stable main" \
+  https://oRKLLM.github.io/oRKLLM stable main" \
   | sudo tee /etc/apt/sources.list.d/orkllm.list
 
 sudo apt update && sudo apt install orkllm
@@ -126,7 +126,7 @@ sudo apt update && sudo apt install orkllm
 
 ```bash
 VERSION=0.7.0
-wget https://github.com/mafischer/oRKLLM/releases/latest/download/orkllm_${VERSION}_arm64.deb
+wget https://github.com/oRKLLM/oRKLLM/releases/latest/download/orkllm_${VERSION}_arm64.deb
 sudo dpkg -i orkllm_${VERSION}_arm64.deb
 ```
 
