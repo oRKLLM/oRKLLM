@@ -1,3 +1,10 @@
+# [0.8.0-alpha.25](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.24...v0.8.0-alpha.25) (2026-06-03)
+
+
+### Bug Fixes
+
+* **autoload:** always attempt pinned model load on startup ([dae7ab6](https://github.com/oRKLLM/oRKLLM/commit/dae7ab6176b5dc9bb0af0d3d24af63678635f472))
+
 # [0.8.0-alpha.24](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.23...v0.8.0-alpha.24) (2026-06-03)
 
 
