@@ -136,7 +136,7 @@ graph TD
 | :--- | :--- |
 | `src/addon/orkllm_napi.cpp` | C++ N-API addon; wraps `rkllm_init`, `rkllm_run`, `rkllm_destroy` with `Napi::ThreadSafeFunction` for non-blocking callbacks |
 | `src/worker.js` | Process-isolated inference worker; receives `load`/`run`/`unload` IPC commands from pool |
-| `src/pool.js` | Single-active-model lock, auto-swap, idle timeout, pin-to-keep-loaded; runtime version auto-discovery (`getAvailableRuntimes`, `readSoVersion`, `runtimeCandidates`, `_tryLoad`); caches winning lib path in model_settings |
+| `src/pool.js` | Single-active-model lock, auto-swap, idle timeout, pin-to-keep-loaded; runtime version auto-discovery (`getAvailableRuntimes`, `readSoVersion`, `runtimeCandidates`, `_tryLoad`); caches winning lib path in model_settings; `prefillAndCache(prompt, savePath)` — abort-after-first-token KV warm; `generateSpeculative(model, draft, prompt, opts, onToken, k)` — draft+target spec decode (research, no speedup on single NPU); `loadDraft`/`unloadDraft` for second worker slot |
 | `src/admin/conversations.js` | 6 REST endpoints for conversation CRUD + message append (`/api/admin/conversations/…`) |
 | `src/runtime_sync.js` | Downloads aarch64 `librkllmrt.so` versions from `mafischer/rkllm-runtimes` mirror into `RUNTIMES_DIR`; skips non-ARM64-Linux; called on startup, on model load failure, and via `POST /api/admin/runtimes/sync` |
 | `src/monitor.js` | Polls CPU, RAM, SoC Temp, NPU load, GPU load (Mali), disk utilization; Rockchip-native on ARM64 Linux, simulated elsewhere |
@@ -576,10 +576,98 @@ Include the applicable chipset tag(s). This enables oRKLLM's **Compatible chipse
 | Phase 19: Runtime Auto-Download | ✅ Done | Setup opt-in checkbox (default on); `runtime_sync.js` downloads aarch64 `.so` files from mirror on startup; targeted sync when model load fails with unknown version; opt-out shows disclaimer dialog in UI; API returns HTTP 422 `RUNTIME_MISSING` with `runtimeVersion`; `autoDownloadRuntimes` setting in Settings page |
 | Phase 20: Model Downloader | ✅ Done | HF search + collection browse; Download button fetches all repo files and queues all downloads in parallel; files saved to `MODELS_DIR/{repoName}/{filename}`; download queue persists across tab/page navigation; progress + speed per file; grouped by repo in queue UI |
 | Phase 21: Platform-Aware Search | ✅ Done | `GET /api/admin/status` returns `platform` field (`rk3576`/`rk3588`/`null`) from `/proc/device-tree/model`; "Compatible chipset" checkbox appends platform slug to HF search query; recursive model scan supports `models/{repoName}/` subdirectories; wildcard routes for model settings and delete |
+| Phase 22: Speculative Decode (research) | 🔬 Research | Draft+target pool implemented (`generateSpeculative`, `loadDraft`/`unloadDraft`); no measurable speedup on single NPU — see Section 11 |
+| Phase 23: prefillAndCache | ✅ Done | `pool.prefillAndCache(prompt, savePath)` — abort-after-first-token trick to save KV state; `POST /api/admin/prefill-cache`; `POST /api/admin/infer-with-cache`; 75% prefill reduction (4B), 100% (8B) measured on board; requires model reload between warm and serve phases — see Section 11 |
 
 ---
 
-## 10. Verification Plan
+## 10. NPU Inference Optimization — Research Findings
+
+This section records empirical results from hardware experiments on the NanoPi M5 (RK3576). Future agents should read this before attempting related work.
+
+---
+
+### 10.1 Speculative Decoding
+
+**Conclusion: no measurable speedup on a single RK3576 NPU.**
+
+Draft (0.6B) + target (4B) speculative decoding was implemented as `pool.generateSpeculative()`. The infrastructure works correctly — draft generates `k` tokens serially, target verifies in one pass using `RKLLM_INFER_GET_LOGITS`. However, on a single NPU:
+
+- Only one model fits in NPU memory at a time. The draft and target models run **sequentially**, not concurrently.
+- At similar per-token NPU throughput, the draft+verify overhead negates any acceptance-rate gain.
+- Speedup only materialises when the draft model is substantially faster than the target *on the same hardware*. On a shared NPU both run at comparable tok/s.
+
+**Do not re-investigate speculative decode on single-NPU boards unless:** (a) a future RKLLM version supports shared NPU memory across handles, or (b) the board has a separate fast CPU-side speculative path.
+
+**Why Eagle-3 / DFlash are not applicable:** these techniques assume the draft and target can run concurrently (dual GPU/NPU), which is not the case here.
+
+**Key IPC race condition (fixed):** `rkllm_abort` is asynchronous. After sending abort, stale tokens from the old run leak into the next listener unless code explicitly waits for `state === 2` before resolving. The fix is `abortAndFinish()` in `pool.js` which sends abort then awaits `state: 2` with a 500 ms timeout.
+
+---
+
+### 10.2 prefillAndCache
+
+**Conclusion: works — 63–100% prefill time reduction; requires a model reload between the warm and serve phases.**
+
+`pool.prefillAndCache(prompt, savePath)` runs `rkllm_run` with `saveCachePath` and calls `rkllm_abort` immediately after the first decode token fires. RKLLM saves the KV state to disk before returning `state: 2`. This gives a prefill-only snapshot without completing generation.
+
+**Measured results on NanoPi M5 (RK3576):**
+
+| Model | Baseline prefill | Cached prefill | Reduction | Warm cost |
+|-------|-----------------|----------------|-----------|-----------|
+| Qwen3-4B-Base | 69 tok / 1446 ms | 9 tok / 361 ms | **75%** | 692 ms |
+| Qwen3-8B-Base | 57 tok / 1495 ms | 0 tok / 0 ms | **100%** | 831 ms |
+
+**Case A confirmed:** the saved KV cache is a clean prefill snapshot. The first generated token after loading the cache (with an empty continuation prompt) is the first *new* decode token — not a duplicate. The 9 residual tokens on 4B are template-framing tokens RKLLM always re-processes regardless of cache.
+
+**Critical constraint — model reload required:** calling `rkllm_run` with `loadCachePath` immediately after `prefillAndCache` crashes the worker process (`state: 500, "Worker process exited unexpectedly"`). The abort from `prefillAndCache` leaves the RKLLM engine's internal KV state dirty. The engine crashes when it tries to load an external cache file on top of that dirty state. The fix is to **unload and reload the model** between the warm phase and the serve phase.
+
+**Correct startup workflow:**
+```
+1. Load model
+2. pool.prefillAndCache(systemPrompt, "/path/to/system.rkllmcache")
+3. pool.unload()
+4. pool.load(model)                   ← clean KV state
+5. Serve user requests with loadCachePath = "/path/to/system.rkllmcache"
+```
+
+**Relationship to the existing SSD prefix cache (`cache.js`):** both use the same RKLLM `saveCachePath`/`loadCachePath` mechanism. `cache.js` is *reactive* — it caches after the first completed response; user #1 pays the full prefill cost. `prefillAndCache` is *proactive* — it warms the cache at startup so even user #1 benefits. The practical advantage is narrow for single-user deployments but meaningful for multi-tenant scenarios with a fixed system prompt.
+
+**API endpoints added:**
+- `POST /api/admin/prefill-cache { prompt, savePath }` → `{ firstToken, savedPath }`
+- `POST /api/admin/infer-with-cache { prompt, loadCachePath?, saveCachePath?, maxTokens? }` → `{ text, perf }` (test/debug endpoint; accepts empty `prompt` when `loadCachePath` is set)
+
+---
+
+### 10.3 FP8 KV Cache
+
+**Conclusion: not supported — RK3576 NPU has no FP8 hardware.**
+
+FP8 (E4M3/E5M2) requires dedicated tensor core support present only in NVIDIA H100, Ada Lovelace, and similar data-centre hardware. The RK3576 NPU operates at INT8/INT16 and FP16. The `RKLLMParam` struct exposes no KV cache data-type control field, and a `strings` search of `librkllmrt-aarch64-v1.2.3.so` finds no references to `fp8`, `kv_quant`, or `cache_quant`. INT8 KV cache quantisation (available in llama.cpp) is similarly absent from the RKLLM API.
+
+---
+
+### 10.4 .rkllmcache File Format
+
+**Conclusion: proprietary mixed-format file — not a clean FP16 blob. Targeted quantisation requires further reverse-engineering.**
+
+Empirically determined structure of a `.rkllmcache` file saved by RKLLM v1.2.3 (Qwen3-4B, 69-token prompt, ~10.8 MB):
+
+| Section | Offset | Size | Content |
+|---------|--------|------|---------|
+| Binary header | `0x000` | ~294 bytes | Little-endian int32 metadata: `[n_keep, n_kv_heads, n_tokens, ...]`. Confirmed: `n_kv_heads=8`, `n_tokens=69` match model architecture and prompt. |
+| ASCII metadata | `0x126` | ~91 KB | Space-separated large decimal integers. Purpose not yet determined (quantisation scales? model signature? token IDs?). |
+| FP16 tensor data | `~0x166b9` | ~10.2 MB | KV cache tensors in binary FP16 (little-endian). Confirmed by decoding the last 512 bytes: values in range −12 to +7, all finite, mean |abs| ≈ 2.2 — consistent with attention key/value magnitudes. |
+
+**Why standard compression does not help:** `zlib` at level 6 reduces the full file from 10.8 MB to 10.0 MB (92.8% — only 7% reduction). FP16 neural network activations are high-entropy; general-purpose compression cannot exploit their structure.
+
+**Why targeted FP16→INT8 quantisation is risky without further work:** the FP16 tensor section starts at a non-4-byte-aligned offset (`0x166b9`), and the ASCII section's role is unknown — it may contain per-channel scales or offsets that reference the FP16 values. Modifying one section without understanding the other risks silently corrupting the cache file.
+
+**Next steps if pursuing this:** determine the exact layer/head/token layout of the FP16 section (write a test that saves caches at different prompt lengths and diffs the offsets); reverse-engineer the ASCII section by comparing outputs for known prompts; once the layout is confirmed, per-channel INT8 min-max quantisation of the FP16 section would yield ~50% storage reduction.
+
+---
+
+## 12. Verification Plan
 
 ### Automated (Local)
 ```bash
