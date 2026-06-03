@@ -1,3 +1,10 @@
+# [0.8.0-alpha.11](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.10...v0.8.0-alpha.11) (2026-06-03)
+
+
+### Bug Fixes
+
+* **kvcache_quant:** correct relative path to native addon (../build not ../../build) ([328511a](https://github.com/mafischer/oRKLLM/commit/328511aac083199173557224c8a50fb6c5721782))
+
 # [0.8.0-alpha.10](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.9...v0.8.0-alpha.10) (2026-06-03)
 
 
