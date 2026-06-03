@@ -358,39 +358,42 @@ class EnginePool {
 
   // ── Speculative decoding ────────────────────────────────────────────────
 
-  // Run k draft steps, return array of { text, token_id } for each generated token
-  _runDraftSteps(prompt, k) {
+  // Run one draft step: send prompt, collect the single token, wait for state=2 finish.
+  // Draft model is loaded with max_new_tokens=1 so each run produces exactly 1 token.
+  _runDraftStep(promptSoFar) {
     return new Promise((resolve, reject) => {
-      if (!this.draftWorker || !this.draftIsLoaded) {
-        return reject(new Error('Draft model not loaded'));
-      }
-      const tokens = [];
-      let promptSoFar = prompt;
-
-      const runOne = () => {
-        if (tokens.length >= k) return resolve(tokens);
-
-        const onMsg = (msg) => {
-          if (msg.type === 'token') {
-            if (msg.state === 0 && msg.text) {
-              tokens.push({ text: msg.text, token_id: msg.token_id });
-              promptSoFar += msg.text;
-              this.draftWorker.removeListener('message', onMsg);
-              runOne();
-            } else if (msg.state === 2 || msg.state === 3) {
-              this.draftWorker.removeListener('message', onMsg);
-              resolve(tokens); // draft finished early
-            }
-          }
-        };
-        this.draftWorker.on('message', onMsg);
-        // Each draft step: feed accumulated prompt, get one token, then stop via max_new_tokens=1
-        // We rely on RKLLM generating one token at a time via KV cache continuation
-        this.draftWorker.send({ type: 'run', prompt: promptSoFar });
+      if (!this.draftWorker) return reject(new Error('Draft worker not available'));
+      let token = null;
+      const onMsg = (msg) => {
+        if (msg.type !== 'token') return;
+        if (msg.state === 0 && msg.text && !token) {
+          token = { text: msg.text, token_id: msg.token_id };
+        }
+        if (msg.state === 2 || msg.state === 3) {
+          // state=2 confirms generation fully stopped — safe to proceed
+          this.draftWorker.removeListener('message', onMsg);
+          resolve(token);
+        }
       };
-
-      runOne();
+      this.draftWorker.on('message', onMsg);
+      this.draftWorker.send({ type: 'run', prompt: promptSoFar });
     });
+  }
+
+  // Run k draft steps sequentially, waiting for full stop between each.
+  async _runDraftSteps(prompt, k) {
+    if (!this.draftWorker || !this.draftIsLoaded) {
+      throw new Error('Draft model not loaded');
+    }
+    const tokens = [];
+    let promptSoFar = prompt;
+    for (let i = 0; i < k; i++) {
+      const token = await this._runDraftStep(promptSoFar);
+      if (!token) break; // draft finished early (EOS)
+      tokens.push(token);
+      promptSoFar += token.text;
+    }
+    return tokens;
   }
 
   // Verify draft tokens with target model using get_logits mode.
@@ -414,13 +417,31 @@ class EnginePool {
           // Collected enough to verify all draft tokens + 1 correction token
           if (targetTokens.length >= k + 1) {
             this.worker.removeListener('message', onMsg);
-            if (this.worker) this.worker.send({ type: 'abort' });
-            finish();
+            abortAndFinish(); // abort and wait for state=2 before resolving
           }
         } else if (msg.state === 2 || msg.state === 3) {
+          // Generation finished naturally (EOS or max_tokens reached)
           this.worker.removeListener('message', onMsg);
           finish();
         }
+      };
+
+      const abortAndFinish = () => {
+        // Send abort then wait for state=2 to flush IPC before resolving.
+        // This prevents stale tokens leaking into the next run.
+        if (this.worker) this.worker.send({ type: 'abort' });
+        const waitDone = (msg) => {
+          if (msg.type === 'token' && (msg.state === 2 || msg.state === 3)) {
+            this.worker?.removeListener('message', waitDone);
+            finish();
+          }
+        };
+        this.worker?.on('message', waitDone);
+        // Safety timeout in case abort arrives after state=2 already sent
+        setTimeout(() => {
+          this.worker?.removeListener('message', waitDone);
+          finish();
+        }, 500);
       };
 
       const finish = () => {
@@ -440,7 +461,6 @@ class EnginePool {
       };
 
       this.worker.on('message', onMsg);
-      // Target generates from original prompt (same starting point as draft)
       this.worker.send({ type: 'run', prompt });
     });
   }
