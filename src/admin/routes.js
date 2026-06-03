@@ -339,7 +339,8 @@ export default async function adminRoutes(fastify, options) {
   // Direct inference with explicit cache paths — for testing prefillAndCache output.
   fastify.post('/infer-with-cache', async (request, reply) => {
     const { prompt, loadCachePath, saveCachePath, maxTokens } = request.body || {};
-    if (!prompt) return reply.status(400).send({ error: 'prompt required' });
+    // prompt may be empty string when loadCachePath supplies all context
+    if (prompt === undefined || prompt === null) return reply.status(400).send({ error: 'prompt required' });
     if (!pool.isLoaded) return reply.status(409).send({ error: 'No model loaded' });
     try {
       let text = '';
