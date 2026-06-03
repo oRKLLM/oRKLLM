@@ -1,3 +1,10 @@
+# [0.8.0-alpha.24](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.23...v0.8.0-alpha.24) (2026-06-03)
+
+
+### Bug Fixes
+
+* **ui:** truly centre navbar links using position:absolute + translateX(-50%) ([c4a8e3c](https://github.com/oRKLLM/oRKLLM/commit/c4a8e3cc33db43b41b1df76ab95275b68d99a5c5))
+
 # [0.8.0-alpha.23](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.22...v0.8.0-alpha.23) (2026-06-03)
 
 
