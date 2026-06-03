@@ -335,6 +335,30 @@ export default async function adminRoutes(fastify, options) {
     }
   });
 
+  // POST /api/admin/infer-with-cache { prompt, loadCachePath?, saveCachePath?, maxTokens? }
+  // Direct inference with explicit cache paths — for testing prefillAndCache output.
+  fastify.post('/infer-with-cache', async (request, reply) => {
+    const { prompt, loadCachePath, saveCachePath, maxTokens } = request.body || {};
+    if (!prompt) return reply.status(400).send({ error: 'prompt required' });
+    if (!pool.isLoaded) return reply.status(409).send({ error: 'No model loaded' });
+    try {
+      let text = '';
+      const cachePaths = (loadCachePath || saveCachePath)
+        ? { loadCachePath: loadCachePath || null, saveCachePath: saveCachePath || null }
+        : {};
+      const result = await pool.generate(
+        pool.activeModel.name,
+        prompt,
+        { max_new_tokens: maxTokens || 20 },
+        (msg) => { if (msg.text) text += msg.text; },
+        cachePaths,
+      );
+      return { text, perf: result.perf };
+    } catch (e) {
+      return reply.status(500).send({ error: e.message });
+    }
+  });
+
   // POST /api/admin/timeout
   fastify.post('/timeout', async (request, reply) => {
     const { timeout } = request.body || {};
