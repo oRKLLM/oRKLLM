@@ -10,6 +10,38 @@
 * **kvcache_quant:** derive fixed_overhead dynamically per file ([b645f18](https://github.com/oRKLLM/oRKLLM/commit/b645f18f49c2b64c2226979646d52e2ce43cd6a4))
 * **kvcache_quant:** use FP32 NEON arithmetic to avoid FP16 extension requirement ([23651aa](https://github.com/oRKLLM/oRKLLM/commit/23651aa4b81a596c3bba5e4eac0ae5c95ec18f47))
 * **kvcache:** rebuild kvcache_quant_napi with Vulkan support on ARM64 ([a23761c](https://github.com/oRKLLM/oRKLLM/commit/a23761cf6582790201902ac15966c2323568fbce))
+* **release:** correct target_commitish on migrated releases — semantic-release should now find v0.8.0-alpha.1 ([ef11f6c](https://github.com/oRKLLM/oRKLLM/commit/ef11f6c50a740c04ccff14c4f3ac53aa6e2fb8c4))
+* **runtime_sync:** temp revert to mafischer mirror — oRKLLM CDN settling ([218b56b](https://github.com/oRKLLM/oRKLLM/commit/218b56b533cc3ca694920803e3ff87c4abdc30ad))
+* **spec-decode:** load draft with max_new_tokens=1; fix token verification logic ([c451b17](https://github.com/oRKLLM/oRKLLM/commit/c451b17421eaceba4fd658415f02ae53a630c7e4))
+* **spec-decode:** rename 'dflash' to 'speculative' — applies to any draft model pairing ([192789a](https://github.com/oRKLLM/oRKLLM/commit/192789ad3cb253cbaad2c2d42a45be514f682d60))
+* **spec-decode:** wait for state=2 after abort to flush IPC before next run ([d7b2f7f](https://github.com/oRKLLM/oRKLLM/commit/d7b2f7fde50ff564e1c285b32c0972bc57e36264))
+* **vulkan:** add memoryBarrierShared() in parallel reduction ([02567ec](https://github.com/oRKLLM/oRKLLM/commit/02567ecd651575b37a837fe9295dd3243a6176e7))
+
+
+### Features
+
+* **admin:** add /api/admin/infer-with-cache for explicit cache path testing ([3b9838b](https://github.com/oRKLLM/oRKLLM/commit/3b9838bbe913552f8039859d128b348d451785c4))
+* **ci:** move badge JSON to gh-pages/assets/ — drop GIST_TOKEN ([4ef2e97](https://github.com/oRKLLM/oRKLLM/commit/4ef2e977efd940510c9b1050f1eb0cbd24698100))
+* **kvcache:** add INT8 KV cache quantise/dequantise (kvcache_quant.js) ([962e8dd](https://github.com/oRKLLM/oRKLLM/commit/962e8dda338ed0e7298d6aa21ea6068f7c7370a3))
+* **kvcache:** add NEON SIMD N-API addon for async KV cache quant/dequant ([b3593a9](https://github.com/oRKLLM/oRKLLM/commit/b3593a9e3d5eed3d692556a0ae891078c75b2ab2))
+* **kvcache:** add polar INT8 and polar INT4 quantisation schemes ([3f4d655](https://github.com/oRKLLM/oRKLLM/commit/3f4d65526da72515dde010d395ad5ae5c1bf9a29))
+* **kvcache:** Vulkan compute path for polar INT8 on Mali-G52 (panvk/Mesa) ([4c7bfa3](https://github.com/oRKLLM/oRKLLM/commit/4c7bfa32ab9fa7adbd429d5f182752eacaa172a3))
+* **pool:** add prefillAndCache() — abort-after-first-token KV cache warming ([6060823](https://github.com/oRKLLM/oRKLLM/commit/6060823f752181e05a16ca0de46ca7f9ac0d83ea))
+* **runtime_sync:** configurable mirror list with fallthrough ([321ca42](https://github.com/oRKLLM/oRKLLM/commit/321ca4274bce69835f5572b2a09c52fecb1b5b53))
+* **spec-decode:** speculative decoding infrastructure ([1977f3a](https://github.com/oRKLLM/oRKLLM/commit/1977f3a1af83369e55d803659bcf8a42e6ea698d))
+
+# [0.8.0-alpha.1](https://github.com/oRKLLM/oRKLLM/compare/v0.7.0...v0.8.0-alpha.1) (2026-06-03)
+
+
+### Bug Fixes
+
+* **addon:** capture inferMode in lambda for RKLLM_INFER_GET_LOGITS mode ([117c223](https://github.com/oRKLLM/oRKLLM/commit/117c223a4b4d2e2e98f321ba901e129575cfc296))
+* **admin:** allow empty prompt in infer-with-cache when loadCachePath set ([24bed01](https://github.com/oRKLLM/oRKLLM/commit/24bed01fea8859ac85023d7f7d8738437f6ea6d7))
+* **e2e:** relax token_id assertion in prefillAndCache test for mock engine ([769f4b9](https://github.com/oRKLLM/oRKLLM/commit/769f4b944a592a20450c04d8c78b66d98ca0614d))
+* **kvcache_quant:** correct relative path to native addon (../build not ../../build) ([328511a](https://github.com/oRKLLM/oRKLLM/commit/328511aac083199173557224c8a50fb6c5721782))
+* **kvcache_quant:** derive fixed_overhead dynamically per file ([b645f18](https://github.com/oRKLLM/oRKLLM/commit/b645f18f49c2b64c2226979646d52e2ce43cd6a4))
+* **kvcache_quant:** use FP32 NEON arithmetic to avoid FP16 extension requirement ([23651aa](https://github.com/oRKLLM/oRKLLM/commit/23651aa4b81a596c3bba5e4eac0ae5c95ec18f47))
+* **kvcache:** rebuild kvcache_quant_napi with Vulkan support on ARM64 ([a23761c](https://github.com/oRKLLM/oRKLLM/commit/a23761cf6582790201902ac15966c2323568fbce))
 * **spec-decode:** load draft with max_new_tokens=1; fix token verification logic ([c451b17](https://github.com/oRKLLM/oRKLLM/commit/c451b17421eaceba4fd658415f02ae53a630c7e4))
 * **spec-decode:** rename 'dflash' to 'speculative' — applies to any draft model pairing ([192789a](https://github.com/oRKLLM/oRKLLM/commit/192789ad3cb253cbaad2c2d42a45be514f682d60))
 * **spec-decode:** wait for state=2 after abort to flush IPC before next run ([d7b2f7f](https://github.com/oRKLLM/oRKLLM/commit/d7b2f7fde50ff564e1c285b32c0972bc57e36264))
