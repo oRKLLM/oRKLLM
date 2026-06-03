@@ -143,6 +143,9 @@ jobs:
       - name: Install frontend dependencies
         run: cd frontend && npm ci
 
+      - name: Fetch semantic-release Git notes
+        run: git fetch --force origin refs/notes/semantic-release:refs/notes/semantic-release || true
+
       - name: Build frontend
         run: npm run build:frontend
 
