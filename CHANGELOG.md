@@ -1,3 +1,10 @@
+# [0.8.0-alpha.33](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.32...v0.8.0-alpha.33) (2026-06-03)
+
+
+### Bug Fixes
+
+* **langfuse:** use @langfuse/tracing + @langfuse/otel (correct official SDK) ([146425f](https://github.com/oRKLLM/oRKLLM/commit/146425f8b0890686a4246c2d5e1b1aa22b6b8fcf))
+
 # [0.8.0-alpha.32](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.31...v0.8.0-alpha.32) (2026-06-03)
 
 
