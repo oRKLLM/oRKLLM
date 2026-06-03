@@ -394,6 +394,7 @@ export default async function adminRoutes(fastify, options) {
         cacheColdLimitMB:      parseInt(dbGetSetting('cache_cold_limit_mb')         ?? String(10 * 1024)),
         cacheDir:              dbGetSetting('cache_dir') ?? '',
         cacheMaxContextTokens: parseInt(dbGetSetting('cache_max_context_tokens')    ?? '8192'),
+        kvCacheQuant:          dbGetSetting('kv_cache_quant') ?? 'off',
         localAuthDisabled: dbGetSetting('local_auth_disabled') === '1',
         trustedProxy: dbGetSetting('trusted_proxy') ?? '',
         pinnedModel: dbGetSetting('pinned_model') ?? '',
@@ -407,6 +408,7 @@ export default async function adminRoutes(fastify, options) {
   fastify.post('/global-settings', async (request, reply) => {
     const { idleTimeoutMinutes, temperature, topP, topK, maxNewTokens, repPenalty, hfToken,
             cacheEnabled, cacheHotLimitMB, cacheColdLimitMB, cacheDir, cacheMaxContextTokens,
+            kvCacheQuant,
             localAuthDisabled, trustedProxy, autoDownloadRuntimes } = request.body || {};
     if (typeof idleTimeoutMinutes === 'number') {
       pool.setIdleTimeout(idleTimeoutMinutes);
@@ -422,6 +424,9 @@ export default async function adminRoutes(fastify, options) {
     if (typeof cacheColdLimitMB === 'number') dbSetSetting('cache_cold_limit_mb',       cacheColdLimitMB);
     if (typeof cacheDir === 'string')         dbSetSetting('cache_dir',                 cacheDir);
     if (typeof cacheMaxContextTokens === 'number') dbSetSetting('cache_max_context_tokens', cacheMaxContextTokens);
+    const validQuant = ['off', 'q8', 'pq8', 'pq4'];
+    if (typeof kvCacheQuant === 'string' && validQuant.includes(kvCacheQuant))
+      dbSetSetting('kv_cache_quant', kvCacheQuant);
     if (typeof localAuthDisabled === 'boolean') dbSetSetting('local_auth_disabled', localAuthDisabled ? '1' : '0');
     if (typeof trustedProxy === 'string') dbSetSetting('trusted_proxy', trustedProxy);
     if (typeof autoDownloadRuntimes === 'boolean') dbSetSetting('auto_download_runtimes', autoDownloadRuntimes ? '1' : '0');

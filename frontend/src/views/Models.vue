@@ -307,6 +307,30 @@
                     </v-expansion-panel-text>
                   </v-expansion-panel>
 
+                  <!-- KV Cache Compression -->
+                  <v-expansion-panel>
+                    <v-expansion-panel-title class="text-subtitle-2 font-weight-bold py-2 px-0">
+                      KV Cache Compression
+                    </v-expansion-panel-title>
+                    <v-expansion-panel-text class="pa-0">
+                      <div class="text-caption text-grey mb-3">
+                        Override the global KV cache compression setting for this model.
+                        Quantised caches save SSD space at the cost of a ~15 ms dequantise on cache hit.
+                      </div>
+                      <v-select
+                        v-model="settingsForm.kv_cache_quant"
+                        :items="[
+                          { title: 'Use global setting', value: null },
+                          { title: 'Off (FP16)', value: 'off' },
+                          { title: 'Min-Max INT8 (~44% smaller)', value: 'q8' },
+                          { title: 'Polar INT8 (~49% smaller)', value: 'pq8' },
+                          { title: 'Polar INT4 (~74% smaller, GPU accelerated)', value: 'pq4' },
+                        ]"
+                        density="compact" variant="outlined" hide-details class="mb-2"
+                      ></v-select>
+                    </v-expansion-panel-text>
+                  </v-expansion-panel>
+
                   <!-- Speculative Decoding scaffold -->
                   <v-expansion-panel>
                     <v-expansion-panel-title class="text-subtitle-2 font-weight-bold py-2 px-0">
@@ -771,6 +795,7 @@ export default {
       speculative_mode: null,
       draft_model: null,
       spec_draft_tokens: 4,
+      kv_cache_quant: null,
     },
 
     // Delete confirm

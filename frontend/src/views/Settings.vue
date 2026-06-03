@@ -250,6 +250,25 @@
 
           <v-divider class="mb-4"></v-divider>
 
+          <div class="text-subtitle-2 font-weight-medium mb-1">KV Cache Compression</div>
+          <div class="text-caption text-grey mb-3">
+            Quantise saved KV cache files to reduce SSD storage. Compression runs in the background after each response;
+            decompression (~15 ms) runs before loading a cache hit. Requires ARM64 with the native addon.
+          </div>
+          <v-select
+            v-model="settings.kvCacheQuant"
+            :items="[
+              { title: 'Off (FP16 — no compression)', value: 'off' },
+              { title: 'Min-Max INT8 (~44% smaller, RMSE 0.05)', value: 'q8' },
+              { title: 'Polar INT8 (~49% smaller, RMSE 0.06)', value: 'pq8' },
+              { title: 'Polar INT4 (~74% smaller, RMSE 0.86) — GPU accelerated', value: 'pq4' },
+            ]"
+            density="compact" variant="outlined" hide-details class="mb-4"
+            prepend-inner-icon="mdi-archive-arrow-down-outline"
+          ></v-select>
+
+          <v-divider class="mb-4"></v-divider>
+
           <div class="text-subtitle-2 font-weight-medium mb-1">Sliding Context Window</div>
           <div class="text-caption text-grey mb-2">Oldest non-system messages are dropped when the conversation exceeds this estimated token count. Prevents context overflow on the NPU.</div>
           <v-row no-gutters class="align-center mb-4">
@@ -360,6 +379,7 @@ export default {
       cacheColdLimitMB: 10240,
       cacheDir: '',
       cacheMaxContextTokens: 8192,
+      kvCacheQuant: 'off',
       trustedProxy: '',
       autoDownloadRuntimes: true,
       savedAutoDownloadRuntimes: true,
@@ -413,6 +433,7 @@ export default {
         this.settings.cacheColdLimitMB      = s.cacheColdLimitMB ?? 10240;
         this.settings.cacheDir              = s.cacheDir ?? '';
         this.settings.cacheMaxContextTokens = s.cacheMaxContextTokens ?? 8192;
+        this.settings.kvCacheQuant          = s.kvCacheQuant ?? 'off';
         this.settings.trustedProxy          = s.trustedProxy ?? '';
         this.settings.autoDownloadRuntimes  = s.autoDownloadRuntimes ?? true;
         this.savedAutoDownloadRuntimes       = this.settings.autoDownloadRuntimes;

@@ -104,7 +104,7 @@ export default async function apiRoutes(fastify, options) {
     if (cacheEnabled && trimmed.length >= 2) {
       const prefixMsgs = trimmed.slice(0, -1); // everything except last (new user) message
       const pKey       = cacheKey(model, prefixMsgs);
-      const hit        = getCachePath(pKey);
+      const hit        = await getCachePath(pKey);  // async: dequantizes if needed
 
       // Key for the state we'll save after this response
       const nextKey    = cacheKey(model, trimmed);
@@ -200,7 +200,7 @@ export default async function apiRoutes(fastify, options) {
         recordRequest(finalResult.perf);
         if (cacheEnabled && saveCachePath) {
           const nextKey = cacheKey(model, trimmed);
-          putCachePath(nextKey, saveCachePath);
+          putCachePath(nextKey, saveCachePath, saved.kv_cache_quant ?? null);
         }
         
         const stopChunk = {
@@ -238,7 +238,7 @@ export default async function apiRoutes(fastify, options) {
         recordRequest(finalResult.perf);
         if (cacheEnabled && saveCachePath) {
           const nextKey = cacheKey(model, trimmed);
-          putCachePath(nextKey, saveCachePath);
+          putCachePath(nextKey, saveCachePath, saved.kv_cache_quant ?? null);
         }
         return {
           id: completionId,

@@ -3,6 +3,20 @@ import path from 'path';
 import crypto from 'crypto';
 import os from 'os';
 import { dbGetSetting } from './db.js';
+import { quantize, quantizePolar8, quantizePolar4, dequantize, hasNativeAddon }
+  from './kvcache_quant.js';
+
+// Map scheme name → quantize function and file extension
+const QUANT_SCHEMES = {
+  q8:  { fn: quantize,       ext: '.q8cache'  },
+  pq8: { fn: quantizePolar8, ext: '.pq8cache' },
+  pq4: { fn: quantizePolar4, ext: '.pq4cache' },
+};
+
+function kvCacheQuant(modelOverride) {
+  const s = modelOverride ?? dbGetSetting('kv_cache_quant') ?? 'off';
+  return QUANT_SCHEMES[s] ? s : 'off';
+}
 
 const DEFAULT_CACHE_DIR = path.join(os.homedir(), '.config', 'orkllm', 'cache');
 const DEFAULT_HOT_LIMIT_MB = 512;
@@ -15,8 +29,12 @@ function settings() {
     coldLimitMB:   parseInt(dbGetSetting('cache_cold_limit_mb') ?? DEFAULT_COLD_LIMIT_MB),
     cacheDir:      dbGetSetting('cache_dir') ?? DEFAULT_CACHE_DIR,
     maxContextTokens: parseInt(dbGetSetting('cache_max_context_tokens') ?? '8192'),
+    kvCacheQuant:  dbGetSetting('kv_cache_quant') ?? 'off',
   };
 }
+
+// All possible extensions a cached file might use
+const CACHE_EXTS = ['.rkllmcache', '.q8cache', '.pq8cache', '.pq4cache'];
 
 function ensureDir(p) {
   if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
@@ -53,10 +71,19 @@ function evictLru(tier, tierDir, limitMB, lru) {
     if (!entries.length) break;
     entries.sort((a, b) => a[1] - b[1]); // oldest first
     const [oldestKey] = entries[0];
-    const oldestFile = path.join(tierDir, oldestKey + '.rkllmcache');
-    try { fs.unlinkSync(oldestFile); } catch {}
+    for (const ext of CACHE_EXTS) {
+      try { fs.unlinkSync(path.join(tierDir, oldestKey + ext)); } catch {}
+    }
     delete lru[tier][oldestKey];
   }
+}
+
+function findCacheFile(dir, key) {
+  for (const ext of CACHE_EXTS) {
+    const f = path.join(dir, key + ext);
+    if (fs.existsSync(f)) return f;
+  }
+  return null;
 }
 
 export function cacheKey(modelId, messages) {
@@ -64,7 +91,7 @@ export function cacheKey(modelId, messages) {
   return crypto.createHash('sha256').update(payload).digest('hex').slice(0, 16);
 }
 
-export function getCachePath(key) {
+export async function getCachePath(key) {
   const cfg = settings();
   if (!cfg.enabled) return null;
 
@@ -72,30 +99,50 @@ export function getCachePath(key) {
   const coldDir = path.join(cfg.cacheDir, 'cold');
   const lru = readLru(cfg.cacheDir);
 
-  const hotFile  = path.join(hotDir,  key + '.rkllmcache');
-  const coldFile = path.join(coldDir, key + '.rkllmcache');
-
-  if (fs.existsSync(hotFile)) {
+  let found = findCacheFile(hotDir, key);
+  if (!found) {
+    const coldFound = findCacheFile(coldDir, key);
+    if (coldFound) {
+      // Promote cold → hot (keep same extension)
+      ensureDir(hotDir);
+      const hotDest = path.join(hotDir, path.basename(coldFound));
+      try { fs.renameSync(coldFound, hotDest); found = hotDest; }
+      catch { found = coldFound; }
+      delete lru.cold[key];
+      lru.hot[key] = Date.now();
+      evictLru('hot', hotDir, cfg.hotLimitMB, lru);
+      writeLru(cfg.cacheDir, lru);
+    }
+  } else {
     lru.hot[key] = Date.now();
     writeLru(cfg.cacheDir, lru);
-    return hotFile;
   }
 
-  if (fs.existsSync(coldFile)) {
-    // Promote cold → hot
-    ensureDir(hotDir);
-    try { fs.renameSync(coldFile, hotFile); } catch { return coldFile; }
-    delete lru.cold[key];
-    lru.hot[key] = Date.now();
-    evictLru('hot', hotDir, cfg.hotLimitMB, lru);
-    writeLru(cfg.cacheDir, lru);
-    return hotFile;
+  if (!found) return null;
+
+  // If quantised, dequantize to a tmp FP16 file for RKLLM to load
+  if (!found.endsWith('.rkllmcache')) {
+    const tmpDir = path.join(cfg.cacheDir, 'tmp');
+    ensureDir(tmpDir);
+    const tmpFile = path.join(tmpDir, key + '_deq.rkllmcache');
+    // Reuse existing deq file if it's newer than the quantised file
+    if (fs.existsSync(tmpFile) &&
+        fs.statSync(tmpFile).mtimeMs >= fs.statSync(found).mtimeMs) {
+      return tmpFile;
+    }
+    try {
+      await dequantize(found, tmpFile);
+      return tmpFile;
+    } catch (e) {
+      console.warn('[Cache] Dequantize failed:', e.message);
+      return null;
+    }
   }
 
-  return null;
+  return found;
 }
 
-export function putCachePath(key, tmpFile) {
+export function putCachePath(key, tmpFile, modelQuantOverride) {
   const cfg = settings();
   if (!cfg.enabled) return;
   if (!fs.existsSync(tmpFile)) return;
@@ -105,21 +152,35 @@ export function putCachePath(key, tmpFile) {
   ensureDir(hotDir);
   ensureDir(coldDir);
 
-  const dest = path.join(hotDir, key + '.rkllmcache');
-  try { fs.renameSync(tmpFile, dest); } catch (e) {
-    try { fs.copyFileSync(tmpFile, dest); fs.unlinkSync(tmpFile); } catch { return; }
+  const fp16Dest = path.join(hotDir, key + '.rkllmcache');
+  try { fs.renameSync(tmpFile, fp16Dest); }
+  catch (e) {
+    try { fs.copyFileSync(tmpFile, fp16Dest); fs.unlinkSync(tmpFile); } catch { return; }
   }
 
   const lru = readLru(cfg.cacheDir);
   lru.hot[key] = Date.now();
   evictLru('hot', hotDir, cfg.hotLimitMB, lru);
 
-  // Overflow hot → cold
-  const overflowKeys = Object.keys(lru.hot).filter(k => !fs.existsSync(path.join(hotDir, k + '.rkllmcache')));
+  const overflowKeys = Object.keys(lru.hot)
+    .filter(k => !findCacheFile(hotDir, k));
   for (const k of overflowKeys) delete lru.hot[k];
 
   evictLru('cold', coldDir, cfg.coldLimitMB, lru);
   writeLru(cfg.cacheDir, lru);
+
+  // Background quantisation — fire and forget, replace FP16 file when done
+  const scheme = kvCacheQuant(modelQuantOverride);
+  if (scheme !== 'off' && hasNativeAddon) {
+    const { fn, ext } = QUANT_SCHEMES[scheme];
+    const quantDest = path.join(hotDir, key + ext);
+    fn(fp16Dest, quantDest)
+      .then(() => {
+        try { fs.unlinkSync(fp16Dest); } catch {}
+        console.log(`[Cache] Quantised ${key} → ${ext} (${scheme})`);
+      })
+      .catch(e => console.warn(`[Cache] Quantise failed for ${key}:`, e.message));
+  }
 }
 
 export function tmpCachePath(key) {
@@ -159,4 +220,8 @@ export function isCacheEnabled() {
 
 export function getMaxContextTokens() {
   return settings().maxContextTokens;
+}
+
+export function getKvCacheQuant(modelOverride) {
+  return kvCacheQuant(modelOverride);
 }
