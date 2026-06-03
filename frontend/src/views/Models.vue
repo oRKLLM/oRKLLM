@@ -323,8 +323,8 @@
                           { title: 'Use global setting', value: null },
                           { title: 'Off (FP16)', value: 'off' },
                           { title: 'Min-Max INT8 (~44% smaller)', value: 'q8' },
-                          { title: 'Polar INT8 (~49% smaller)', value: 'pq8' },
-                          { title: 'Polar INT4 (~74% smaller, GPU accelerated)', value: 'pq4' },
+                          { title: 'Polar INT8 (~49% smaller) — GPU accelerated', value: 'pq8' },
+                          { title: 'Polar INT4 (~74% smaller)', value: 'pq4' },
                         ]"
                         density="compact" variant="outlined" hide-details class="mb-2"
                       ></v-select>
