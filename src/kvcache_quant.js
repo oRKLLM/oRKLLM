@@ -84,8 +84,20 @@ function parseFixedOverhead(buf) {
 
 // Quantise .rkllmcache → .q8cache  (async when native addon is available)
 export function quantize(srcPath, dstPath) {
-  if (_native) return _native.quantize(srcPath, dstPath); // Promise, NEON on ARM64
+  if (_native) return _native.quantize(srcPath, dstPath);
   return Promise.resolve(_quantizeJS(srcPath, dstPath));
+}
+
+// Polar INT8: norm(fp16) + direction(i8) — better precision than min-max INT8 for outlier vectors
+export function quantizePolar8(srcPath, dstPath) {
+  if (_native) return _native.quantizePolar8(srcPath, dstPath);
+  return Promise.reject(new Error('polar quantisation requires native addon (ARM64 only)'));
+}
+
+// Polar INT4: norm(fp16) + direction(i4) — 74% reduction, quality ~= min-max INT8
+export function quantizePolar4(srcPath, dstPath) {
+  if (_native) return _native.quantizePolar4(srcPath, dstPath);
+  return Promise.reject(new Error('polar quantisation requires native addon (ARM64 only)'));
 }
 function _quantizeJS(srcPath, dstPath) {
   const src = fs.readFileSync(srcPath);
@@ -145,9 +157,10 @@ function _quantizeJS(srcPath, dstPath) {
   };
 }
 
-// Dequantise .q8cache → temp .rkllmcache (FP16) for RKLLM to load  (async when native)
+// Dequantise any quantised cache (.q8cache/.pq8cache/.pq4cache) → FP16 .rkllmcache
+// The C++ addon reads the magic byte to dispatch the right scheme automatically.
 export function dequantize(srcPath, dstPath) {
-  if (_native) return _native.dequantize(srcPath, dstPath); // Promise, NEON on ARM64
+  if (_native) return _native.dequantize(srcPath, dstPath);
   return Promise.resolve(_dequantizeJS(srcPath, dstPath));
 }
 function _dequantizeJS(srcPath, dstPath) {
