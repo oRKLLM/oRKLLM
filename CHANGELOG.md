@@ -1,3 +1,10 @@
+# [0.8.0-alpha.5](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.4...v0.8.0-alpha.5) (2026-06-03)
+
+
+### Features
+
+* **pool:** add prefillAndCache() — abort-after-first-token KV cache warming ([6060823](https://github.com/mafischer/oRKLLM/commit/6060823f752181e05a16ca0de46ca7f9ac0d83ea))
+
 # [0.8.0-alpha.4](https://github.com/mafischer/oRKLLM/compare/v0.8.0-alpha.3...v0.8.0-alpha.4) (2026-06-03)
 
 
