@@ -1,4 +1,4 @@
-// KV cache quantisation — N-API addon with ARM NEON SIMD.
+// KV cache quantisation — N-API addon.
 //
 // Three schemes, all async (libuv thread pool via AsyncWorker):
 //
@@ -8,14 +8,13 @@
 //  polar INT8    | 0xBB55BB55 | 130       | 74,896      | ~49%
 //  polar INT4    | 0xCC44CC44 |  66       | 38,032      | ~74%
 //
-// Polar decomposition: store L2 norm as FP16 (2 bytes) + quantised unit
-// direction vector.  Because the unit vector lies in [-1,+1], INT4 is
-// viable (no outlier inflation of the scale) with quality comparable to
-// min-max INT8.
+// Compute path selection (polar INT8 only):
+//   1. Vulkan (Mali-G52 via panvk)  — HAS_VULKAN + integrated GPU available
+//   2. ARM NEON SIMD                — aarch64, always available
+//   3. Portable scalar              — all other platforms (CI / macOS dev)
 //
-// All FP arithmetic is done in FP32 to avoid requiring the ARMv8.2-A
-// FP16 arithmetic extension.  Only FP16 load/store + FCVT are used
-// (base AArch64).
+// NEON is kept as the fallback so the addon works on any aarch64 system
+// regardless of whether libvulkan-dev was installed at build time.
 
 #include <napi.h>
 #include <fstream>
@@ -23,6 +22,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include "vk_quant.hpp"   // no-op when HAS_VULKAN is not defined
 #include <stdexcept>
 #include <string>
 #include <algorithm>
@@ -290,6 +290,7 @@ struct EncodeStats {
     uint32_t n_tokens = 0, fixed = 0;
     size_t src_bytes = 0, dst_bytes = 0;
     float max_err = 0; double sum_sq = 0; size_t n_vals = 0;
+    bool used_gpu = false;
 };
 
 static std::vector<uint8_t> encode_file(const std::vector<uint8_t>& src,
@@ -314,40 +315,89 @@ static std::vector<uint8_t> encode_file(const std::vector<uint8_t>& src,
     uint8_t* wp = dst.data() + fixed;
     uint16_t rec[DIMS];
 
-    for (uint32_t t = 0; t < n; t++) {
-        const uint8_t* tok = src.data() + fixed + (size_t)t * BYTES_PER_TOKEN;
-
-        for (uint32_t v = 0; v < VECS_PER_TOKEN; v++) {
-            const uint16_t* fp16 = (const uint16_t*)(tok + v * BYTES_FP16_VEC);
-
-            if (scheme == Scheme::Q8) {
-                float scale; int8_t i8[DIMS];
-                encode_q8(fp16, i8, &scale);
-                *(float*)wp = scale; wp += 4;
-                std::copy(i8, i8 + DIMS, (int8_t*)wp); wp += DIMS;
-                decode_q8(i8, rec, scale);
-            } else if (scheme == Scheme::PQ8) {
-                uint16_t norm16; int8_t i8[DIMS];
-                encode_pq8(fp16, i8, &norm16);
-                *(uint16_t*)wp = norm16; wp += 2;
-                std::copy(i8, i8 + DIMS, (int8_t*)wp); wp += DIMS;
-                decode_pq8(i8, rec, fp16_to_f32(norm16));
-            } else { // PQ4
-                uint16_t norm16; uint8_t packed[DIMS/2];
-                encode_pq4(fp16, packed, &norm16);
-                *(uint16_t*)wp = norm16; wp += 2;
-                std::copy(packed, packed + DIMS/2, wp); wp += DIMS/2;
-                decode_pq4(packed, rec, fp16_to_f32(norm16));
+    // ── Polar INT8: try GPU (Vulkan/Mali) first, fall back to NEON ────────
+    bool used_gpu = false;
+    if (scheme == Scheme::PQ8) {
+#ifdef HAS_VULKAN
+        auto& vkq = VkQuantizer::get();
+        if (vkq.ok()) {
+            // Total vectors across all tokens
+            const uint32_t total_vecs = n * VECS_PER_TOKEN;
+            // Gather all FP16 vectors into a contiguous buffer for the GPU
+            std::vector<uint16_t> fp16_flat(total_vecs * DIMS);
+            for (uint32_t t = 0; t < n; t++) {
+                const uint8_t* tok = src.data() + fixed + (size_t)t * BYTES_PER_TOKEN;
+                const uint8_t* kv  = tok; // vectors start at tok base
+                std::memcpy(fp16_flat.data() + (size_t)t * VECS_PER_TOKEN * DIMS,
+                            kv, VECS_PER_TOKEN * BYTES_FP16_VEC);
             }
-            accumulate_error(fp16, rec, st.max_err, st.sum_sq, st.n_vals);
+            std::vector<int8_t>   i8_flat(total_vecs * DIMS);
+            std::vector<uint16_t> norm_flat(total_vecs);
+
+            if (vkq.encodePQ8(fp16_flat.data(), total_vecs,
+                              i8_flat.data(), norm_flat.data())) {
+                // Scatter GPU results into the output layout
+                for (uint32_t t = 0; t < n; t++) {
+                    const uint8_t* tok = src.data() + fixed + (size_t)t * BYTES_PER_TOKEN;
+                    for (uint32_t v = 0; v < VECS_PER_TOKEN; v++) {
+                        uint32_t idx = t * VECS_PER_TOKEN + v;
+                        uint16_t norm16 = norm_flat[idx];
+                        const int8_t* i8p = i8_flat.data() + (size_t)idx * DIMS;
+                        *(uint16_t*)wp = norm16; wp += 2;
+                        std::memcpy(wp, i8p, DIMS); wp += DIMS;
+                        // Error tracking
+                        const uint16_t* fp16 = (const uint16_t*)(tok + v * BYTES_FP16_VEC);
+                        decode_pq8(i8p, rec, fp16_to_f32(norm16));
+                        accumulate_error(fp16, rec, st.max_err, st.sum_sq, st.n_vals);
+                    }
+                    // Padding verbatim
+                    const uint8_t* pad = tok + VECS_PER_TOKEN * BYTES_FP16_VEC;
+                    std::copy(pad, pad + PADDING, wp); wp += PADDING;
+                }
+                used_gpu = true;
+            }
         }
-        // Padding verbatim
-        const uint8_t* pad = tok + VECS_PER_TOKEN * BYTES_FP16_VEC;
-        std::copy(pad, pad + PADDING, wp); wp += PADDING;
+#endif
+    }
+
+    if (!used_gpu) {
+        // NEON / scalar path for Q8, PQ4, and PQ8 fallback
+        for (uint32_t t = 0; t < n; t++) {
+            const uint8_t* tok = src.data() + fixed + (size_t)t * BYTES_PER_TOKEN;
+
+            for (uint32_t v = 0; v < VECS_PER_TOKEN; v++) {
+                const uint16_t* fp16 = (const uint16_t*)(tok + v * BYTES_FP16_VEC);
+
+                if (scheme == Scheme::Q8) {
+                    float scale; int8_t i8[DIMS];
+                    encode_q8(fp16, i8, &scale);
+                    *(float*)wp = scale; wp += 4;
+                    std::copy(i8, i8 + DIMS, (int8_t*)wp); wp += DIMS;
+                    decode_q8(i8, rec, scale);
+                } else if (scheme == Scheme::PQ8) {
+                    uint16_t norm16; int8_t i8[DIMS];
+                    encode_pq8(fp16, i8, &norm16);
+                    *(uint16_t*)wp = norm16; wp += 2;
+                    std::copy(i8, i8 + DIMS, (int8_t*)wp); wp += DIMS;
+                    decode_pq8(i8, rec, fp16_to_f32(norm16));
+                } else { // PQ4
+                    uint16_t norm16; uint8_t packed[DIMS/2];
+                    encode_pq4(fp16, packed, &norm16);
+                    *(uint16_t*)wp = norm16; wp += 2;
+                    std::copy(packed, packed + DIMS/2, wp); wp += DIMS/2;
+                    decode_pq4(packed, rec, fp16_to_f32(norm16));
+                }
+                accumulate_error(fp16, rec, st.max_err, st.sum_sq, st.n_vals);
+            }
+            // Padding verbatim
+            const uint8_t* pad = tok + VECS_PER_TOKEN * BYTES_FP16_VEC;
+            std::copy(pad, pad + PADDING, wp); wp += PADDING;
+        }
     }
 
     st.n_tokens = n; st.fixed = fixed;
     st.src_bytes = src.size(); st.dst_bytes = dst.size();
+    st.used_gpu = used_gpu;
     return dst;
 }
 
@@ -415,6 +465,7 @@ public:
         r.Set("max_abs_err",   (double)stats_.max_err);
         r.Set("rmse",          stats_.n_vals ? std::sqrt(stats_.sum_sq / stats_.n_vals) : 0.0);
         r.Set("neon",          (bool)HAS_NEON);
+        r.Set("gpu",           stats_.used_gpu);
         r.Set("scheme",        std::string(scheme_ == Scheme::Q8  ? "q8"  :
                                            scheme_ == Scheme::PQ8 ? "pq8" : "pq4"));
         def_.Resolve(r);

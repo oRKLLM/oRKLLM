@@ -1,0 +1,59 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage                   : require
+#extension GL_EXT_shader_8bit_storage                    : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8  : require
+
+layout(local_size_x = 128) in;
+
+layout(set=0, binding=0) readonly buffer InBuf   { uint16_t in_fp16[]; };
+layout(set=0, binding=1) buffer          OutI8   { int8_t   out_i8[];  };
+layout(set=0, binding=2) buffer          OutNorm { uint16_t out_norm[]; };
+
+shared float shared_sq[128];
+
+float unpack_fp16(uint16_t h) {
+    uint u = uint(h);
+    uint s = (u >> 15u) & 1u;
+    uint e = (u >> 10u) & 0x1fu;
+    uint m = u & 0x3ffu;
+    if (e == 0u)  return (s != 0u ? -1.0 : 1.0) * (float(m) / 1024.0) * exp2(-14.0);
+    if (e == 31u) return (s != 0u ? -1.0 : 1.0) * (1.0/0.0);
+    return (s != 0u ? -1.0 : 1.0) * (1.0 + float(m)/1024.0) * exp2(float(int(e) - 15));
+}
+
+uint16_t pack_fp16(float f) {
+    if (f == 0.0) return uint16_t(0u);
+    uint s = (f < 0.0) ? 1u : 0u;
+    f = abs(f);
+    int e16 = int(floor(log2(f))) + 15;
+    if (e16 >= 31) return uint16_t((s << 15u) | 0x7c00u);
+    if (e16 <= 0)  return uint16_t(s << 15u);
+    uint frac = uint(round((f * exp2(float(15 - e16 + 1)) - 1.0) * 1024.0));
+    if (frac >= 1024u) { frac = 0u; e16++; }
+    if (e16 >= 31) return uint16_t((s << 15u) | 0x7c00u);
+    return uint16_t((s << 15u) | (uint(e16) << 10u) | frac);
+}
+
+void main() {
+    uint vec_idx = gl_WorkGroupID.x;
+    uint dim     = gl_LocalInvocationID.x;
+    uint in_idx  = vec_idx * 128u + dim;
+    float val    = unpack_fp16(in_fp16[in_idx]);
+
+    shared_sq[dim] = val * val;
+    barrier();
+
+    for (uint stride = 64u; stride > 0u; stride >>= 1u) {
+        if (dim < stride) shared_sq[dim] += shared_sq[dim + stride];
+        barrier();
+    }
+
+    float norm     = sqrt(shared_sq[0]);
+    float inv_norm = (norm > 0.0) ? (127.0 / norm) : 0.0;
+    int   q        = clamp(int(round(val * inv_norm)), -127, 127);
+    out_i8[in_idx] = int8_t(q);
+
+    if (dim == 0u)
+        out_norm[vec_idx] = pack_fp16(norm);
+}

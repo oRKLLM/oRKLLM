@@ -47,7 +47,14 @@
         [ "OS=='win'", {
           "defines": [ "_HAS_EXCEPTIONS=1" ]
         }],
-        [ "target_arch=='arm64'", {
+        [ "target_arch=='arm64' and OS=='linux'", {
+          "cflags_cc": [ "-std=c++17", "-O3",
+            "<!@(test -f /usr/include/vulkan/vulkan.h && echo -DHAS_VULKAN=1 || echo '')" ],
+          "libraries": [
+            "<!@(test -f /usr/include/vulkan/vulkan.h && echo -lvulkan || echo '')"
+          ]
+        }],
+        [ "target_arch!='arm64' or OS!='linux'", {
           "cflags_cc": [ "-std=c++17", "-O3" ]
         }]
       ]
