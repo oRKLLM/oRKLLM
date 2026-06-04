@@ -1,3 +1,10 @@
+# [0.8.0-alpha.36](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.35...v0.8.0-alpha.36) (2026-06-04)
+
+
+### Bug Fixes
+
+* **ui:** restore native_mtp option; add Eagle-3 model selector for draft head ([2cd9e48](https://github.com/oRKLLM/oRKLLM/commit/2cd9e485b648aef62898e23736a0bfa9475caa7e))
+
 # [0.8.0-alpha.35](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.34...v0.8.0-alpha.35) (2026-06-04)
 
 
