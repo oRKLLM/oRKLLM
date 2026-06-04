@@ -876,7 +876,11 @@ LOOP:
 ```
 {Family}-{TargetParams}-Eagle3Draft-{DraftParams}-{Chipset}-{Quant}-{Algo}-v{Version}-EAGLE3.rkllm
 ```
-Example: `Qwen3-VL-2B-Eagle3Draft-51M-rk3576-w4a16-grq-v1.2.3-EAGLE3.rkllm`
+Example: `Qwen3-VL-2B-Instruct-Eagle3Draft-445M-rk3576-w4a16-grq-v1.2.3-EAGLE3.rkllm`
+
+**Why 445M:** the dominant cost is the untied LM head — `nn.Linear(2048, 151936)` = 311M parameters. The 2-layer causal transformer body with SwiGLU (intermediate 8192) adds 134M. The fp32 checkpoint is ~1.78 GB; the final bf16 release is ~891 MB. In w4a16 RKLLM format: ~222 MB on disk.
+
+**Mali timing implication:** the original 60ms Mali estimate assumed a ~50M head. At 445M the dominant cost is the LM head matrix multiply (2048 → 151936 in fp16). On Mali G52 this is still well under the 2200ms NPU verification window, but the actual figure should be benchmarked on-board before relying on the pipeline timing estimates.
 
 #### prefillAndCache interaction
 
