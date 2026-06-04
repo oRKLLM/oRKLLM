@@ -1,0 +1,16 @@
+Origin: oRKLLM
+Label: oRKLLM Beta (pre-release)
+Suite: beta
+Codename: beta
+Architectures: arm64
+Components: main
+Description: oRKLLM APT Repository — OpenAI-compatible LLM inference for Rockchip NPU
+Date: Thu, 04 Jun 2026 02:12:11 +0000
+MD5Sum:
+ 6a2c097fc2ffcc0407b8343bdc292264 770 main/binary-arm64/Packages
+ feac3f1c8e658545eef060bdad0a293b 587 main/binary-arm64/Packages.bz2
+ 97f118b24c1b54541fd84ce97d67ce88 536 main/binary-arm64/Packages.gz
+SHA256:
+ fb7089a5c0e700a51c87afd6ca252f79eb96e51ce758bebe0f57337ee54a97e9 770 main/binary-arm64/Packages
+ ed398656a1e13936324c06cf5519aa8439d25b1e7b8c4fd1dcaf089ac6b28e10 587 main/binary-arm64/Packages.bz2
+ 47123ad7a0a9756932d0c5d2163830aeca698222a8964abffa0c81116a2d4665 536 main/binary-arm64/Packages.gz
