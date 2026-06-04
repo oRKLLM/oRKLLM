@@ -1,3 +1,10 @@
+# [0.8.0-alpha.37](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.36...v0.8.0-alpha.37) (2026-06-04)
+
+
+### Bug Fixes
+
+* **eagle3:** wire RKLLM_INPUT_TOKEN + keep_history; fix text emission; k=8 default ([dcb5349](https://github.com/oRKLLM/oRKLLM/commit/dcb53495f7198bee23ae81be1007a95e86090765))
+
 # [0.8.0-alpha.36](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.35...v0.8.0-alpha.36) (2026-06-04)
 
 
