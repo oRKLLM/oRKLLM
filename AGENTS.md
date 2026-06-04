@@ -869,7 +869,7 @@ LOOP:
 | KV rollback on partial rejection | ✅ Done |
 | `cpuPlaceholderDraft` (loop validation) | ✅ Done — ~0% acceptance rate (placeholder IDs, not trained) |
 | `vulkanDraft` (Mali GPU) | 🚧 Stub — falls through to CPU until trained head exists |
-| Trained Eagle-3 draft head | 🚧 Not trained — see `~/Desktop/eagle3_training_agent_prompt.md` |
+| Trained Eagle-3 draft head | 🔄 Training in progress — see below |
 
 #### Draft head naming convention
 
@@ -881,6 +881,34 @@ Example: `Qwen3-VL-2B-Instruct-Eagle3Draft-445M-rk3576-w4a16-grq-v1.2.3-EAGLE3.r
 **Why 445M:** the dominant cost is the untied LM head — `nn.Linear(2048, 151936)` = 311M parameters. The 2-layer causal transformer body with SwiGLU (intermediate 8192) adds 134M. The fp32 checkpoint is ~1.78 GB; the final bf16 release is ~891 MB. In w4a16 RKLLM format: ~222 MB on disk.
 
 **Mali timing implication:** the original 60ms Mali estimate assumed a ~50M head. At 445M the dominant cost is the LM head matrix multiply (2048 → 151936 in fp16). On Mali G52 this is still well under the 2200ms NPU verification window, but the actual figure should be benchmarked on-board before relying on the pipeline timing estimates.
+
+#### Draft head training — current run (PID 11809, M5 Max)
+
+| Parameter | Value |
+|-----------|-------|
+| Script | `eagle3_pkg.train` via MLX |
+| Target model | `unsloth/Qwen3-VL-2B-Instruct` (frozen, fp32) |
+| Dataset | `~/rkllm/data/combined/combined.parquet` — 1,526,766 sequences |
+| Epochs | 3 |
+| Effective batch size | 32 (physical micro-batch 8, gradient accumulation 4 steps) |
+| Max sequence length | 512 tokens (truncated — logits scale quadratically, cuts active VRAM 4×) |
+| Learning rate | 0.0003 |
+| Metal cache limit | 32 GB |
+| Peak VRAM | ~17.2 GB (14.1 GB frozen model + ~3 GB active tensors) |
+| Output | `~/rkllm/eagle3-Qwen3-VL-2B-Instruct/draft_head.safetensors` (bf16, ~891 MB) |
+
+**Confirmed healthy convergence:** loss dropped from 10.80 → 8.43 in 3 steps after the zero-gradient bug was fixed (MLX `value_and_grad` requires the model as the first argument to `loss_fn` — passing `draft_params` dict caused a zero-gradient flatline for the entire first run).
+
+**Key bugs found and fixed during training:**
+1. **Zero-gradient flatline** — `draft_head.update(params)` inside `nn.value_and_grad` detaches the autograd graph in MLX. Fix: `loss_fn(model, ...)` with `nn.value_and_grad(model, loss_fn)`.
+2. **Dual forward pass** — original code ran two separate target model passes (one for hidden states, one for target logits). Unified into a single `extract_hidden_states_and_logits()` call: ~50% target model compute reduction.
+3. **OOM / kernel panic** — logits tensor `[batch × seq_len × vocab]` at seq_len=2048 was ~10 GB. Fixed via `--max-len 512` (4× reduction) + gradient accumulation + `mx.clear_cache()` / `gc.collect()` after every optimizer step.
+
+**Post-training checklist:**
+1. Confirm final `draft_head.safetensors` is ~891 MB (bf16, untied LM head — if smaller, LM head was accidentally tied to target model weights)
+2. Convert to `.rkllm` via `rkllm-toolkit` on x86 Linux host (`10.3.0.241`) with w4a16 quantization
+3. Benchmark Mali forward pass time on-board before claiming the 2200ms pipeline timing holds
+4. Rename output per convention: `Qwen3-VL-2B-Instruct-Eagle3Draft-445M-rk3576-w4a16-grq-v1.2.3-EAGLE3.rkllm`
 
 #### prefillAndCache interaction
 
