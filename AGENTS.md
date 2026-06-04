@@ -882,19 +882,21 @@ Example: `Qwen3-VL-2B-Instruct-Eagle3Draft-445M-rk3576-w4a16-grq-v1.2.3-EAGLE3.r
 
 **Mali timing implication:** the original 60ms Mali estimate assumed a ~50M head. At 445M the dominant cost is the LM head matrix multiply (2048 → 151936 in fp16). On Mali G52 this is still well under the 2200ms NPU verification window, but the actual figure should be benchmarked on-board before relying on the pipeline timing estimates.
 
-#### Draft head training — current run (PID 11809, M5 Max)
+#### Draft head training — current run (M5 Max)
 
 | Parameter | Value |
 |-----------|-------|
 | Script | `eagle3_pkg.train` via MLX |
 | Target model | `unsloth/Qwen3-VL-2B-Instruct` (frozen, fp32) |
 | Dataset | `~/rkllm/data/combined/combined.parquet` — 1,526,766 sequences |
+| Train / val split | 1,511,499 train / 15,267 val (1% held out, evaluated every 500 steps) |
 | Epochs | 3 |
-| Effective batch size | 32 (physical micro-batch 8, gradient accumulation 4 steps) |
-| Max sequence length | 512 tokens (truncated — logits scale quadratically, cuts active VRAM 4×) |
-| Learning rate | 0.0003 |
+| Effective batch size | 16 (physical micro-batch 8, gradient accumulation 2 steps) |
+| Total steps | 283,404 |
+| LR schedule | Cosine decay — 0.0003 → 0.0 over 283,404 steps |
+| Max sequence length | 512 tokens (logits scale quadratically; truncation cuts active VRAM 4×) |
 | Metal cache limit | 32 GB |
-| Peak VRAM | ~17.2 GB (14.1 GB frozen model + ~3 GB active tensors) |
+| Peak VRAM | ~17.2–18.5 GB (14.1 GB frozen model + ~3–4 GB active tensors) |
 | Output | `~/rkllm/eagle3-Qwen3-VL-2B-Instruct/draft_head.safetensors` (bf16, ~891 MB) |
 
 **Confirmed healthy convergence:** loss dropped from 10.80 → 8.43 in 3 steps after the zero-gradient bug was fixed (MLX `value_and_grad` requires the model as the first argument to `loss_fn` — passing `draft_params` dict caused a zero-gradient flatline for the entire first run).
