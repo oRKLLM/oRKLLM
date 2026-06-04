@@ -363,6 +363,7 @@
                           {title:'Disabled',value:null},
                           {title:'Eagle-3 — pipelined NPU+Mali (3.7× speedup, empirically validated)',value:'eagle3'},
                           {title:'Draft model — separate smaller model (limited speedup on single NPU)',value:'speculative'},
+                          {title:'Native MTP (Qwen3 only)',value:'native_mtp'},
                         ]"
                         label="Speculative Mode"
                         density="compact" variant="outlined" hide-details class="mb-3"
@@ -384,23 +385,36 @@
                         <v-select
                           v-model="settingsForm.eagle3_strategy"
                           :items="[
-                            {title:'CPU placeholder (validates pipeline, low acceptance rate)',value:'cpu'},
-                            {title:'Vulkan Mali GPU (requires trained .rkllm draft head)',value:'vulkan'},
+                            {title:'CPU placeholder (validates pipeline, no trained head required)',value:'cpu'},
+                            {title:'Vulkan Mali GPU (requires trained Eagle-3 draft head)',value:'vulkan'},
                           ]"
-                          label="Draft head strategy"
+                          label="Draft head compute"
                           density="compact" variant="outlined" hide-details class="mb-3"
                         ></v-select>
+
                         <template v-if="settingsForm.eagle3_strategy === 'vulkan'">
-                          <div class="text-caption text-grey mb-1">Eagle draft head model path</div>
-                          <v-text-field
+                          <div class="text-caption text-grey mb-1">Eagle-3 draft head model</div>
+                          <div class="text-caption text-grey mb-2">
+                            Select the trained Eagle-3 draft head for this target model.
+                            Search HuggingFace with the <strong>Eagle-3 draft heads only</strong> filter to find published heads,
+                            or train your own using the prompt on the Desktop.
+                          </div>
+                          <v-select
                             v-model="settingsForm.eagle3_weights_path"
-                            density="compact" variant="outlined" hide-details
-                            placeholder="/var/lib/orkllm/models/Qwen3-VL-2B-Instruct-Eagle3Draft-51M-rk3576-w4a16-grq-v1.2.3-EAGLE3.rkllm"
-                            class="mb-2 font-mono text-caption"
-                          ></v-text-field>
+                            :items="[
+                              {title:'(none — select a draft head)',value:null},
+                              ...models
+                                .filter(m => m.id.includes('Eagle3Draft') || m.id.includes('EAGLE3'))
+                                .map(m => ({title: m.id, value: m.id})),
+                              ...models
+                                .filter(m => !m.id.includes('Eagle3Draft') && !m.id.includes('EAGLE3'))
+                                .map(m => ({title: m.id + ' (not an Eagle-3 head)', value: m.id})),
+                            ]"
+                            label="Eagle-3 draft head"
+                            density="compact" variant="outlined" hide-details class="mb-2"
+                          ></v-select>
                           <div class="text-caption text-grey">
-                            Train the draft head using the Eagle-3 training prompt on the Desktop.
-                            Naming: <code>{Family}-{TargetParams}-Eagle3Draft-{DraftParams}-{Chipset}-{Quant}-{Algo}-v{Version}-EAGLE3.rkllm</code>
+                            Naming convention: <code>{Family}-{TargetParams}-Eagle3Draft-{DraftParams}-{Chipset}-{Quant}-{Algo}-v{Version}-EAGLE3.rkllm</code>
                           </div>
                         </template>
                       </template>
