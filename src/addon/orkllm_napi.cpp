@@ -407,9 +407,19 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
         ? inputObj.Get("loadCachePath").As<Napi::String>().Utf8Value() : "";
     std::string saveCachePath = inputObj.Has("saveCachePath") && inputObj.Get("saveCachePath").IsString()
         ? inputObj.Get("saveCachePath").As<Napi::String>().Utf8Value() : "";
-    // infer_mode: 0=RKLLM_INFER_GENERATE (default), 2=RKLLM_INFER_GET_LOGITS (spec decode verify)
+    // infer_mode: 0=RKLLM_INFER_GENERATE (default), 1=GET_LAST_HIDDEN_LAYER, 2=RKLLM_INFER_GET_LOGITS
     int inferMode = inputObj.Has("infer_mode") && inputObj.Get("infer_mode").IsNumber()
         ? inputObj.Get("infer_mode").As<Napi::Number>().Int32Value() : 0;
+    // keep_history: 1=append to existing NPU KV cache (Eagle-3 token-input verification)
+    int keepHistory = inputObj.Has("keep_history") && inputObj.Get("keep_history").As<Napi::Boolean>().Value() ? 1 : 0;
+    // token_ids: Int32Array — use RKLLM_INPUT_TOKEN instead of RKLLM_INPUT_PROMPT
+    std::vector<int32_t> tokenIds;
+    bool useTokenInput = false;
+    if (inputObj.Has("token_ids") && inputObj.Get("token_ids").IsTypedArray()) {
+        auto arr = inputObj.Get("token_ids").As<Napi::Int32Array>();
+        tokenIds.assign(arr.Data(), arr.Data() + arr.ElementLength());
+        useTokenInput = !tokenIds.empty();
+    }
 
     RequestContext* ctx = new RequestContext();
     ctx->tsfn = Napi::ThreadSafeFunction::New(
@@ -421,7 +431,7 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
     );
 
     // Spawn background thread to run inference synchronously without blocking the event loop
-    std::thread runThread([prompt, loadCachePath, saveCachePath, inferMode, ctx]() {
+    std::thread runThread([prompt, loadCachePath, saveCachePath, inferMode, keepHistory, tokenIds, useTokenInput, ctx]() {
         // Load prefix KV cache from disk if provided
         if (!loadCachePath.empty() && g_rkllm_load_prompt_cache) {
             g_rkllm_load_prompt_cache(g_handle, loadCachePath.c_str());
@@ -429,14 +439,21 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
 
         RKLLMInput input;
         memset(&input, 0, sizeof(RKLLMInput));
-        input.input_type = RKLLM_INPUT_PROMPT;
-        input.input_data.prompt_input = prompt.c_str();
+        if (useTokenInput) {
+            // Eagle-3 verification: pass raw token IDs so RKLLM decodes them with its own tokenizer.
+            // tokenIds is captured by value — its .data() pointer is valid for the thread's lifetime.
+            input.input_type = RKLLM_INPUT_TOKEN;
+            input.input_data.token_input.input_ids = const_cast<int32_t*>(tokenIds.data());
+            input.input_data.token_input.n_tokens  = tokenIds.size();
+        } else {
+            input.input_type = RKLLM_INPUT_PROMPT;
+            input.input_data.prompt_input = prompt.c_str();
+        }
 
         RKLLMInferParam inferParam;
         memset(&inferParam, 0, sizeof(RKLLMInferParam));
-        // infer_mode: 0=generate (default), 2=get_logits (for speculative decode verification)
         inferParam.mode = static_cast<RKLLMInferMode>(inferMode);
-        inferParam.keep_history = 0;
+        inferParam.keep_history = keepHistory;
 
         RKLLMPromptCacheParam cacheParam;
         if (!saveCachePath.empty()) {

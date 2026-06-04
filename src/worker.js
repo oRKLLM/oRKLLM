@@ -87,7 +87,7 @@ process.on('message', async (msg) => {
   }
 
   else if (msg.type === 'run') {
-    const { prompt, loadCachePath, saveCachePath, infer_mode } = msg;
+    const { prompt, loadCachePath, saveCachePath, infer_mode, token_ids, keep_history } = msg;
     if (!engine) {
       process.send({ type: 'error', message: 'No active engine loaded' });
       return;
@@ -95,14 +95,21 @@ process.on('message', async (msg) => {
 
     try {
       if (useMock) {
-        await engine.run(prompt, (res) => {
+        await engine.run(prompt || '', (res) => {
           process.send({ type: 'token', ...res });
         });
       } else {
-        // Native addon run blocks until completion in its internal thread,
-        // but it executes callbacks on our JS thread via ThreadSafeFunction
-        // infer_mode: 0=generate (default), 2=get_logits (speculative decode verification)
-        engine.run({ prompt, loadCachePath, saveCachePath, infer_mode: infer_mode || 0 }, (res) => {
+        // infer_mode: 0=generate, 1=get_last_hidden_layer, 2=get_logits (Eagle-3 verification)
+        // token_ids: Int32Array — when present, uses RKLLM_INPUT_TOKEN instead of prompt string
+        // keep_history: true — append to existing NPU KV cache (Eagle-3 pipelined loop)
+        engine.run({
+          prompt: prompt || '',
+          loadCachePath,
+          saveCachePath,
+          infer_mode: infer_mode || 0,
+          token_ids: token_ids ? Int32Array.from(token_ids) : undefined,
+          keep_history: !!keep_history,
+        }, (res) => {
           process.send({ type: 'token', ...res });
         });
       }

@@ -197,7 +197,7 @@ export default async function apiRoutes(fastify, options) {
           const cachePaths = loadCachePath || saveCachePath ? { loadCachePath, saveCachePath } : {};
           const specMode    = saved.speculative_mode;
           const draftModel  = saved.draft_model;
-          const specK       = saved.spec_draft_tokens || 4;
+          const specK       = saved.spec_draft_tokens || 8;
           const eagle3Weights = saved.eagle3_weights_path ?? null;
           let finalResult;
           if (specMode === 'eagle3') {
@@ -254,7 +254,7 @@ export default async function apiRoutes(fastify, options) {
           let result;
           if (specMode2 === 'eagle3') {
             result = await pool.generateEagle3(model, prompt, modelOptions, onToken, {
-              k:             saved.spec_draft_tokens || 4,
+              k:             saved.spec_draft_tokens || 8,
               draftStrategy: saved.eagle3_strategy || 'cpu',
               draftWeightsPath: saved.eagle3_weights_path ?? null,
             }) ?? { perf: {} };

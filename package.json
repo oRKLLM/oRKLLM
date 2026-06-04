@@ -10,6 +10,7 @@
     "install:addon": "node-gyp rebuild",
     "build:frontend": "cd frontend && npm run build",
     "dev:frontend": "cd frontend && npm run dev",
+    "test:unit": "node --test test/**/*.mjs",
     "test:e2e": "rm -f test_auth.json test_auth.db && npx playwright test",
     "test:sso": "docker compose -f docker-compose.test.yml up -d && ORKLLM_TEST_MOCK_OIDC_URL=http://localhost:8080/realms/orkllm npx playwright test --grep 'SSO'",
     "test:sso:down": "docker compose -f docker-compose.test.yml down"
