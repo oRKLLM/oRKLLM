@@ -1,3 +1,10 @@
+# [0.8.0-alpha.35](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.34...v0.8.0-alpha.35) (2026-06-04)
+
+
+### Features
+
+* **eagle3:** Eagle-3 speculative decoding — pipelined NPU+Mali inference ([f4ae767](https://github.com/oRKLLM/oRKLLM/commit/f4ae767389842b6f065c40fd777651ede7b3e8bf))
+
 # [0.8.0-alpha.34](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.33...v0.8.0-alpha.34) (2026-06-03)
 
 
