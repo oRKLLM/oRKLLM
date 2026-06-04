@@ -195,11 +195,20 @@ export default async function apiRoutes(fastify, options) {
 
         try {
           const cachePaths = loadCachePath || saveCachePath ? { loadCachePath, saveCachePath } : {};
-          const specMode = saved.speculative_mode;
-          const draftModel = saved.draft_model;
-          const specK = saved.spec_draft_tokens || 4;
+          const specMode    = saved.speculative_mode;
+          const draftModel  = saved.draft_model;
+          const specK       = saved.spec_draft_tokens || 4;
+          const eagle3Weights = saved.eagle3_weights_path ?? null;
           let finalResult;
-          if (specMode === 'speculative' && draftModel) {
+          if (specMode === 'eagle3') {
+            // Eagle-3: pipelined GET_HIDDEN_LAYER + GET_LOGITS + Mali Vulkan draft
+            console.log(`[Eagle-3] target=${model} k=${specK} draft=${saved.eagle3_strategy || 'cpu'}`);
+            finalResult = await pool.generateEagle3(model, prompt, modelOptions, onToken, {
+              k:                specK,
+              draftStrategy:    saved.eagle3_strategy || 'cpu',
+              draftWeightsPath: eagle3Weights,
+            });
+          } else if (specMode === 'speculative' && draftModel) {
             console.log(`[Spec] Using speculative decode: target=${model} draft=${draftModel} k=${specK}`);
             await pool.generateSpeculative(model, draftModel, prompt, modelOptions, onToken, specK);
             finalResult = { perf: {} };
@@ -240,8 +249,18 @@ export default async function apiRoutes(fastify, options) {
 
       try {
         const finalResult = await traceInference(traceParams, async (gen) => {
-          const cachePaths = loadCachePath || saveCachePath ? { loadCachePath, saveCachePath } : {};
-          const result = await pool.generate(model, prompt, modelOptions, onToken, cachePaths);
+          const cachePaths  = loadCachePath || saveCachePath ? { loadCachePath, saveCachePath } : {};
+          const specMode2   = saved.speculative_mode;
+          let result;
+          if (specMode2 === 'eagle3') {
+            result = await pool.generateEagle3(model, prompt, modelOptions, onToken, {
+              k:             saved.spec_draft_tokens || 4,
+              draftStrategy: saved.eagle3_strategy || 'cpu',
+              draftWeightsPath: saved.eagle3_weights_path ?? null,
+            }) ?? { perf: {} };
+          } else {
+            result = await pool.generate(model, prompt, modelOptions, onToken, cachePaths);
+          }
           recordRequest(result.perf);
           if (cacheEnabled && saveCachePath)
             putCachePath(cacheKey(model, trimmed), saveCachePath, saved.kv_cache_quant ?? null);

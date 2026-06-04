@@ -188,45 +188,94 @@ struct RequestContext {
 // Global callback function registered with rkllm_init
 int GlobalLLMCallback(RKLLMResult* result, void* userdata, LLMCallState state) {
     if (userdata == nullptr) return 0;
-    
+
     RequestContext* ctx = static_cast<RequestContext*>(userdata);
-    
+
     std::string text = "";
     float prefill_time = 0;
     int prefill_tokens = 0;
     float gen_time = 0;
     int gen_tokens = 0;
-    
     int token_id = -1;
+
+    // Eagle-3: capture hidden states and logits for GET_LAST_HIDDEN_LAYER / GET_LOGITS modes
+    std::vector<float> hidden_states_buf;
+    int hidden_embd_size = 0, hidden_num_tokens = 0;
+    std::vector<float> logits_buf;
+    int logits_vocab_size = 0, logits_num_tokens = 0;
+
     if (result != nullptr) {
-        if (result->text != nullptr) {
-            text = result->text;
-        }
-        token_id = result->token_id;
+        if (result->text != nullptr) text = result->text;
+        token_id     = result->token_id;
         prefill_time = result->perf.prefill_time_ms;
         prefill_tokens = result->perf.prefill_tokens;
-        gen_time = result->perf.generate_time_ms;
-        gen_tokens = result->perf.generate_tokens;
+        gen_time     = result->perf.generate_time_ms;
+        gen_tokens   = result->perf.generate_tokens;
+
+        // Copy hidden states if present (RKLLM_INFER_GET_LAST_HIDDEN_LAYER)
+        if (result->last_hidden_layer.hidden_states != nullptr &&
+            result->last_hidden_layer.embd_size > 0 &&
+            result->last_hidden_layer.num_tokens > 0) {
+            hidden_embd_size  = result->last_hidden_layer.embd_size;
+            hidden_num_tokens = result->last_hidden_layer.num_tokens;
+            size_t n = (size_t)hidden_embd_size * hidden_num_tokens;
+            hidden_states_buf.assign(result->last_hidden_layer.hidden_states,
+                                     result->last_hidden_layer.hidden_states + n);
+        }
+
+        // Copy logits if present (RKLLM_INFER_GET_LOGITS)
+        if (result->logits.logits != nullptr &&
+            result->logits.vocab_size > 0 &&
+            result->logits.num_tokens > 0) {
+            logits_vocab_size = result->logits.vocab_size;
+            logits_num_tokens = result->logits.num_tokens;
+            size_t n = (size_t)logits_vocab_size * logits_num_tokens;
+            logits_buf.assign(result->logits.logits,
+                              result->logits.logits + n);
+        }
     }
 
-    // Broadcast token back to JS thread-safely
-    ctx->tsfn.NonBlockingCall([text, token_id, state, prefill_time, prefill_tokens, gen_time, gen_tokens](Napi::Env env, Napi::Function jsCallback) {
+    // Broadcast back to JS thread-safely
+    ctx->tsfn.NonBlockingCall([text, token_id, state,
+                                prefill_time, prefill_tokens, gen_time, gen_tokens,
+                                hidden_states_buf, hidden_embd_size, hidden_num_tokens,
+                                logits_buf, logits_vocab_size, logits_num_tokens]
+                               (Napi::Env env, Napi::Function jsCallback) {
         Napi::Object resultObj = Napi::Object::New(env);
-        resultObj.Set("text", Napi::String::New(env, text));
+        resultObj.Set("text",     Napi::String::New(env, text));
         resultObj.Set("token_id", Napi::Number::New(env, token_id));
-        resultObj.Set("state", Napi::Number::New(env, static_cast<int>(state)));
+        resultObj.Set("state",    Napi::Number::New(env, static_cast<int>(state)));
 
         Napi::Object perfObj = Napi::Object::New(env);
-        perfObj.Set("prefill_time_ms", Napi::Number::New(env, prefill_time));
-        perfObj.Set("prefill_tokens", Napi::Number::New(env, prefill_tokens));
+        perfObj.Set("prefill_time_ms",  Napi::Number::New(env, prefill_time));
+        perfObj.Set("prefill_tokens",   Napi::Number::New(env, prefill_tokens));
         perfObj.Set("generate_time_ms", Napi::Number::New(env, gen_time));
-        perfObj.Set("generate_tokens", Napi::Number::New(env, gen_tokens));
-
+        perfObj.Set("generate_tokens",  Napi::Number::New(env, gen_tokens));
         resultObj.Set("perf", perfObj);
+
+        // Hidden states buffer (Eagle-3 draft head input)
+        if (!hidden_states_buf.empty()) {
+            auto buf = Napi::Float32Array::New(env, hidden_states_buf.size());
+            std::memcpy(buf.Data(), hidden_states_buf.data(),
+                        hidden_states_buf.size() * sizeof(float));
+            resultObj.Set("hidden_states",   buf);
+            resultObj.Set("hidden_embd_size", Napi::Number::New(env, hidden_embd_size));
+            resultObj.Set("hidden_num_tokens", Napi::Number::New(env, hidden_num_tokens));
+        }
+
+        // Logits buffer (Eagle-3 verification)
+        if (!logits_buf.empty()) {
+            auto buf = Napi::Float32Array::New(env, logits_buf.size());
+            std::memcpy(buf.Data(), logits_buf.data(),
+                        logits_buf.size() * sizeof(float));
+            resultObj.Set("logits",            buf);
+            resultObj.Set("logits_vocab_size",  Napi::Number::New(env, logits_vocab_size));
+            resultObj.Set("logits_num_tokens",  Napi::Number::New(env, logits_num_tokens));
+        }
 
         jsCallback.Call({ resultObj });
     });
-    
+
     if (state == RKLLM_RUN_FINISH || state == RKLLM_RUN_ERROR) {
         ctx->tsfn.Release();
         delete ctx;
