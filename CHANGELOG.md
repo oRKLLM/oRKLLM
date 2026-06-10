@@ -1,3 +1,10 @@
+# [0.8.0-alpha.38](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.37...v0.8.0-alpha.38) (2026-06-10)
+
+
+### Bug Fixes
+
+* **db:** replace better-sqlite3 fallback with pure-WASM node-sqlite3-wasm ([273619f](https://github.com/oRKLLM/oRKLLM/commit/273619f54420698c26bb9049b81206a5b588ef13))
+
 # [0.8.0-alpha.37](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.36...v0.8.0-alpha.37) (2026-06-04)
 
 
