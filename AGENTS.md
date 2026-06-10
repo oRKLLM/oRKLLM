@@ -13,10 +13,10 @@ This project draws architectural inspiration from [oMLX](https://github.com/jund
 The main objective of **oRKLLM** is to turn low-power Rockchip SBCs (Single Board Computers) into high-performance, self-hosted, private AI endpoints.
 
 ### Core Goals:
-1. **OpenAI API Compatibility**: Expose standard `/v1/chat/completions`, `/v1/completions`, and `/v1/embeddings` endpoints.
-2. **Beautiful Admin Dashboard**: A premium, responsive web console for monitoring NPU/CPU/RAM/Temp utilization, configuring settings, loading/unloading models, and testing inference in real-time.
-3. **Optimized NPU Resource Management**: Safely serialize inference calls and manage model swaps (swap-in/swap-out) within NPU memory constraints.
-4. **Zero-Inference Dependencies**: Run in-process on the target board (like the NanoPi M5) without needing cloud connectivity, heavy external deep learning runtimes (e.g., PyTorch), or complex compilation toolchains.
+1. **OpenAI API Compatibility**: standard `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`.
+2. **Admin Dashboard**: responsive web console for NPU/CPU/RAM/Temp monitoring, settings, model load/unload, real-time inference testing.
+3. **NPU Resource Management**: serialize inference calls, manage model swaps within NPU memory constraints.
+4. **Zero-Inference Dependencies**: runs in-process on the board — no cloud, no PyTorch, no heavy toolchains.
 
 ---
 
@@ -62,17 +62,7 @@ These are fast-forward pushes — no checkout, no merge commit, no conflicts. Th
 - Did you change a CI workflow, test command, or deployment step? → Update the relevant section.
 - Minor bug fixes and test-only changes typically don't require doc updates, but verify.
 
-This is a soft requirement — use judgement. The goal is to keep docs reflecting reality so that future agents and contributors don't have to reverse-engineer what changed.
-
-Examples of what this means in practice:
-
-| Task | ✅ Correct | ❌ Avoid |
-| :--- | :--- | :--- |
-| Parse JSON in CI | `node -e "const d=JSON.parse(...)"` | `python3 -c "import json..."` |
-| HTTP request in CI | `node -e "require('https').request(...)"` | `python3 -c "import urllib..."` |
-| File processing | Node.js script in `scripts/` | ad-hoc Python script |
-| Test helpers | `.mjs` file, imported by Playwright | Python subprocess |
-| Data munging | `jq` for simple cases, Node.js for complex | Python |
+This is a soft requirement — use judgement. The goal is to keep docs reflecting reality so future agents don't have to reverse-engineer what changed. In practice: parse JSON / make HTTP requests / process files in CI with `node -e` or `.mjs` scripts, not `python3`; use `jq` for simple data munging, Node.js for complex.
 
 ### Toolchain
 
@@ -94,7 +84,7 @@ The project was re-engineered from a Python/FastAPI concept to a fully Node.js s
 | **Native Bindings** | C++ N-API addon (`node-addon-api`) with `dlopen`/`dlsym` for `librkllmrt.so` |
 | **Mock Fallback** | Pure JS mock engine (auto-enabled on non-ARM/non-Linux platforms) |
 | **Frontend** | Vue 3 + Vuetify 3 SPA, built with Vite, served statically by Fastify |
-| **Database** | SQLite via `node:sqlite` (Node ≥22.5) or `better-sqlite3` fallback (Node 20) |
+| **Database** | SQLite via `node:sqlite` (Node ≥22.5) or `node-sqlite3-wasm` fallback (Node <22.5) — WASM, no native ABI lock, runs on any Node major/arch |
 | **E2E Tests** | Playwright |
 
 ---
@@ -136,9 +126,9 @@ graph TD
 | :--- | :--- |
 | `src/addon/orkllm_napi.cpp` | C++ N-API addon; wraps `rkllm_init`, `rkllm_run`, `rkllm_destroy` with `Napi::ThreadSafeFunction` for non-blocking callbacks |
 | `src/worker.js` | Process-isolated inference worker; receives `load`/`run`/`unload` IPC commands from pool |
-| `src/pool.js` | Single-active-model lock, auto-swap, idle timeout, pin-to-keep-loaded; runtime version auto-discovery (`getAvailableRuntimes`, `readSoVersion`, `runtimeCandidates`, `_tryLoad`); caches winning lib path in model_settings; `prefillAndCache(prompt, savePath)` — abort-after-first-token KV warm; `generateSpeculative(model, draft, prompt, opts, onToken, k)` — draft+target spec decode (research, no speedup on single NPU); `loadDraft`/`unloadDraft` for second worker slot |
+| `src/pool.js` | Single-active-model lock, auto-swap, idle timeout, pin-to-keep-loaded; runtime version auto-discovery (`getAvailableRuntimes`, `readSoVersion`, `runtimeCandidates`, `_tryLoad`), caches winning lib path; `prefillAndCache` (abort-after-first-token KV warm); `generateSpeculative`/`generateEagle3`, `loadDraft`/`unloadDraft` for second worker slot |
 | `src/admin/conversations.js` | 6 REST endpoints for conversation CRUD + message append (`/api/admin/conversations/…`) |
-| `src/runtime_sync.js` | Downloads aarch64 `librkllmrt.so` versions from configurable mirror list (`RUNTIME_MIRRORS` from `config.js`, override via `ORKLLM_RUNTIME_MIRRORS` env var) into `RUNTIMES_DIR`; tries each mirror in order, first hit wins; skips non-ARM64-Linux; called on startup, on model load failure, and via `POST /api/admin/runtimes/sync` |
+| `src/runtime_sync.js` | Downloads aarch64 `librkllmrt.so` versions from the mirror list (`RUNTIME_MIRRORS`, override via `ORKLLM_RUNTIME_MIRRORS`) into `RUNTIMES_DIR`, first hit wins; skips non-ARM64-Linux; runs on startup, on load failure, and via `POST /api/admin/runtimes/sync` |
 | `src/monitor.js` | Polls CPU, RAM, SoC Temp, NPU load, GPU load (Mali), disk utilization; Rockchip-native on ARM64 Linux, simulated elsewhere |
 | `src/stats.js` | Records prefill/generation tokens and latencies in SQLite |
 | `src/db.js` | SQLite + PRAGMA user_version migration runner; 2 versioned migrations; all table accessors |
@@ -165,67 +155,11 @@ graph TD
 | `e2e/rbac.spec.js` | Playwright E2E suite (17 tests — RBAC, trusted proxy (single + multi-IP/CIDR), mock OIDC SSO, Keycloak integration) |
 | `e2e/regression.spec.js` | Playwright E2E suite (14 tests — UI regression: navbar, theme, user drawer, drawer toggles, Contribute button, snackbar) |
 
----
-
-## 5. Directory Structure
-
-```text
-oRKLLM/
-├── AGENTS.md               # This file — canonical agent instructions
-├── GEMINI.md               # @AGENTS.md
-├── CLAUDE.md               # @AGENTS.md
-├── README.md               # Quickstart and general info
-├── package.json            # Root NPM package
-├── binding.gyp             # node-gyp config for C++ N-API addon
-├── playwright.config.js    # Playwright E2E config
-├── models/                 # Default directory for .rkllm files
-├── src/
-│   ├── addon/
-│   │   └── orkllm_napi.cpp
-│   ├── api/
-│   │   └── routes.js
-│   ├── admin/
-│   │   ├── routes.js
-│   │   └── conversations.js
-│   ├── config.js
-│   ├── db.js
-│   ├── mock_engine.js
-│   ├── monitor.js
-│   ├── pool.js
-│   ├── runtime_sync.js
-│   ├── server.js
-│   ├── stats.js
-│   └── worker.js
-├── frontend/               # Vue 3 + Vuetify 3 SPA
-│   ├── package.json
-│   ├── vite.config.js      # Route-based code splitting
-│   ├── index.html
-│   └── src/
-│       ├── main.js
-│       ├── App.vue
-│       ├── router.js
-│       ├── plugins/vuetify.js
-│       ├── components/
-│       │   └── AppNav.vue  # Shared navbar (all authenticated views)
-│       └── views/
-│           ├── Dashboard.vue   # Stats, telemetry, inference playground
-│           ├── Models.vue      # Model manager + HF search/downloader
-│           ├── Settings.vue    # Global settings + HF token
-│           ├── Logs.vue        # Live log terminal
-│           ├── Bench.vue       # Inference benchmark
-│           ├── Chat.vue        # Full chat interface
-│           ├── Login.vue
-│           └── Setup.vue
-└── e2e/
-    ├── global-setup.js     # Resets server state between test runs
-    ├── orkllm.spec.js      # 33 feature tests (core flow, chat history, runtime, platform detection, download)
-    ├── rbac.spec.js        # 17 tests — RBAC, trusted proxy, SSO
-    └── regression.spec.js  # 12 UI regression tests
-```
+**Other paths:** `src/` also holds `auth/` (OIDC/SAML/session) and `eagle.js`. Non-source: `models/` (`.rkllm` files), `frontend/` (Vue 3 + Vuetify 3 SPA, Vite), `e2e/` (Playwright), root build config (`package.json`, `binding.gyp`, `playwright.config.js`). `CLAUDE.md` and `GEMINI.md` both `@AGENTS.md`.
 
 ---
 
-## 6. Local Development
+## 5. Local Development
 
 ### Prerequisites
 - Node.js ≥ 18 (≥ 22.5 preferred for native `node:sqlite`)
@@ -259,7 +193,7 @@ npm run dev:server
 
 ---
 
-## 7. E2E Testing
+## 6. E2E Testing
 
 The Playwright suite covers the full user journey in mock mode (no board required):
 
@@ -294,20 +228,11 @@ Identity provider credentials are read from environment variables. Set them in `
 
 ### Why tests run sequentially (`workers: 1`)
 
-The three spec files share a single server with stateful resources (model loaded in NPU, auth sessions, OIDC config). Running in parallel would cause races — e.g. two tests loading different models simultaneously, or one test's OIDC config leaking into another's login flow.
-
-The ordering is also intentional: `orkllm.spec.js` creates the admin account that `rbac.spec.js` depends on.
-
-To enable parallel workers you would need:
-- Per-worker isolated servers (different ports + DB paths)
-- Each spec file fully self-contained with its own setup/teardown
-- No cross-spec state dependencies
-
-This is a significant refactor not currently worth the complexity given ~40s total runtime.
+The three spec files share one stateful server (model in NPU, auth sessions, OIDC config); parallel runs would race (two models loading at once, OIDC config leaking across login flows). Ordering is intentional — `orkllm.spec.js` creates the admin account `rbac.spec.js` depends on. Parallelism would require per-worker isolated servers (separate ports + DB paths) and fully self-contained specs — a refactor not worth it given ~40s total runtime.
 
 ---
 
-## 7a. Authentication & RBAC
+## 6a. Authentication & RBAC
 
 ### Architecture
 
@@ -318,18 +243,10 @@ This is a significant refactor not currently worth the complexity given ~40s tot
 - **Local auth**: always available; admin can disable it once federated auth is working
 
 ### OIDC Flow — routes at `/auth/oidc/*` (src/auth/routes.js)
-1. Admin configures issuer URL, client ID, optional secret, redirect URI in Site Management → Auth Providers
-2. **Public clients** (no secret) use PKCE automatically: `code_verifier` + `code_challenge` (S256)
-3. Login page shows "Sign in with [Provider]" button
-4. `GET /auth/oidc/authorize` → redirects to IdP with `state` + `nonce` (+ `code_challenge` for PKCE)
-5. `GET /auth/oidc/callback` → exchanges code → upserts user → issues session cookie
-6. Group → role mapping: OIDC `groups` claim values mapped to `/orkllm` (user) / `/orkllm/admin` (admin)
+Admin configures issuer/client-ID/optional-secret/redirect-URI in Site Management → Auth Providers. Public clients (no secret) use PKCE (`code_verifier` + S256 `code_challenge`) automatically. `GET /authorize` → IdP with `state`+`nonce`(+`code_challenge`); `GET /callback` → exchange code → upsert user → session cookie. Group→role: OIDC `groups` claim mapped to `/orkllm` (user) / `/orkllm/admin` (admin).
 
 ### SAML Flow — routes at `/auth/saml/*` (src/auth/routes.js)
-1. Admin pastes IdP metadata XML; SP metadata at `GET /auth/saml/metadata`
-2. `GET /auth/saml/login` → creates AuthnRequest → redirects to IdP SSO URL
-3. `POST /auth/saml/acs` → validates Response → upserts user → session cookie
-4. Attribute mapping: configurable paths for username, email, groups attributes
+Admin pastes IdP metadata XML; SP metadata at `GET /metadata`. `GET /login` → AuthnRequest → IdP SSO; `POST /acs` → validate Response → upsert user → session cookie. Attribute mapping: configurable paths for username/email/groups.
 
 ### Trusted Proxy
 Configure `ORKLLM_TRUSTED_PROXY` env var or the `trusted_proxy` setting in Site Settings.
@@ -338,15 +255,11 @@ Values: `true` (all proxies), a single IP/CIDR (e.g. `10.0.0.0/8`), a comma-sepa
 Takes effect on next server restart.
 
 ### Keycloak Configuration
-- **Realm**: `https://auth-lab.fischerapps.com/realms/master`
-- **OIDC client**: `orkllm-oidc` (Standard Flow, public client — no secret, PKCE)
-- **SAML client**: `orkllm-saml`
-- **Group paths**: `/orkllm` (regular user) and `/orkllm/admin` (admin)
-- **OIDC redirect URI**: `https://orkllm.fischerapps.com/auth/oidc/callback`
-- **SAML ACS URL**: `https://orkllm.fischerapps.com/auth/saml/acs`
-- **SP metadata**: `https://orkllm.fischerapps.com/auth/saml/metadata`
+- **Realm**: `https://auth-lab.fischerapps.com/realms/master`; OIDC client `orkllm-oidc` (Standard Flow, public, PKCE); SAML client `orkllm-saml`
+- **Group paths**: `/orkllm` (user), `/orkllm/admin` (admin)
+- **OIDC redirect URI**: `https://orkllm.fischerapps.com/auth/oidc/callback`; **SAML ACS**: `…/auth/saml/acs`; **SP metadata**: `…/auth/saml/metadata`
 
-## 7b. Database Migrations
+## 6b. Database Migrations
 
 Schema changes are tracked via SQLite `PRAGMA user_version`. On startup, `runMigrations()` in `src/db.js` compares the stored version against `LATEST_VERSION` and runs any pending migrations in order.
 
@@ -380,103 +293,25 @@ Append to the `MIGRATIONS` array in `src/db.js`:
 
 ---
 
-## 8. Deployment to NanoPi M5
+## 7. Deployment to NanoPi M5
 
 Target board: **NanoPi M5** (`10.6.0.14`) running Rockchip Linux (ARM64).
 
-### 8.1 One-Time Board Setup
+### 7.1 One-Time Board Setup
 
-These steps only need to be done once:
+Done once: verify NPU driver (`ssh michael@10.6.0.14 'cat /sys/kernel/debug/rknpu/version'` → e.g. `0.9.8`), verify `librkllmrt.so` is present at `/home/michael/rkllama/src/rkllama/lib/librkllmrt.so`, and confirm Node.js is installed (tested with v20.20.2).
 
-```bash
-# 1. Verify NPU driver is present on the board
-ssh michael@10.6.0.14 'cat /sys/kernel/debug/rknpu/version'
-# Expected: e.g. "0.9.8"
+### 7.2 Deploy Steps
 
-# 2. Verify librkllmrt.so is present
-ssh michael@10.6.0.14 'ls /home/michael/rkllama/src/rkllama/lib/librkllmrt.so'
+The full deploy is the copy-paste script in **7.3** below. Key points it encodes:
 
-# 3. Install Node.js on the board (if not already present)
-ssh michael@10.6.0.14 'node --version'
-# Tested with: v20.20.2
-```
+- **Build frontend first** (`npm run build:frontend` on macOS) — always rebuild so the latest UI ships.
+- **`rsync` excludes `build/`** — it holds the macOS Mach-O binary, which would overwrite the ARM64 ELF compiled on the board (silent mock fallback otherwise). Also exclude `.git`, `node_modules`, test artifacts.
+- **`npm install` on the board** compiles the ARM64 native addons `build/Release/orkllm_napi.node` and `kvcache_quant_napi.node` (N-API — ABI-stable across Node majors). The SQLite fallback (`node-sqlite3-wasm`) is pure WASM, so it needs no compilation and carries no Node-ABI lock.
+- **Restart** = `pkill -f 'node src/server.js'` then `nohup env … node src/server.js`.
+- **Verify**: `ps aux | grep 'node src/server'`; open `http://10.6.0.14:8000/admin`. Expected log: `Server listening at http://0.0.0.0:8000`.
 
-### 8.2 Build Frontend Locally (macOS)
-
-Always rebuild the frontend before deploying to ensure the latest UI changes are included:
-
-```bash
-cd /Users/michael/Dev/oRKLLM
-npm run build:frontend
-# Outputs to frontend/dist/
-```
-
-### 8.3 Sync Code to Board
-
-Use `rsync` to push the repository (excluding `node_modules`, `.git`, `build/`, and test artifacts). **`build/` must be excluded** — it contains the macOS Mach-O binary which would overwrite the ARM64 ELF compiled on the board:
-
-```bash
-rsync -avz \
-  --exclude='.git' \
-  --exclude='node_modules' \
-  --exclude='build' \
-  --exclude='test-results' \
-  --exclude='test_auth.db' \
-  --exclude='test_auth.json' \
-  /Users/michael/Dev/oRKLLM/ \
-  michael@10.6.0.14:/home/michael/Dev/oRKLLM/
-```
-
-### 8.4 Install Dependencies on Board
-
-The native C++ addon (`orkllm_napi.node`) and `better-sqlite3` must be compiled on the board itself (ARM64):
-
-```bash
-ssh -n michael@10.6.0.14 'cd /home/michael/Dev/oRKLLM && npm install'
-```
-
-This compiles:
-- `build/Release/orkllm_napi.node` — the RKLLM N-API binding
-- `node_modules/better-sqlite3` — SQLite fallback for Node 20
-
-### 8.5 Stop Any Running Instance
-
-```bash
-ssh -n michael@10.6.0.14 'pkill -f "node src/server.js" || true'
-```
-
-### 8.6 Start the Server
-
-```bash
-ssh -n michael@10.6.0.14 '
-  cd /home/michael/Dev/oRKLLM &&
-  nohup env \
-    ORKLLM_HOST=0.0.0.0 \
-    ORKLLM_PORT=8000 \
-    ORKLLM_LIB_PATH=/home/michael/rkllama/src/rkllama/lib/librkllmrt.so \
-    node src/server.js > server.log 2>&1 &
-  sleep 3 && tail -5 server.log
-'
-```
-
-Expected output:
-```
-[Database] Initializing SQLite database at: /home/michael/.config/orkllm/auth.db
-{"level":30,"msg":"Server listening at http://0.0.0.0:8000"}
-{"level":30,"msg":"oRKLLM server started at http://0.0.0.0:8000"}
-```
-
-### 8.7 Verify
-
-```bash
-# Check server is running
-ssh -n michael@10.6.0.14 'ps aux | grep "node src/server"'
-
-# Open admin console in browser
-open http://10.6.0.14:8000/admin
-```
-
-### 8.8 Combined Deploy Script (copy-paste)
+### 7.3 Combined Deploy Script (copy-paste)
 
 ```bash
 #!/usr/bin/env bash
@@ -516,7 +351,7 @@ echo "==> Done! Admin console: http://10.6.0.14:8000/admin"
 
 ---
 
-## 8a. Model Naming Convention
+## 7a. Model Naming Convention
 
 oRKLLM promotes a single unified naming standard across the Rockchip community. When generating filenames, parsing model metadata, or documenting models, always follow this convention.
 
@@ -552,7 +387,7 @@ Include the applicable chipset tag(s). This enables oRKLLM's **Compatible chipse
 
 ---
 
-## 9. Implementation Roadmap
+## 8. Implementation Roadmap
 
 | Phase | Status | Description |
 | :--- | :--- | :--- |
@@ -573,381 +408,152 @@ Include the applicable chipset tag(s). This enables oRKLLM's **Compatible chipse
 | Phase 15: Chat UX | ✅ Done | Input pinned at bottom (fixed viewport); message queueing during inference; mobile responsive layout |
 | Phase 16: Conversation History | ✅ Done | SQLite v3 migration; conversations + messages tables; collapsible sidebar (desktop) / bottom-sheet (mobile); `sendBeacon` on unload for partial responses |
 | Phase 17: Pin Model | ✅ Done | Pin persists to DB (`pinned_model` setting); auto-load on startup with RAM check (1.2× model size); clears on unload |
-| Phase 18: Runtime Version Matching | ✅ Done | `RUNTIMES_DIR` holds versioned `.so` files; `readSoVersion()` extracts version via `strings`; `runtimeCandidates()` orders by cached winner → filename match → all others → system fallback; `GET /api/admin/runtimes` exposes available runtimes; rkllm-runtimes mirror at `oRKLLM/rkllm-runtimes` |
-| Phase 19: Runtime Auto-Download | ✅ Done | Setup opt-in checkbox (default on); `runtime_sync.js` downloads aarch64 `.so` files from mirror on startup; targeted sync when model load fails with unknown version; opt-out shows disclaimer dialog in UI; API returns HTTP 422 `RUNTIME_MISSING` with `runtimeVersion`; `autoDownloadRuntimes` setting in Settings page |
-| Phase 20: Model Downloader | ✅ Done | HF search + collection browse; Download button fetches all repo files and queues all downloads in parallel; files saved to `MODELS_DIR/{repoName}/{filename}`; download queue persists across tab/page navigation; progress + speed per file; grouped by repo in queue UI |
-| Phase 21: Platform-Aware Search | ✅ Done | `GET /api/admin/status` returns `platform` field (`rk3576`/`rk3588`/`null`) from `/proc/device-tree/model`; "Compatible chipset" checkbox appends platform slug to HF search query; recursive model scan supports `models/{repoName}/` subdirectories; wildcard routes for model settings and delete |
-| Phase 22: Speculative Decode (research) | 🔬 Research | Draft+target pool implemented (`generateSpeculative`, `loadDraft`/`unloadDraft`); standard spec decode no measurable speedup; Eagle-3 confirmed viable at 3.73× — see Sections 10 & 11 |
-| Phase 23: prefillAndCache | ✅ Done | `pool.prefillAndCache(prompt, savePath)` — abort-after-first-token trick to save KV state; `POST /api/admin/prefill-cache`; `POST /api/admin/infer-with-cache`; 75% prefill reduction (4B), 100% (8B) measured on board; requires model reload between warm and serve phases — see Section 11 |
+| Phase 18: Runtime Version Matching | ✅ Done | Versioned `.so` in `RUNTIMES_DIR`; `readSoVersion()` via `strings`; `runtimeCandidates()` orders cached winner → filename match → others → system fallback; `GET /api/admin/runtimes`; mirror at `oRKLLM/rkllm-runtimes` |
+| Phase 19: Runtime Auto-Download | ✅ Done | Setup opt-in (default on); `runtime_sync.js` downloads from mirror on startup + targeted sync on load failure; opt-out disclaimer dialog; API 422 `RUNTIME_MISSING`; `autoDownloadRuntimes` setting |
+| Phase 20: Model Downloader | ✅ Done | HF search + collection browse; Download queues all repo files in parallel to `MODELS_DIR/{repoName}/`; queue persists across navigation, grouped by repo, per-file progress/speed |
+| Phase 21: Platform-Aware Search | ✅ Done | `/api/admin/status` returns `platform` (`rk3576`/`rk3588`/`null`) from device-tree; "Compatible chipset" filter appends slug to HF query; recursive scan of `models/{repoName}/`; wildcard model routes |
+| Phase 22: Speculative Decode (research) | 🔬 Research | Draft+target pool (`generateSpeculative`, `loadDraft`/`unloadDraft`); no speedup on single NPU; Eagle-3 viable at 3.73× — Sections 9 & 10 |
+| Phase 23: prefillAndCache | ✅ Done | Abort-after-first-token KV save; `POST /api/admin/prefill-cache`, `/infer-with-cache`; 75% (4B) / 100% (8B) prefill reduction; needs model reload between warm and serve — Section 9 |
 
 ---
 
-## 10. NPU Inference Optimization — Research Findings
+## 9. NPU Inference Optimization — Research Findings
 
-This section records empirical results from hardware experiments on the NanoPi M5 (RK3576). Future agents should read this before attempting related work.
+Empirical results from hardware experiments on the NanoPi M5 (RK3576). Read before attempting related work.
 
----
+### 9.1 Speculative Decoding
 
-### 10.1 Speculative Decoding
+**Standard draft+target (separate models): no measurable speedup on a single NPU.** Implemented as `pool.generateSpeculative()` (draft generates `k` tokens serially, target verifies in one pass via `RKLLM_INFER_GET_LOGITS`). On a single NPU only one model fits at a time, so draft and target run sequentially; at comparable per-token throughput the draft+verify overhead negates any acceptance-rate gain. Speedup needs the draft to be substantially faster than the target *on the same hardware* — not the case here.
 
-**Standard draft+target (separate models): no measurable speedup on a single NPU.**
+**Eagle-3 IS applicable and IS implemented** (`pool.generateEagle3()` + `src/eagle.js`). Unlike standard draft+target: the draft head runs on the **Mali GPU** (separate hardware) while the target verifies on the **NPU** via `GET_LOGITS`; the two run **concurrently** — Mali is hidden inside the NPU's ~2200ms verification window. Empirically validated at **3.73× speedup** (k=8, 80% acceptance — see Section 10).
 
-Draft (0.6B) + target (4B) speculative decoding was implemented as `pool.generateSpeculative()`. The infrastructure works correctly — draft generates `k` tokens serially, target verifies in one pass using `RKLLM_INFER_GET_LOGITS`. However, on a single NPU:
+**Key IPC race (fixed):** `rkllm_abort` is asynchronous; stale tokens from the old run leak into the next listener unless code waits for `state === 2` first. Fix: `abortAndFinish()` in `pool.js` sends abort then awaits `state: 2` with a 500ms timeout.
 
-- Only one model fits in NPU memory at a time. The draft and target models run **sequentially**, not concurrently.
-- At similar per-token NPU throughput, the draft+verify overhead negates any acceptance-rate gain.
-- Speedup only materialises when the draft model is substantially faster than the target *on the same hardware*. On a shared NPU both run at comparable tok/s.
+### 9.2 prefillAndCache — 63–100% prefill reduction; requires model reload between warm and serve
 
-**Eagle-3 IS applicable and IS implemented.** The earlier assumption that "Eagle-3 requires dual GPU/NPU" was incorrect. Eagle-3 works differently from standard draft+target:
-- The draft head (~50M params) runs on the **Mali GPU** via Vulkan compute shaders — a separate hardware unit
-- The target model runs on the **NPU** for verification via `RKLLM_INFER_GET_LOGITS`
-- Mali and NPU run **concurrently** — Mali is hidden inside the NPU's ~2200ms verification window
-- Empirically validated: **3.73× speedup** over baseline at k=8, 80% acceptance (see Section 11)
-
-`pool.generateEagle3()` and `src/eagle.js` implement the full pipelined Eagle-3 loop.
-
-**Key IPC race condition (fixed):** `rkllm_abort` is asynchronous. After sending abort, stale tokens from the old run leak into the next listener unless code explicitly waits for `state === 2` before resolving. The fix is `abortAndFinish()` in `pool.js` which sends abort then awaits `state: 2` with a 500 ms timeout.
-
----
-
-### 10.2 prefillAndCache
-
-**Conclusion: works — 63–100% prefill time reduction; requires a model reload between the warm and serve phases.**
-
-`pool.prefillAndCache(prompt, savePath)` runs `rkllm_run` with `saveCachePath` and calls `rkllm_abort` immediately after the first decode token fires. RKLLM saves the KV state to disk before returning `state: 2`. This gives a prefill-only snapshot without completing generation.
-
-**Measured results on NanoPi M5 (RK3576):**
+`pool.prefillAndCache(prompt, savePath)` runs `rkllm_run` with `saveCachePath` and aborts immediately after the first decode token; RKLLM saves the KV state before returning `state: 2`, yielding a prefill-only snapshot.
 
 | Model | Baseline prefill | Cached prefill | Reduction | Warm cost |
 |-------|-----------------|----------------|-----------|-----------|
 | Qwen3-4B-Base | 69 tok / 1446 ms | 9 tok / 361 ms | **75%** | 692 ms |
 | Qwen3-8B-Base | 57 tok / 1495 ms | 0 tok / 0 ms | **100%** | 831 ms |
 
-**Case A confirmed:** the saved KV cache is a clean prefill snapshot. The first generated token after loading the cache (with an empty continuation prompt) is the first *new* decode token — not a duplicate. The 9 residual tokens on 4B are template-framing tokens RKLLM always re-processes regardless of cache.
+The saved cache is a clean prefill snapshot (first token after load is the first *new* decode token, not a duplicate; the 9 residual 4B tokens are template-framing tokens RKLLM always re-processes).
 
-**Critical constraint — model reload required:** calling `rkllm_run` with `loadCachePath` immediately after `prefillAndCache` crashes the worker process (`state: 500, "Worker process exited unexpectedly"`). The abort from `prefillAndCache` leaves the RKLLM engine's internal KV state dirty. The engine crashes when it tries to load an external cache file on top of that dirty state. The fix is to **unload and reload the model** between the warm phase and the serve phase.
+**Critical constraint — model reload required:** calling `rkllm_run` with `loadCachePath` immediately after `prefillAndCache` crashes the worker (`state: 500`) — the abort leaves the engine's KV state dirty. Fix: unload and reload the model between warm and serve. Workflow: `load → prefillAndCache(systemPrompt, path) → unload → load → serve with loadCachePath`.
 
-**Correct startup workflow:**
-```
-1. Load model
-2. pool.prefillAndCache(systemPrompt, "/path/to/system.rkllmcache")
-3. pool.unload()
-4. pool.load(model)                   ← clean KV state
-5. Serve user requests with loadCachePath = "/path/to/system.rkllmcache"
-```
+**vs `cache.js`:** both use the same `saveCachePath`/`loadCachePath` mechanism. `cache.js` is *reactive* (caches after first response; user #1 pays full prefill). `prefillAndCache` is *proactive* (warms at startup so even user #1 benefits) — narrow advantage for single-user, meaningful for multi-tenant fixed system prompts.
 
-**Relationship to the existing SSD prefix cache (`cache.js`):** both use the same RKLLM `saveCachePath`/`loadCachePath` mechanism. `cache.js` is *reactive* — it caches after the first completed response; user #1 pays the full prefill cost. `prefillAndCache` is *proactive* — it warms the cache at startup so even user #1 benefits. The practical advantage is narrow for single-user deployments but meaningful for multi-tenant scenarios with a fixed system prompt.
+**Endpoints:** `POST /api/admin/prefill-cache {prompt, savePath}` → `{firstToken, savedPath}`; `POST /api/admin/infer-with-cache {prompt, loadCachePath?, saveCachePath?, maxTokens?}` → `{text, perf}` (test/debug; accepts empty `prompt` when `loadCachePath` set).
 
-**API endpoints added:**
-- `POST /api/admin/prefill-cache { prompt, savePath }` → `{ firstToken, savedPath }`
-- `POST /api/admin/infer-with-cache { prompt, loadCachePath?, saveCachePath?, maxTokens? }` → `{ text, perf }` (test/debug endpoint; accepts empty `prompt` when `loadCachePath` is set)
+### 9.3 FP8 KV Cache — not supported
 
----
+RK3576 NPU has no FP8 hardware (FP8 needs tensor cores present only on H100/Ada-class data-centre GPUs); it operates at INT8/INT16/FP16. `RKLLMParam` exposes no KV-cache dtype field, and a `strings` scan of `librkllmrt-aarch64-v1.2.3.so` finds no `fp8`/`kv_quant`/`cache_quant`. INT8 KV quantisation is also absent from the API.
 
-### 10.3 FP8 KV Cache
+### 9.4 .rkllmcache File Format — fully reverse-engineered
 
-**Conclusion: not supported — RK3576 NPU has no FP8 hardware.**
-
-FP8 (E4M3/E5M2) requires dedicated tensor core support present only in NVIDIA H100, Ada Lovelace, and similar data-centre hardware. The RK3576 NPU operates at INT8/INT16 and FP16. The `RKLLMParam` struct exposes no KV cache data-type control field, and a `strings` search of `librkllmrt-aarch64-v1.2.3.so` finds no references to `fp8`, `kv_quant`, or `cache_quant`. INT8 KV cache quantisation (available in llama.cpp) is similarly absent from the RKLLM API.
-
----
-
-### 10.4 .rkllmcache File Format
-
-**Fully reverse-engineered.** The format is a three-section binary file. The per-token KV tensor section is clean FP16 with known dimensions and is safe to quantise.
-
-#### File structure (Qwen3-4B, RKLLM v1.2.3)
-
-```
-file_size = 615,371 + 147,472 × n_tokens   ← exact, verified across 5 files
-```
+Three-section binary. `file_size = 615,371 + 147,472 × n_tokens` (exact, verified across 5 files).
 
 | Section | Offset | Size | Content |
 |---------|--------|------|---------|
-| Binary metadata header | `0x000–0x125` | 294 bytes | 10× little-endian int32: `H[0]=43`, `H[1]=n_kv_heads (8)`, `H[2]=n_tokens`, `H[3]=151644`, ... |
-| Fixed model-level overhead | `0x126–0x963ca` | 615,077 bytes | Constant for same model regardless of context length. FP16 values in `[0.0, 0.65]` — likely quantisation scales or RoPE position tables. **Do not modify** — format not fully decoded. |
-| FP16 KV tensor data | `0x963cb–EOF` | `147,472 × n_tokens` bytes | Token-sequential KV vectors. Layout: `[tok_0 K+V] [tok_1 K+V] … [tok_{n-1} K+V]`. Per token: `2 × 36L × 8H × 128D × 2 bytes (FP16) + 16 bytes padding = 147,472`. |
+| Metadata header | `0x000–0x125` | 294 B | 10× LE int32: `H[0]=43`, `H[1]=n_kv_heads (8)`, `H[2]=n_tokens`, `H[3]=151644`, … |
+| Fixed model overhead | `0x126–0x963ca` | 615,077 B | Constant per model regardless of context. FP16 in `[0.0, 0.65]` — likely quant scales or RoPE tables. **Do not modify** (not fully decoded). |
+| FP16 KV tensor data | `0x963cb–EOF` | `147,472 × n_tokens` B | Token-sequential `[tok_0 K+V]…`. Per token: `2 × 36L × 8H × 128D × 2B FP16 + 16B padding = 147,472`. |
 
-#### Key measurements (4B model, 61-token context)
+Measurements (4B, 61-token): FP16 KV range −117..+293, mean |abs| ≈ 1.07; token 0 (BOS) ≈ all-zero K+V; zlib only compresses 7% (high-entropy activations).
 
-- FP16 KV value range: −117 to +293, mean |abs| ≈ 1.07
-- Token 0 (BOS/`<|im_start|>`): nearly all-zero K+V (no prior tokens to attend to — expected)
-- Standard zlib compression: 10.8 MB → 10.0 MB (7% — FP16 activations are high-entropy)
-
-#### Quantisation feasibility
-
-INT8 quantisation of the KV tensor section is **technically straightforward**:
-
-```
-Per-token INT8 layout (per layer × head scale):
-  INT8 values : 2 × 36 × 8 × 128 × 1 byte  = 73,728 bytes
-  FP32 scales : 36 × 8 × 2 × 4 bytes        =  2,304 bytes
-  Total/token : 76,032 bytes  vs  147,472 FP16  (48% reduction per token)
-```
-
-For a 61-token context, full-file reduction: **9.6 MB → 5.3 MB (45%)**. The fixed 615 KB overhead is unchanged.
-
-#### Implementation path
-
-1. Read the file; extract `n_tokens` from `H[2]`.
-2. Copy bytes `0x000–0x963ca` verbatim (header + fixed overhead).
-3. For each token slice `[FIXED_OVERHEAD + t*147472 : FIXED_OVERHEAD + (t+1)*147472]`:
-   - Reshape as `36 × 8 × 2 × 128` FP16 matrix (36 layers, 8 heads, K+V, 128 dims).
-   - Compute per-(layer, head, K/V) min/max; derive INT8 scale and zero-point.
-   - Quantise and write INT8 values + FP32 scales.
-   - Preserve the 16-byte padding unchanged.
-4. Store with a `.q8cache` extension; dequantise to a temp FP16 file before calling `loadCachePath`.
-
-The round-trip (dequantise → temp file → load) adds negligible latency (~10 ms for a 60-token context on ARM64).
-
-**Note:** the fixed overhead's internal structure (27.9% printable ASCII, FP16 values 0–0.65) suggests it may be per-dimension quantisation scales or a RoPE cosine/sine table. Modifying it without understanding its role could corrupt the loaded model state.
+**INT8 quantisation of the KV section is feasible** (per layer×head scale): INT8 values 73,728 B + FP32 scales 2,304 B = 76,032 B/token vs 147,472 FP16 (**48%/token**, ~45% full file). Path: copy `0x000–0x963ca` verbatim, then per-token reshape `36×8×2×128` FP16 → per-(layer,head,K/V) INT8 scale+zero-point (preserve 16B padding); store `.q8cache`, dequantise to a temp FP16 file before `loadCachePath` (~10ms). Do **not** touch the fixed overhead (possibly per-dim scales or a RoPE table — modifying risks corruption).
 
 ---
 
-## 11. NPU Parallelism, GET_LOGITS Scaling, and Eagle-3 Feasibility
+## 10. NPU Parallelism, GET_LOGITS Scaling, and Eagle-3 Feasibility
 
-This section records empirical findings from hardware experiments on the NanoPi M5 (RK3576) regarding NPU parallelism, GET_LOGITS batch processing, and Eagle-3 speculative decoding feasibility. Future agents must read this before attempting related work.
+Empirical findings (NanoPi M5 / RK3576). Read before attempting related work.
 
----
+### 10.1 NPU Core Count — `npu_core_num: 2`
 
-### 11.1 NPU Core Count — `npu_core_num: 2`
+Every `rkllm_init` logs `npu_core_num: 2, target_platform: RK3576`. The RK3576 has **2 NPU compute domains** (IOMMU domains 1 and 2; dmesg shows `RKNPU: switch iommu domain from 2 to 1`). The advertised "6 TOPS" is total compute; two domains are its internal subdivision. `RKLLMExtendParam.base_domain_id` picks the starting domain — empirically `base_domain_id=2` has no effect (the NPU shares both domains for any model). Leave it at 1 (hardcoded in the addon).
 
-**Source:** RKLLM runtime log on every `rkllm_init` call:
-```
-I rkllm: rkllm-toolkit version: 1.2.3, max_context_limit: 4096, npu_core_num: 2, target_platform: RK3576, model_dtype: W4A16
-```
+### 10.2 Parallel NPU Inference — two models simultaneously
 
-The RK3576 has **2 NPU compute domains** (IOMMU domains 1 and 2). The kernel driver confirms this via `RKNPU: switch iommu domain from 2 to 1` messages in dmesg. The official RK3576 spec advertises "6 TOPS NPU" as total compute; the two-domain architecture is the internal subdivision.
+Two worker processes, each loading a different model (0.6B + 1.7B), run concurrently:
 
-**`RKLLMExtendParam.base_domain_id`** selects which domain to start from (1 = default). Tested empirically: setting `base_domain_id=2` has no measurable effect on throughput or parallelism — both workers still report `npu_core_num: 2` and the NPU shares both domains for any single model regardless of the hint. Leave `base_domain_id=1` (hardcoded in the addon).
-
----
-
-### 11.2 Parallel NPU Inference — Two Models Simultaneously
-
-**Method:** Forked two Node.js worker processes, each loaded a different model (0.6B and 1.7B), ran inference concurrently, measured wall time.
-
-**Results:**
-
-| Configuration | 0.6B total | 1.7B total | Wall time |
+| Config | 0.6B | 1.7B | Wall |
 |---|---|---|---|
 | Sequential | 4.0s | 6.5s | 10.5s |
 | **Parallel** | **4.4s** | **6.5s** | **6.5s** |
 
-Both `rkllm_init` calls succeed simultaneously. Both generate valid output. Each model runs at ~85–90% of single-model throughput, not 50% — confirming the hardware interleaves execution at the domain level rather than time-slicing coarsely.
+Both `rkllm_init` calls succeed and produce valid output; each runs at ~85–90% of single-model throughput (not 50% — memory-bandwidth stall windows let the second model's compute slip through). **Two models CAN run simultaneously** — the hardware foundation for multi-worker serving and Eagle-3.
 
-**Key conclusion:** Two models CAN be loaded and run simultaneously on the RK3576 NPU. This is the hardware foundation for both multi-worker serving and Eagle-3.
+### 10.3 RKLLM Inference Modes (`RKLLMInferMode`, wired in `orkllm_napi.cpp`)
 
-**Why 85% not 50%:** The NPU's compute units are shared but the memory bandwidth stalls (the bottleneck during single-model inference at ~70% utilisation) allow the second model's compute to slip through during stall windows.
+| Mode | Value | Returns | Use |
+|------|-------|---------|-----|
+| `RKLLM_INFER_GENERATE` | 0 | autoregressive tokens | default path |
+| `RKLLM_INFER_GET_LAST_HIDDEN_LAYER` | 1 | `hidden_states [num_tokens × embd_size]` | Eagle-3 draft input |
+| `RKLLM_INFER_GET_LOGITS` | 2 | `logits [vocab_size × num_tokens]` | Eagle-3 verification |
 
----
+Exposed via `infer_mode` in `run` IPC and the `POST /api/admin/infer-with-cache` endpoint.
 
-### 11.3 RKLLM Inference Modes
+### 10.4 GET_LOGITS scales as constant time (parallel prefill)
 
-Three modes exist in `RKLLMInferMode` (wired in `orkllm_napi.cpp`):
+`eagle_verify_bench.mjs`, GET_LOGITS vs k sequential GENERATE (1.7B, 5 trials):
 
-| Mode | Value | Description | Use in oRKLLM |
-|------|-------|-------------|---------------|
-| `RKLLM_INFER_GENERATE` | 0 | Standard autoregressive token generation | Default inference path |
-| `RKLLM_INFER_GET_LAST_HIDDEN_LAYER` | 1 | Returns `float* hidden_states [num_tokens × embd_size]` | Available for Eagle-3 draft head input |
-| `RKLLM_INFER_GET_LOGITS` | 2 | Returns `float* logits [vocab_size × num_tokens]` | Eagle-3 verification; currently wired but unused in pool |
-
-All three are exposed via `infer_mode` parameter in `run` IPC messages and the `POST /api/admin/infer-with-cache` test endpoint.
-
----
-
-### 11.4 GET_LOGITS Scales as Constant Time (Parallel Prefill)
-
-**Method:** `eagle_verify_bench.mjs` — measured GET_LOGITS mode with k=1,2,4,8 tokens vs k sequential GENERATE calls. Ran 5 trials per configuration on the 1.7B model.
-
-**Results:**
-
-| k | Sequential (k × GENERATE) | GET_LOGITS | GET_LOGITS / Sequential |
+| k | k × GENERATE | GET_LOGITS | ratio |
 |---|---|---|---|
 | 1 | 2201ms | 2201ms | 100% |
 | 2 | 4635ms | 2203ms | **48%** |
 | 4 | 9503ms | 2194ms | **23%** |
 | 8 | 19359ms | 2229ms | **12%** |
 
-**RKLLM processes k tokens via GET_LOGITS in constant time regardless of k.** Four tokens take the same wall time as one token. The NPU runs them as a true parallel prefill batch — all k tokens processed simultaneously in a single NPU pass.
+**RKLLM processes k tokens via GET_LOGITS in constant time** — a true parallel prefill batch. Verifying k draft tokens costs the same as verifying 1. This is the decisive enabler for Eagle-3 (measured, not assumed).
 
-This is the decisive empirical result for Eagle-3 feasibility: verification of k draft tokens costs the same as verifying 1.
+### 10.5 Eagle-3 feasibility — empirical verdict
 
-**Diagnostic ratios:**
-- `t_verify(4) / (4 × t_single) = 24.9%` — strong sub-linear scaling
-- `t_verify(8) / (8 × t_single) = 12.6%` — near-perfect parallelism
+Phase 4 of `eagle_verify_bench.mjs` (pipelined sim via `Promise.all([NPU verify, setTimeout(60ms)])`). Pipeline: NPU runs `GET_LAST_HIDDEN_LAYER`→`GET_LOGITS verify_N`→`verify_N+1` while Mali drafts `N+1`,`N+2` inside the 2200ms verify window.
 
----
-
-### 11.5 Eagle-3 Feasibility — Empirical Verdict
-
-**Method:** Phase 4 of `eagle_verify_bench.mjs` — pipelined Eagle simulation using `Promise.all([NPU verify, setTimeout(60ms)])` to test concurrent NPU+Mali execution.
-
-**Eagle-3 pipeline structure:**
-```
-NPU:  [GET_LAST_HIDDEN_LAYER] [GET_LOGITS verify_N   ] [GET_LOGITS verify_N+1]
-Mali:                          [draft_N+1 (60ms)]        [draft_N+2]
-                                ↑ overlaps entirely with NPU verify window (2200ms)
-```
-
-**Measured results (k=4, 80% assumed acceptance rate):**
-
-| Configuration | tok/s |
+| Config (k=4, 80% accept) | tok/s |
 |---|---|
-| Baseline (sequential GENERATE) | 0.5 tok/s |
-| Sequential Eagle (no pipeline) | 0.4 tok/s ← SLOWER |
-| **Pipelined Eagle (NPU+Mali concurrent)** | **1.7 tok/s** |
-| **Speedup vs baseline** | **3.73×** |
+| Baseline (sequential GENERATE) | 0.5 |
+| Sequential Eagle (no pipeline) | 0.4 ← slower |
+| **Pipelined Eagle (NPU+Mali concurrent)** | **1.7** |
+| **Speedup** | **3.73×** |
 
-**Why pipelined Eagle is fast:**
-1. GET_LOGITS on k=4 tokens ≈ GET_LOGITS on 1 token (constant time, Section 11.4)
-2. Mali draft head (~60ms) is completely hidden inside the ~2200ms NPU verification window
-3. Expected tokens per batch ≈ 3.8 at 80% acceptance
-4. Effective rate = 3.8 tokens / 2.2 seconds = 1.7 tok/s
+Fast because: GET_LOGITS(k) ≈ GET_LOGITS(1); Mali draft (~60ms) hides in the 2200ms NPU window; ~3.8 tokens/batch at 80% accept ÷ 2.2s = 1.7 tok/s. Sequential Eagle is slower than baseline because verify + sequential GENERATE exceeds k baseline generates. **Eagle-3 is definitively worthwhile on RK3576.**
 
-**Why sequential Eagle is slower than baseline:** Without pipelining, verification + sequential GENERATE overhead exceeds the baseline's k sequential generates.
+### 10.6 Eagle-3 implementation (`src/eagle.js`)
 
-**Conclusion: Eagle-3 is definitively worthwhile on RK3576.** The constant-time GET_LOGITS behaviour is the critical enabler — it was not assumed, it was measured.
+**Optimal k = 8** (not 4): GET_LOGITS is constant-time in k, so k=8 → ~6× theoretical at 90% accept vs ~3.4× at k=4. Default in `src/eagle.js` and `src/api/routes.js`.
 
----
+**Tokenizer-free design** via two addon/worker features: `RKLLM_INPUT_TOKEN` (`input_type=1`) passes `token_ids: Int32Array` directly — RKLLM decodes them with its own tokenizer and reports decoded text via the per-token callback (collected in `_tokenTexts`); `keep_history=1` appends new tokens to the existing KV cache so verification processes only the k draft IDs, not the whole context. No external tokenizer needed.
 
-### 11.6 Eagle-3 Implementation
+**KV rollback on partial rejection:** `keep_history=1` appends all k draft tokens; on partial accept (j<k) the rejected ones must be removed but RKLLM has no partial-rollback API. Approach: send `{type:'clear_cache'}` IPC (`rkllm_clear_kv_cache`), then re-run `GET_LAST_HIDDEN_LAYER(currentPrompt, keep_history=false)` to restore KV to the accepted prefix and get fresh hidden states. Cost at k=8/80%: rollback ≈ 0.20 × 2200ms = 440ms/batch vs 15,400ms/batch saved — still >3×.
 
-**Fully implemented in `src/eagle.js`.** Key design decisions based on the above findings:
+Loop: `GET_LAST_HIDDEN_LAYER(prompt)` → draft `[d0..dk]` → **(concurrent)** NPU `GET_LOGITS(token_ids=[d0..dk], keep_history=true)` + Mali drafts next k → `rejectionSample(logits, draft)` → emit accepted via `_tokenTexts[i].text` → on partial rejection clearKV + re-run hidden-layer.
 
-#### Optimal k value: **8** (not 4)
+**Status:** `RKLLM_INPUT_TOKEN`, `keep_history`, `_tokenTexts` collection, KV rollback all ✅ wired. `cpuPlaceholderDraft` ✅ (loop validation, ~0% accept — placeholder IDs). `vulkanDraft` (Mali) 🚧 stub, falls through to CPU until a trained head exists. Trained draft head 🔄 in progress.
 
-GET_LOGITS is constant-time regardless of k (Section 11.4). At k=8 the theoretical speedup is ~6× at 90% acceptance vs ~3.4× at k=4. The default in `src/eagle.js` and `src/api/routes.js` is k=8.
+**Draft head naming:** `{Family}-{TargetParams}-Eagle3Draft-{DraftParams}-{Chipset}-{Quant}-{Algo}-v{Version}-EAGLE3.rkllm` — e.g. `Qwen3-VL-2B-Instruct-Eagle3Draft-445M-rk3576-w4a16-grq-v1.2.3-EAGLE3.rkllm`.
 
-#### Tokenizer-free design: `RKLLM_INPUT_TOKEN` + `keep_history`
+**Why 445M:** untied LM head `nn.Linear(2048, 151936)` = 311M; 2-layer SwiGLU body (intermediate 8192) = 134M. fp32 ~1.78GB, bf16 release ~891MB, w4a16 ~222MB on disk. Mali timing: the original 60ms estimate assumed ~50M; at 445M the LM-head matmul dominates — still under the 2200ms window on Mali G52, but benchmark on-board before relying on it.
 
-The core problem in speculative decoding on RKLLM: we have draft token IDs but need to pass text to `rkllm_run`. Two new features wired in the addon and worker solve this:
+**Training run (M5 Max):** `eagle3_pkg.train` via MLX; target `unsloth/Qwen3-VL-2B-Instruct` (frozen fp32); dataset `~/rkllm/data/combined/combined.parquet` (1,526,766 seqs → 1,511,499 train / 15,267 val, eval every 500 steps); 3 epochs, effective batch 16 (micro-batch 8 × grad-accum 2), 283,404 steps, cosine LR 0.0003→0.0, max-len 512, Metal cache 32GB, peak VRAM ~17–18.5GB; output `draft_head.safetensors` (bf16, ~891MB). Loss 10.80→8.43 in 3 steps after the zero-gradient fix.
 
-- **`RKLLM_INPUT_TOKEN`** (`input_type=1`): pass `token_ids: Int32Array` directly to RKLLM. RKLLM decodes them with its own internal tokenizer and reports the decoded text back via the per-token callback. Wired in `orkllm_napi.cpp Run()` and `worker.js`.
-- **`keep_history=1`** in `RKLLMInferParam`: append the new tokens to the existing NPU KV cache rather than reprocessing the full prompt. Combined with `RKLLM_INPUT_TOKEN`, the verification call processes ONLY the k draft token IDs (not the whole context), which RKLLM appends to the context already in KV.
+**Bugs fixed in training:** (1) zero-gradient flatline — `draft_head.update(params)` inside `nn.value_and_grad` detaches the graph in MLX; fix is `nn.value_and_grad(model, loss_fn)` with model as first arg. (2) dual forward pass — unified into one `extract_hidden_states_and_logits()` (~50% target compute cut). (3) OOM — logits `[batch×seq_len×vocab]` was ~10GB at seq_len 2048; fixed via `--max-len 512` + grad-accum + `mx.clear_cache()`/`gc.collect()` per step.
 
-Result: no external tokenizer dependency. RKLLM's own tokenizer handles ID→text conversion; the decoded text arrives via intermediate callbacks and is collected in `_tokenTexts`.
+**Post-training:** confirm `draft_head.safetensors` ~891MB (smaller ⇒ LM head accidentally tied); convert to `.rkllm` via `rkllm-toolkit` on x86 host `10.3.0.241` (w4a16); benchmark Mali forward pass on-board; rename per convention.
 
-#### KV rollback on partial rejection
+**prefillAndCache interaction:** independent — Eagle-3 runs its own `GET_LAST_HIDDEN_LAYER` from scratch and bypasses `cache.js`. Future: a "warm context" API that saves KV *and* returns hidden states in one pass.
 
-`keep_history=1` leaves the KV cache in a state where all k draft tokens are appended. On partial rejection (accepted j < k), the (k−j−1) rejected tokens must be removed. RKLLM has no partial-rollback API. The implemented approach:
+**30% idle NPU:** single-token GENERATE leaves ~30% bandwidth idle (memory stalls); GET_LOGITS k=8 = k=1 wall time means the NPU fills those stalls with the extra tokens — why k=8 beats k=4 despite equal verify time.
 
-1. Send `{ type: 'clear_cache' }` IPC to the worker (calls `rkllm_clear_kv_cache`)
-2. Re-run `GET_LAST_HIDDEN_LAYER(currentPrompt, keep_history=false)` — restores KV to accepted prefix, returns fresh hidden states for the next draft batch
+### 10.7 Medusa Heads — revisit later
 
-**Cost analysis at k=8, 80% acceptance:**
-- Partial rejection rate ≈ 20% of steps
-- Rollback cost: 0.20 × 2200ms = 440ms per batch
-- Saving vs baseline: 7 × 2200ms = 15,400ms per batch
-- Net: still >3× speedup even accounting for rollback
-
-#### Inference loop (implemented)
-
-```
-Step 0: GET_LAST_HIDDEN_LAYER(prompt_text, keep_history=false)
-        → KV = [prompt tokens], hidden_states[n_tok × embd_size]
-Step 1: Draft: cpuPlaceholder(hidden) → [d0..dk]   (~1ms CPU, or ~60ms Mali GPU)
-LOOP:
-  Step A (concurrent):
-    NPU: GET_LOGITS(token_ids=[d0..dk], keep_history=true)
-         → KV appended with [d0..dk], logits + _tokenTexts
-    Mali: Draft next k tokens from current hidden_states   (~60ms, hidden in 2200ms NPU window)
-  Step B: rejectionSample(logits, draft)
-           → acceptedCount, correctionId
-  Step C: emit accepted tokens using _tokenTexts[i].text (RKLLM-decoded text, no tokenizer)
-          update currentPrompt += accepted texts + correction text
-  Step D: if partial rejection → clearKV() + re-run GET_LAST_HIDDEN_LAYER(currentPrompt)
-```
-
-#### Current status
-
-| Component | Status |
-|-----------|--------|
-| `RKLLM_INPUT_TOKEN` wired in addon + worker | ✅ Done |
-| `keep_history` wired in addon + worker | ✅ Done |
-| Text collection via `_tokenTexts` | ✅ Done |
-| KV rollback on partial rejection | ✅ Done |
-| `cpuPlaceholderDraft` (loop validation) | ✅ Done — ~0% acceptance rate (placeholder IDs, not trained) |
-| `vulkanDraft` (Mali GPU) | 🚧 Stub — falls through to CPU until trained head exists |
-| Trained Eagle-3 draft head | 🔄 Training in progress — see below |
-
-#### Draft head naming convention
-
-```
-{Family}-{TargetParams}-Eagle3Draft-{DraftParams}-{Chipset}-{Quant}-{Algo}-v{Version}-EAGLE3.rkllm
-```
-Example: `Qwen3-VL-2B-Instruct-Eagle3Draft-445M-rk3576-w4a16-grq-v1.2.3-EAGLE3.rkllm`
-
-**Why 445M:** the dominant cost is the untied LM head — `nn.Linear(2048, 151936)` = 311M parameters. The 2-layer causal transformer body with SwiGLU (intermediate 8192) adds 134M. The fp32 checkpoint is ~1.78 GB; the final bf16 release is ~891 MB. In w4a16 RKLLM format: ~222 MB on disk.
-
-**Mali timing implication:** the original 60ms Mali estimate assumed a ~50M head. At 445M the dominant cost is the LM head matrix multiply (2048 → 151936 in fp16). On Mali G52 this is still well under the 2200ms NPU verification window, but the actual figure should be benchmarked on-board before relying on the pipeline timing estimates.
-
-#### Draft head training — current run (M5 Max)
-
-| Parameter | Value |
-|-----------|-------|
-| Script | `eagle3_pkg.train` via MLX |
-| Target model | `unsloth/Qwen3-VL-2B-Instruct` (frozen, fp32) |
-| Dataset | `~/rkllm/data/combined/combined.parquet` — 1,526,766 sequences |
-| Train / val split | 1,511,499 train / 15,267 val (1% held out, evaluated every 500 steps) |
-| Epochs | 3 |
-| Effective batch size | 16 (physical micro-batch 8, gradient accumulation 2 steps) |
-| Total steps | 283,404 |
-| LR schedule | Cosine decay — 0.0003 → 0.0 over 283,404 steps |
-| Max sequence length | 512 tokens (logits scale quadratically; truncation cuts active VRAM 4×) |
-| Metal cache limit | 32 GB |
-| Peak VRAM | ~17.2–18.5 GB (14.1 GB frozen model + ~3–4 GB active tensors) |
-| Output | `~/rkllm/eagle3-Qwen3-VL-2B-Instruct/draft_head.safetensors` (bf16, ~891 MB) |
-
-**Confirmed healthy convergence:** loss dropped from 10.80 → 8.43 in 3 steps after the zero-gradient bug was fixed (MLX `value_and_grad` requires the model as the first argument to `loss_fn` — passing `draft_params` dict caused a zero-gradient flatline for the entire first run).
-
-**Key bugs found and fixed during training:**
-1. **Zero-gradient flatline** — `draft_head.update(params)` inside `nn.value_and_grad` detaches the autograd graph in MLX. Fix: `loss_fn(model, ...)` with `nn.value_and_grad(model, loss_fn)`.
-2. **Dual forward pass** — original code ran two separate target model passes (one for hidden states, one for target logits). Unified into a single `extract_hidden_states_and_logits()` call: ~50% target model compute reduction.
-3. **OOM / kernel panic** — logits tensor `[batch × seq_len × vocab]` at seq_len=2048 was ~10 GB. Fixed via `--max-len 512` (4× reduction) + gradient accumulation + `mx.clear_cache()` / `gc.collect()` after every optimizer step.
-
-**Post-training checklist:**
-1. Confirm final `draft_head.safetensors` is ~891 MB (bf16, untied LM head — if smaller, LM head was accidentally tied to target model weights)
-2. Convert to `.rkllm` via `rkllm-toolkit` on x86 Linux host (`10.3.0.241`) with w4a16 quantization
-3. Benchmark Mali forward pass time on-board before claiming the 2200ms pipeline timing holds
-4. Rename output per convention: `Qwen3-VL-2B-Instruct-Eagle3Draft-445M-rk3576-w4a16-grq-v1.2.3-EAGLE3.rkllm`
-
-#### prefillAndCache interaction
-
-`prefillAndCache` and Eagle-3 both use GET_LAST_HIDDEN_LAYER / KV state, but they are independent. Eagle-3's initial hidden-layer call does NOT benefit from a pre-warmed `prefillAndCache` snapshot — it runs its own GET_LAST_HIDDEN_LAYER from scratch on the current full prompt. The existing SSD prefix cache (`cache.js`) is bypassed for Eagle-3 requests.
-
-Future opportunity: a single "warm context" API call that saves KV to disk AND returns hidden states, eliminating the reload requirement from `prefillAndCache` and feeding Eagle-3 in one pass.
-
-#### 30% idle NPU capacity
-
-Single-token GENERATE leaves ~30% NPU bandwidth idle (memory stall cycles). GET_LOGITS with k=8 consumes the same wall time as k=1 — evidence that the NPU fills its idle stall windows with the additional k−1 tokens in parallel. Eagle-3's verification pass exploits this latent capacity. This is why the speedup at k=8 is significantly larger than k=4 despite the same verification wall time.
+**TODO: evaluate as an alternative/complement to Eagle-3.** Medusa uses multiple independent heads on the target's `GET_LAST_HIDDEN_LAYER` output (no recurrent transformer): simpler to train, all heads run in one Vulkan dispatch on Mali, each predicts a different future position (token tree, not chain) for potentially higher acceptance via tree sampling. Uses the same `RKLLM_INPUT_TOKEN` + `keep_history` infra already wired. Deferred until Eagle-3 end-to-end is validated. (Draft head on Mali not NPU: a ~50MB model would waste a whole NPU domain on <3% of compute; Mali is separate hardware, ~60ms hidden in the verify window; pattern in `vk_quant.hpp`, `kvcache_quant_napi.cpp`.)
 
 ---
 
-### 11.7 Medusa Heads — Revisit Later
-
-**TODO: evaluate Medusa as an alternative or complement to Eagle-3.**
-
-Medusa uses multiple independent prediction heads on the target model's hidden states (from `GET_LAST_HIDDEN_LAYER`) rather than a recurrent small transformer. Key differences vs Eagle-3:
-
-- Simpler to train (no sequential dependencies between heads)
-- Parallel head inference on Mali (all heads run simultaneously in one Vulkan dispatch)
-- Multiple heads each predict a different future position — forms a token tree rather than a chain
-- Potentially higher effective acceptance rate via tree sampling
-
-Requires the same `RKLLM_INPUT_TOKEN` + `keep_history` infrastructure already wired. Deferred until Eagle-3 end-to-end (trained draft head) is validated.
-
-**Why Mali for the draft head (not NPU):**
-- Using NPU domain 2 for a 50MB model wastes an entire domain on <3% of the compute workload
-- Mali is genuinely separate hardware — no NPU domain cost, no resource contention
-- Mali runs draft head in ~60ms, fully hidden by the 2200ms NPU verification window
-- Existing Vulkan infrastructure (`vk_quant.hpp`, `kvcache_quant_napi.cpp`) provides the pattern
-
-**Status:** Benchmark complete, architecture validated. Implementation pending (draft head training + Vulkan shader).
-
----
-
-## 12. Verification Plan
+## 11. Verification Plan
 
 ### Automated (Local)
 ```bash
@@ -955,7 +561,7 @@ npm test   # Playwright E2E against local mock server
 ```
 
 ### Manual (On-Device)
-1. Deploy via Section 8.8 above.
+1. Deploy via the script in Section 7.3 above.
 2. Open `http://10.6.0.14:8000/admin`.
 3. Complete first-launch setup (username + password).
 4. Load a `.rkllm` model from the Model Explorer.

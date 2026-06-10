@@ -20,14 +20,25 @@ if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
 
-// Fallback for node:sqlite DatabaseSync using better-sqlite3 on Node < 22.5.0
+// SQLite backend selection:
+//   - Node >= 22.5  -> built-in node:sqlite (native, fastest, zero deps)
+//   - Node <  22.5  -> node-sqlite3-wasm fallback
+//
+// The fallback is a WebAssembly build with no native binding, so it carries no
+// NODE_MODULE_VERSION / ABI lock — the same artifact runs on every Node major
+// (18/20/22/24) and every architecture. This is why the shipped .deb works on
+// stock Debian/Ubuntu Node (e.g. trixie's Node 20) without an ABI-matched
+// recompile. (The N-API addons in src/addon/ still compile per-arch, but they
+// are ABI-stable across Node majors.)
 let DatabaseSyncClass;
 try {
   const sqlite = await import('node:sqlite');
   DatabaseSyncClass = sqlite.DatabaseSync;
 } catch (e) {
   try {
-    const Database = (await import('better-sqlite3')).default;
+    // node-sqlite3-wasm is CommonJS — under dynamic import() its module.exports
+    // lands on `.default` (named exports are not statically detected).
+    const { Database } = (await import('node-sqlite3-wasm')).default;
     DatabaseSyncClass = class {
       constructor(dbPath) {
         this.db = new Database(dbPath);
@@ -36,22 +47,30 @@ try {
         return this.db.exec(sql);
       }
       prepare(sql) {
-        const stmt = this.db.prepare(sql);
-        return {
-          run(...args) {
-            stmt.run(...args);
-          },
-          get(...args) {
-            return stmt.get(...args);
-          },
-          all(...args) {
-            return stmt.all(...args);
+        // node:sqlite / better-sqlite3 bind params variadically — run(a, b, c) —
+        // whereas node-sqlite3-wasm takes a single array (positional) or object
+        // (named). All call sites here are positional, so we collect the varargs
+        // into an array. WASM statements must be finalized explicitly or they
+        // leak heap, so prepare-per-call and finalize; this also preserves the
+        // reusable-statement semantics the other backends provide.
+        const db = this.db;
+        const exec = (method, args) => {
+          const stmt = db.prepare(sql);
+          try {
+            return stmt[method](args.length ? args : undefined);
+          } finally {
+            stmt.finalize();
           }
+        };
+        return {
+          run(...args) { return exec('run', args); },
+          get(...args) { return exec('get', args); },
+          all(...args) { return exec('all', args); }
         };
       }
     };
   } catch (err) {
-    throw new Error('SQLite support is missing. Since your Node version is < 22.5.0, please run "npm install" to compile better-sqlite3.');
+    throw new Error('SQLite support is missing. Node < 22.5.0 requires the node-sqlite3-wasm fallback — run "npm install".');
   }
 }
 
