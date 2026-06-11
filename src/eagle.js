@@ -198,11 +198,17 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
   // ── Step 0: Initial hidden state extraction ────────────────────────────
   // keep_history=false: process full prompt from scratch, leave KV = [prompt tokens]
   const t0 = Date.now();
-  const hiddenMsg = await runNPUPrompt(currentPrompt, INFER_GET_HIDDEN_LAYER, false);
+  let hiddenMsg;
+  try {
+    hiddenMsg = await runNPUPrompt(currentPrompt, INFER_GET_HIDDEN_LAYER, false);
+  } catch (e) {
+    console.warn('[Eagle-3] GET_LAST_HIDDEN_LAYER failed:', e.message, '— falling back to standard generate');
+    return null;
+  }
   stats.npu_hidden_ms += Date.now() - t0;
 
   if (!hiddenMsg?.hidden_states) {
-    console.warn('[Eagle-3] GET_LAST_HIDDEN_LAYER returned no data — falling back to standard generate');
+    console.warn('[Eagle-3] GET_LAST_HIDDEN_LAYER returned no hidden_states — falling back to standard generate');
     return null;
   }
 
@@ -222,7 +228,9 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
     stats.steps++;
 
     const tNpu = Date.now();
-    const [verifyMsg, nextDraftIds] = await Promise.all([
+    let verifyMsg, nextDraftIds;
+    try {
+      [verifyMsg, nextDraftIds] = await Promise.all([
       // NPU: verify draft token IDs using RKLLM's tokenizer via RKLLM_INPUT_TOKEN.
       // keep_history=true: append these k tokens to the existing KV (built in step 0 or rollback).
       // RKLLM decodes them and reports text per-token via intermediate callbacks → _tokenTexts.
@@ -237,6 +245,10 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
         return ids;
       })(),
     ]);
+    } catch (e) {
+      console.warn('[Eagle-3] GET_LOGITS failed:', e.message, '— stopping generation');
+      break;
+    }
     stats.npu_verify_ms += Date.now() - tNpu;
 
     if (!verifyMsg?.logits) {
