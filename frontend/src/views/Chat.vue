@@ -312,8 +312,8 @@ import {
 
 // Delimiters wrapping the auto-injected MCP tool-instructions block so the
 // toggle can add/remove exactly that section without disturbing the user's text.
-const MCP_BLOCK_START = '<<< MCP TOOLS (auto-injected) >>>';
-const MCP_BLOCK_END = '<<< END MCP TOOLS >>>';
+const MCP_BLOCK_START = '--- MCP TOOLS (auto-injected) ---';
+const MCP_BLOCK_END = '--- END MCP TOOLS ---';
 
 export default {
   name: 'Chat',

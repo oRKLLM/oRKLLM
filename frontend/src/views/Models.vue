@@ -387,7 +387,7 @@
                           :items="[
                             {title:'CPU placeholder (validates pipeline, no trained head required)',value:'cpu'},
                             {title:'NPU — .rkllm head on a spare NPU core (multi-core chips)',value:'npu'},
-                            {title: spvAvailable ? 'Vulkan Mali GPU — .safetensors head on the GPU' : 'Vulkan Mali GPU — install Vulkan shaders in Settings first', value:'vulkan', props:{ disabled: !spvAvailable }},
+                            {title: spvAvailable ? 'Vulkan Mali GPU — .gguf head on the GPU' : 'Vulkan Mali GPU — install Vulkan shaders in Settings first', value:'vulkan', props:{ disabled: !spvAvailable }},
                           ]"
                           label="Draft head compute"
                           density="compact" variant="outlined" hide-details class="mb-3"
@@ -398,7 +398,7 @@
                           <div class="text-caption text-grey mb-2">
                             Select the trained draft head for this target. The
                             <strong>{{ settingsForm.eagle3_strategy === 'vulkan' ? 'Vulkan' : 'NPU' }}</strong> strategy uses a
-                            <code>{{ settingsForm.eagle3_strategy === 'vulkan' ? '.safetensors' : '.rkllm' }}</code> head.
+                            <code>{{ settingsForm.eagle3_strategy === 'vulkan' ? '.gguf' : '.rkllm' }}</code> head.
                             Download published heads from HuggingFace (Eagle-3 filter) or train your own.
                           </div>
                           <v-select
@@ -417,7 +417,7 @@
                             no-data-text="No Eagle-3 heads found — download one first"
                           ></v-select>
                           <div class="text-caption text-grey">
-                            Naming: <code>{Family}-{TargetParams}-Eagle3Draft-{DraftParams}-{Chipset}-{Quant}-{Algo}-v{Version}-EAGLE3.{{ settingsForm.eagle3_strategy === 'vulkan' ? 'safetensors' : 'rkllm' }}</code>
+                            Naming: <code>{Family}-{TargetParams}-Eagle3Draft-{DraftParams}-{Chipset}-{Quant}-{Algo}-v{Version}-EAGLE3.{{ settingsForm.eagle3_strategy === 'vulkan' ? 'gguf' : 'rkllm' }}</code>
                           </div>
                         </template>
                       </template>
