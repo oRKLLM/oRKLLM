@@ -8,7 +8,7 @@
   />
 
   <v-main class="bg-slate-page fill-height">
-    <v-container fluid class="pt-6 px-6" style="max-width: 860px;">
+    <v-container fluid class="pt-6 px-6 page-container">
 
       <!-- Snackbar -->
       <v-snackbar v-model="snackbar.show" :color="snackbar.color" location="bottom right" :timeout="3000">
@@ -17,6 +17,10 @@
 
       <div class="text-h5 font-weight-bold mb-1">Global Settings</div>
       <div class="text-caption text-grey mb-6">Server configuration and inference defaults for oRKLLM.</div>
+
+      <!-- Cards flow into 2 masonry columns on wide screens (single column below lg).
+           Each card stays intact (break-inside: avoid); the MCP card spans full width. -->
+      <div class="settings-masonry">
 
       <!-- Server Info -->
       <v-card class="glass-card pa-5 mb-5">
@@ -429,8 +433,8 @@
         </v-row>
       </v-card>
 
-      <!-- MCP Servers -->
-      <v-card class="glass-card pa-5 mb-5">
+      <!-- MCP Servers — full width (the server table needs the room) -->
+      <v-card class="glass-card pa-5 mb-5 settings-card--full">
         <div class="d-flex align-center justify-space-between mb-3 flex-wrap gap-2">
           <div class="section-heading">
             <v-icon color="primary" size="18" class="mr-2">mdi-toy-brick-outline</v-icon>
@@ -498,6 +502,8 @@
           </tbody>
         </v-table>
       </v-card>
+
+      </div><!-- /settings-masonry -->
 
       <!-- MCP add/edit dialog -->
       <v-dialog v-model="mcpDialog" max-width="560">
@@ -1101,6 +1107,27 @@ export default {
 }
 .v-theme--customLightTheme .bg-slate-page {
   background: #F1F5F9 !important;
+}
+
+/* Use available horizontal space on large displays instead of a narrow column */
+.page-container {
+  max-width: 1400px;
+  margin-inline: auto;
+}
+
+/* Settings cards: single column by default, two masonry columns on lg+.
+   Each card stays intact; the MCP card spans the full width. */
+.settings-masonry > .v-card {
+  break-inside: avoid;
+}
+@media (min-width: 1280px) {
+  .settings-masonry {
+    column-count: 2;
+    column-gap: 20px;
+  }
+  .settings-card--full {
+    column-span: all;
+  }
 }
 
 .glass-card {

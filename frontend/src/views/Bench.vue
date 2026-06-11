@@ -8,7 +8,7 @@
   />
 
   <v-main class="bg-slate-page fill-height">
-    <v-container fluid class="pt-6 px-6" style="max-width: 860px;">
+    <v-container fluid class="pt-6 px-6 page-container">
 
       <div class="d-flex align-center justify-space-between mb-5 flex-wrap gap-3">
         <div>
@@ -42,8 +42,11 @@
         <div class="text-caption">Platform: {{ status.isMock ? 'Mock Engine' : 'Rockchip NPU' }}</div>
       </v-alert>
 
+      <!-- On wide screens: config (left) beside live output + results (right). -->
+      <v-row class="bench-row">
+        <v-col cols="12" lg="5">
       <!-- Benchmark config card -->
-      <v-card class="glass-card pa-5 mb-5">
+      <v-card class="glass-card pa-5 mb-5 mb-lg-0">
         <div class="text-h6 font-weight-bold mb-4 d-flex align-center">
           <v-icon start color="primary">mdi-speedometer</v-icon>
           Performance Benchmark
@@ -95,6 +98,14 @@
           Abort
         </v-btn>
       </v-card>
+        </v-col>
+
+        <v-col cols="12" lg="7">
+          <!-- Placeholder before the first run so the right column isn't empty -->
+          <v-card v-if="!running && !benchOutput && !results" class="glass-card pa-8 d-flex flex-column align-center justify-center text-center" style="min-height: 200px;">
+            <v-icon size="48" color="grey-darken-1" class="mb-3">mdi-speedometer-slow</v-icon>
+            <div class="text-body-2 text-grey">Run a benchmark to see throughput metrics here.</div>
+          </v-card>
 
       <!-- Live output during run -->
       <v-card v-if="running || benchOutput" class="glass-card pa-5 mb-5">
@@ -160,8 +171,10 @@
           </v-chip>
         </div>
       </v-card>
+        </v-col>
+      </v-row>
 
-      <!-- Previous runs -->
+      <!-- Previous runs (full width — the table benefits most from horizontal space) -->
       <v-card v-if="history.length" class="glass-card pa-5 mt-5">
         <div class="d-flex align-center justify-space-between mb-3 flex-wrap gap-2">
           <div class="text-h6 font-weight-bold d-flex align-center">
@@ -382,6 +395,11 @@ export default {
 }
 .v-theme--customLightTheme .bg-slate-page {
   background: #F1F5F9 !important;
+}
+/* Use available horizontal space on large displays instead of a narrow column */
+.page-container {
+  max-width: 1400px;
+  margin-inline: auto;
 }
 
 .glass-card {
