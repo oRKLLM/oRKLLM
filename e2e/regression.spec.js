@@ -352,3 +352,55 @@ test('Chat: conversation persists when navigating away and back', async ({ page 
   await expect(page.locator('.message-bubble.bg-primary').filter({ hasText: 'Persistence check 123' })).toBeVisible({ timeout: 5000 });
   await expect(page.locator('.message-bubble').last()).toContainText('simulated response');
 });
+
+// ---------------------------------------------------------------------------
+// MCP servers — Settings CRUD
+// ---------------------------------------------------------------------------
+
+test('Settings: MCP server can be added, listed, and deleted', async ({ page }) => {
+  await login(page);
+  await page.goto('/settings');
+  await expect(page).toHaveURL(/\/settings/);
+
+  // MCP Servers section is present.
+  await expect(page.locator('.section-heading').filter({ hasText: 'MCP Servers' })).toBeVisible({ timeout: 8000 });
+
+  // Open the add dialog and fill a stdio server (no network needed; saved with validate:false).
+  await page.locator('button:has-text("Add Server")').click();
+  const dialog = page.locator('.v-overlay--active .v-card');
+  await expect(dialog.locator('text=Add MCP Server')).toBeVisible();
+  await dialog.locator('.v-text-field:has(label:has-text("Name")) input').fill('E2E MCP Server');
+  // Transport defaults to stdio → fill Command.
+  await dialog.locator('.v-text-field:has(label:has-text("Command")) input').fill('echo');
+  await dialog.locator('button:has-text("Save")').click();
+
+  // Row appears in the table.
+  const row = page.locator('.mcp-table tbody tr').filter({ hasText: 'E2E MCP Server' });
+  await expect(row).toBeVisible({ timeout: 5000 });
+  await expect(row.locator('.v-chip')).toContainText('stdio');
+
+  // Delete it.
+  await row.locator('button[title="Delete"]').click();
+  await expect(page.locator('.mcp-table tbody tr').filter({ hasText: 'E2E MCP Server' })).toHaveCount(0, { timeout: 5000 });
+});
+
+test('Settings: "Use MCP tools in inference" toggle persists', async ({ page }) => {
+  await login(page);
+  await page.goto('/settings');
+  await expect(page.locator('.section-heading').filter({ hasText: 'MCP Servers' })).toBeVisible({ timeout: 8000 });
+
+  // The toggle lives in the MCP card next to the "Use MCP tools in inference" label.
+  const toggleRow = page.locator('.v-card').filter({ hasText: 'Use MCP tools in inference' });
+  const sw = toggleRow.locator('.v-switch input[type="checkbox"]').first();
+  const before = await sw.isChecked();
+  await toggleRow.locator('.v-switch').first().click();
+  await page.locator('button:has-text("Save Settings")').click();
+  await expect(page.locator('.v-snackbar')).toContainText('Settings saved', { timeout: 5000 });
+
+  // Reload and confirm the new value stuck.
+  await page.reload();
+  await expect(page.locator('.section-heading').filter({ hasText: 'MCP Servers' })).toBeVisible({ timeout: 8000 });
+  const after = await page.locator('.v-card').filter({ hasText: 'Use MCP tools in inference' })
+    .locator('.v-switch input[type="checkbox"]').first().isChecked();
+  expect(after).toBe(!before);
+});

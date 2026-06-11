@@ -128,14 +128,17 @@ graph TD
 | `src/worker.js` | Process-isolated inference worker; receives `load`/`run`/`unload` IPC commands from pool |
 | `src/pool.js` | Single-active-model lock, auto-swap, idle timeout, pin-to-keep-loaded; runtime version auto-discovery (`getAvailableRuntimes`, `readSoVersion`, `runtimeCandidates`, `_tryLoad`), caches winning lib path; `prefillAndCache` (abort-after-first-token KV warm); `generateSpeculative`/`generateEagle3`, `loadDraft`/`unloadDraft` for second worker slot |
 | `src/admin/conversations.js` | 6 REST endpoints for conversation CRUD + message append (`/api/admin/conversations/…`) |
+| `src/admin/mcp.js` | REST endpoints for MCP server CRUD (`/api/admin/mcp-servers`): list, create (optional validate), patch, delete, `:id/test`, `/validate` (unsaved payload) |
+| `src/mcp.js` | MCP client layer over `@modelcontextprotocol/sdk`: builds stdio/SSE/streamable-HTTP transports, validates a server (lists tools), caches live clients for enabled servers, aggregates tools into OpenAI function format (`mcp__<server>__<tool>` namespacing), executes tool calls |
+| `src/mcp_inference.js` | Prompt-driven tool-use loop (RKLLM has no native function-calling): injects a tool system prompt, parses `<tool_call>{…}</tool_call>`, executes via `src/mcp.js`, feeds `tool` results back, re-generates; caps at `MAX_TOOL_ROUNDS` (5). Injectable `runTool` for unit testing |
 | `src/runtime_sync.js` | Downloads aarch64 `librkllmrt.so` versions from the mirror list (`RUNTIME_MIRRORS`, override via `ORKLLM_RUNTIME_MIRRORS`) into `RUNTIMES_DIR`, first hit wins; skips non-ARM64-Linux; runs on startup, on load failure, and via `POST /api/admin/runtimes/sync` |
 | `src/monitor.js` | Polls CPU, RAM, SoC Temp, NPU load, GPU load (Mali), disk utilization; Rockchip-native on ARM64 Linux, simulated elsewhere |
 | `src/stats.js` | Records prefill/generation tokens and latencies in SQLite |
-| `src/db.js` | SQLite + PRAGMA user_version migration runner; 2 versioned migrations; all table accessors |
+| `src/db.js` | SQLite + PRAGMA user_version migration runner; 4 versioned migrations; all table accessors (incl. `mcp_servers`) |
 | `src/config.js` | Env-driven settings; multi-user credential helpers; PBKDF2-HMAC-SHA256 |
 | `src/cache.js` | Tiered SSD prefix KV cache (hot/cold LRU), sliding context window trim |
 | `src/server.js` | Fastify bootstrap; trustProxy config; mounts `/ws/metrics`, `/ws/logs`, static SPA, API routes |
-| `src/api/routes.js` | `/v1/chat/completions` (SSE streaming + prefix cache), `/v1/models` (recursive scan of MODELS_DIR including subdirectories), `/v1/embeddings` |
+| `src/api/routes.js` | `/v1/chat/completions` (SSE streaming + prefix cache; MCP tool-use loop when enabled), `/v1/models` (recursive scan of MODELS_DIR including subdirectories), `/v1/embeddings` |
 | `src/admin/routes.js` | Auth (local + OIDC + SAML), user CRUD, RBAC, HF proxy, audit log, settings (incl. trustedProxy, pinnedModel) |
 | `src/auth/routes.js` | OIDC (PKCE + confidential) and SAML 2.0 routes at `/auth/*` |
 | `src/auth/session.js` | Shared signCookie / verifyCookie / issueSessionCookie (userId\|username\|role\|expires\|HMAC) |
@@ -147,7 +150,7 @@ graph TD
 | `frontend/src/notify.js` | Global notification store; `notify(message, color)` drives a `v-snackbar` in `App.vue` via `app.config.globalProperties.$notify`; replaces all `alert()` browser popups |
 | `frontend/src/bench.js` | Module-scope `reactive()` benchmark store (`benchState`, `runBenchmark`, `abortBenchmark`); keeps the streaming run + results alive across route changes so `Bench.vue` can unmount/remount without losing state |
 | `frontend/src/chat.js` | Module-scope `reactive()` chat-session store (`chatState`, `sendMessage`, `abortGeneration`, conversation CRUD); an in-flight generation and its conversation survive navigating away from `/chat` and back. Partial-response `sendBeacon` is registered here on `pagehide` (true page unload only) |
-| `frontend/src/views/Settings.vue` | Global settings, HF token, prefix cache config, trusted proxy |
+| `frontend/src/views/Settings.vue` | Global settings, HF token, prefix cache config, trusted proxy, MCP servers (table + add/edit dialog with transport-adaptive fields, test/validate, enable toggle, "use MCP tools in inference" switch) |
 | `frontend/src/views/Logs.vue` | Full-page live log terminal (WebSocket) |
 | `frontend/src/views/Bench.vue` | Inference benchmark (TTFT, tok/s) |
 | `frontend/src/views/Chat.vue` | Full streaming chat against OpenAI-compatible API |
@@ -155,7 +158,7 @@ graph TD
 | `frontend/src/views/Login.vue` | Login page; shows SSO button when OIDC/SAML configured |
 | `e2e/orkllm.spec.js` | Playwright E2E suite (41 tests — core flow, chat history, runtime, auto-download, download queue, dashboard, platform detection) |
 | `e2e/rbac.spec.js` | Playwright E2E suite (17 tests — RBAC, trusted proxy (single + multi-IP/CIDR), mock OIDC SSO, Keycloak integration) |
-| `e2e/regression.spec.js` | Playwright E2E suite (16 tests — UI regression: navbar, theme, user drawer, drawer toggles, Contribute button, snackbar, Bench/Chat state persistence across navigation) |
+| `e2e/regression.spec.js` | Playwright E2E suite (18 tests — UI regression: navbar, theme, user drawer, drawer toggles, Contribute button, snackbar, Bench/Chat state persistence across navigation, MCP server CRUD + inference toggle) |
 
 **Other paths:** `src/` also holds `auth/` (OIDC/SAML/session) and `eagle.js`. Non-source: `models/` (`.rkllm` files), `frontend/` (Vue 3 + Vuetify 3 SPA, Vite), `e2e/` (Playwright), root build config (`package.json`, `binding.gyp`, `playwright.config.js`). `CLAUDE.md` and `GEMINI.md` both `@AGENTS.md`.
 
@@ -292,6 +295,7 @@ Append to the `MIGRATIONS` array in `src/db.js`:
 | v1 | Initial schema: auth, stats, settings, model_settings |
 | v2 | Multi-user RBAC: users, auth_provider_config, audit_log |
 | v3 | Chat history: conversations, messages (with FK cascade delete and indexes) |
+| v4 | MCP servers: mcp_servers table (id, name, transport, config JSON, enabled) |
 
 ---
 
@@ -416,6 +420,7 @@ Include the applicable chipset tag(s). This enables oRKLLM's **Compatible chipse
 | Phase 21: Platform-Aware Search | ✅ Done | `/api/admin/status` returns `platform` (`rk3576`/`rk3588`/`null`) from device-tree; "Compatible chipset" filter appends slug to HF query; recursive scan of `models/{repoName}/`; wildcard model routes |
 | Phase 22: Speculative Decode (research) | 🔬 Research | Draft+target pool (`generateSpeculative`, `loadDraft`/`unloadDraft`); no speedup on single NPU; Eagle-3 viable at 3.73× — Sections 9 & 10 |
 | Phase 23: prefillAndCache | ✅ Done | Abort-after-first-token KV save; `POST /api/admin/prefill-cache`, `/infer-with-cache`; 75% (4B) / 100% (8B) prefill reduction; needs model reload between warm and serve — Section 9 |
+| Phase 24: MCP servers | ✅ Done | DB v4 `mcp_servers`; admin CRUD + validate/test (`/api/admin/mcp-servers`); Settings UI (stdio/SSE/HTTP transports); `@modelcontextprotocol/sdk` client (`src/mcp.js`); prompt-driven tool-use loop in `/v1/chat/completions` gated by `mcp_inference_enabled` (`src/mcp_inference.js`) |
 
 ---
 

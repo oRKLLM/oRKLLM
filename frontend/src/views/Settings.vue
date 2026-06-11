@@ -365,7 +365,117 @@
         </v-row>
       </v-card>
 
+      <!-- MCP Servers -->
+      <v-card class="glass-card pa-5 mb-5">
+        <div class="d-flex align-center justify-space-between mb-3 flex-wrap gap-2">
+          <div class="section-heading">
+            <v-icon color="primary" size="18" class="mr-2">mdi-toy-brick-outline</v-icon>
+            MCP Servers
+          </div>
+          <v-btn color="primary" variant="tonal" size="small" prepend-icon="mdi-plus" @click="openMcpDialog()">
+            Add Server
+          </v-btn>
+        </div>
+        <div class="text-caption text-grey mb-3">
+          Connect Model Context Protocol servers to expose their tools to loaded models during chat completions.
+          Supports <code>stdio</code> (local command), <code>SSE</code>, and streamable <code>HTTP</code> transports.
+        </div>
 
+        <div class="d-flex align-center justify-space-between mb-3">
+          <div>
+            <div class="text-subtitle-2 font-weight-medium">Use MCP tools in inference</div>
+            <div class="text-caption text-grey">Inject enabled servers' tools into <code>/v1/chat/completions</code> and run tool calls automatically.</div>
+          </div>
+          <v-switch v-model="settings.mcpInferenceEnabled" color="primary" density="compact" hide-details inset></v-switch>
+        </div>
+
+        <v-divider class="my-3"></v-divider>
+
+        <div v-if="mcpServers.length === 0" class="text-caption text-grey py-4 text-center">
+          No MCP servers configured yet.
+        </div>
+        <v-table v-else density="comfortable" class="mcp-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Transport</th>
+              <th>Endpoint</th>
+              <th class="text-center">Enabled</th>
+              <th class="text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="s in mcpServers" :key="s.id">
+              <td class="font-weight-medium">{{ s.name }}</td>
+              <td><v-chip size="x-small" variant="tonal" color="primary">{{ s.transport }}</v-chip></td>
+              <td class="font-mono text-caption text-truncate" style="max-width: 200px;">
+                {{ s.transport === 'stdio' ? s.config.command : s.config.url }}
+              </td>
+              <td class="text-center">
+                <v-switch
+                  :model-value="s.enabled"
+                  color="primary" density="compact" hide-details inset
+                  style="display:inline-flex"
+                  @update:model-value="toggleMcp(s, $event)"
+                ></v-switch>
+              </td>
+              <td class="text-right text-no-wrap">
+                <v-btn icon size="x-small" variant="text" :loading="mcpTesting === s.id" title="Test connection" @click="testMcp(s)">
+                  <v-icon size="16">mdi-connection</v-icon>
+                </v-btn>
+                <v-btn icon size="x-small" variant="text" color="primary" title="Edit" @click="openMcpDialog(s)">
+                  <v-icon size="16">mdi-pencil-outline</v-icon>
+                </v-btn>
+                <v-btn icon size="x-small" variant="text" color="error" title="Delete" @click="deleteMcp(s)">
+                  <v-icon size="16">mdi-delete-outline</v-icon>
+                </v-btn>
+              </td>
+            </tr>
+          </tbody>
+        </v-table>
+      </v-card>
+
+      <!-- MCP add/edit dialog -->
+      <v-dialog v-model="mcpDialog" max-width="560">
+        <v-card class="glass-card">
+          <v-card-title class="pa-5 pb-2 text-h6 font-weight-bold d-flex align-center">
+            <v-icon start color="primary">mdi-toy-brick-outline</v-icon>
+            {{ mcpForm.id ? 'Edit MCP Server' : 'Add MCP Server' }}
+          </v-card-title>
+          <v-card-text class="pa-5">
+            <v-text-field v-model="mcpForm.name" label="Name" variant="outlined" density="compact" class="mb-3" hide-details="auto"></v-text-field>
+            <v-select
+              v-model="mcpForm.transport"
+              :items="[{title:'stdio (local command)',value:'stdio'},{title:'SSE',value:'sse'},{title:'Streamable HTTP',value:'http'}]"
+              item-title="title" item-value="value"
+              label="Transport" variant="outlined" density="compact" class="mb-3" hide-details
+            ></v-select>
+
+            <template v-if="mcpForm.transport === 'stdio'">
+              <v-text-field v-model="mcpForm.command" label="Command" placeholder="npx" variant="outlined" density="compact" class="mb-3 font-mono" hide-details="auto"></v-text-field>
+              <v-text-field v-model="mcpForm.argsText" label="Arguments (space-separated)" placeholder="-y @modelcontextprotocol/server-filesystem /tmp" variant="outlined" density="compact" class="mb-3 font-mono" hide-details="auto"></v-text-field>
+              <v-textarea v-model="mcpForm.envText" label="Environment (KEY=value per line)" variant="outlined" density="compact" rows="2" class="mb-1 font-mono" hide-details="auto"></v-textarea>
+            </template>
+            <template v-else>
+              <v-text-field v-model="mcpForm.url" label="URL" placeholder="https://host/mcp" variant="outlined" density="compact" class="mb-3 font-mono" hide-details="auto"></v-text-field>
+              <v-textarea v-model="mcpForm.headersText" label="Headers (Key: value per line)" placeholder="Authorization: Bearer ..." variant="outlined" density="compact" rows="2" class="mb-1 font-mono" hide-details="auto"></v-textarea>
+            </template>
+
+            <div v-if="mcpError" class="text-error text-caption mt-3">{{ mcpError }}</div>
+            <div v-if="mcpTestResult" :class="['text-caption mt-3', mcpTestResult.ok ? 'text-success' : 'text-error']">
+              <template v-if="mcpTestResult.ok">
+                Connected — {{ mcpTestResult.tools.length }} tool(s){{ mcpTestResult.tools.length ? ': ' + mcpTestResult.tools.map(t => t.name).join(', ') : '' }}
+              </template>
+              <template v-else>Failed: {{ mcpTestResult.error }}</template>
+            </div>
+          </v-card-text>
+          <v-card-actions class="pa-5 pt-0 justify-end gap-2">
+            <v-btn variant="text" color="grey" @click="mcpDialog = false">Cancel</v-btn>
+            <v-btn variant="text" color="primary" :loading="mcpDialogTesting" @click="testMcpForm">Test</v-btn>
+            <v-btn variant="flat" color="primary" :loading="mcpSaving" @click="saveMcp">Save</v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
 
       <!-- Save -->
       <div class="d-flex justify-end mb-8">
@@ -405,6 +515,7 @@ export default {
       trustedProxy: '',
       autoDownloadRuntimes: true,
       savedAutoDownloadRuntimes: true,
+      mcpInferenceEnabled: false,
     },
     cacheStats: null,
     clearingCache: false,
@@ -414,6 +525,15 @@ export default {
     saving: false,
     hfTokenSaving: false,
     showHfToken: false,
+    // MCP servers
+    mcpServers: [],
+    mcpDialog: false,
+    mcpSaving: false,
+    mcpDialogTesting: false,
+    mcpTesting: null,
+    mcpError: '',
+    mcpTestResult: null,
+    mcpForm: { id: null, name: '', transport: 'stdio', command: '', argsText: '', envText: '', url: '', headersText: '' },
     snackbar: { show: false, text: '', color: 'success' },
     appVersion: __APP_VERSION__,
     themeName: localStorage.getItem('orkllm-theme') || 'customDarkTheme'
@@ -426,6 +546,7 @@ export default {
   mounted() {
     this.fetchAuth();
     this.fetchSettings();
+    this.fetchMcpServers();
   },
   methods: {
     async fetchAuth() {
@@ -460,8 +581,136 @@ export default {
         this.settings.trustedProxy          = s.trustedProxy ?? '';
         this.settings.autoDownloadRuntimes  = s.autoDownloadRuntimes ?? true;
         this.savedAutoDownloadRuntimes       = this.settings.autoDownloadRuntimes;
+        this.settings.mcpInferenceEnabled   = s.mcpInferenceEnabled ?? false;
         this.cacheStats = data.cacheStats || null;
       } catch (e) {}
+    },
+
+    // ── MCP servers ─────────────────────────────────────────────────────────
+    async fetchMcpServers() {
+      try {
+        const res = await fetch('/api/admin/mcp-servers');
+        if (res.ok) this.mcpServers = (await res.json()).servers || [];
+      } catch (e) {}
+    },
+    openMcpDialog(server = null) {
+      this.mcpError = '';
+      this.mcpTestResult = null;
+      if (server) {
+        const c = server.config || {};
+        this.mcpForm = {
+          id: server.id,
+          name: server.name,
+          transport: server.transport,
+          command: c.command || '',
+          argsText: Array.isArray(c.args) ? c.args.join(' ') : '',
+          envText: Object.entries(c.env || {}).map(([k, v]) => `${k}=${v}`).join('\n'),
+          url: c.url || '',
+          headersText: Object.entries(c.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n'),
+        };
+      } else {
+        this.mcpForm = { id: null, name: '', transport: 'stdio', command: '', argsText: '', envText: '', url: '', headersText: '' };
+      }
+      this.mcpDialog = true;
+    },
+    // Build { transport, config } from the dialog's free-text fields.
+    mcpFormToPayload() {
+      const f = this.mcpForm;
+      const config = {};
+      if (f.transport === 'stdio') {
+        config.command = f.command.trim();
+        config.args = f.argsText.trim() ? f.argsText.trim().split(/\s+/) : [];
+        config.env = {};
+        for (const line of f.envText.split('\n')) {
+          const idx = line.indexOf('=');
+          if (idx > 0) config.env[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+        }
+      } else {
+        config.url = f.url.trim();
+        config.headers = {};
+        for (const line of f.headersText.split('\n')) {
+          const idx = line.indexOf(':');
+          if (idx > 0) config.headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+        }
+      }
+      return { name: f.name.trim(), transport: f.transport, config };
+    },
+    async testMcpForm() {
+      this.mcpError = '';
+      this.mcpTestResult = null;
+      this.mcpDialogTesting = true;
+      try {
+        const res = await fetch('/api/admin/mcp-servers/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(this.mcpFormToPayload()),
+        });
+        const data = await res.json();
+        if (res.ok) this.mcpTestResult = data;
+        else this.mcpError = data.error || 'Validation failed';
+      } catch (e) {
+        this.mcpError = 'Network error';
+      } finally {
+        this.mcpDialogTesting = false;
+      }
+    },
+    async saveMcp() {
+      this.mcpError = '';
+      const payload = this.mcpFormToPayload();
+      if (!payload.name) { this.mcpError = 'Name is required.'; return; }
+      this.mcpSaving = true;
+      try {
+        const editing = !!this.mcpForm.id;
+        const url = editing ? `/api/admin/mcp-servers/${this.mcpForm.id}` : '/api/admin/mcp-servers';
+        const res = await fetch(url, {
+          method: editing ? 'PATCH' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...payload, validate: false }),
+        });
+        if (res.ok) {
+          this.mcpDialog = false;
+          this.notify(editing ? 'MCP server updated' : 'MCP server added', 'success');
+          await this.fetchMcpServers();
+        } else {
+          const d = await res.json();
+          this.mcpError = d.error || 'Failed to save';
+        }
+      } catch (e) {
+        this.mcpError = 'Network error';
+      } finally {
+        this.mcpSaving = false;
+      }
+    },
+    async toggleMcp(server, enabled) {
+      try {
+        const res = await fetch(`/api/admin/mcp-servers/${server.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled }),
+        });
+        if (res.ok) { await this.fetchMcpServers(); }
+        else this.notify('Failed to update server', 'error');
+      } catch (e) { this.notify('Network error', 'error'); }
+    },
+    async testMcp(server) {
+      this.mcpTesting = server.id;
+      try {
+        const res = await fetch(`/api/admin/mcp-servers/${server.id}/test`, { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) this.notify(`${server.name}: ${data.tools.length} tool(s) available`, 'success');
+        else this.notify(`${server.name}: ${data.error}`, 'error');
+      } catch (e) {
+        this.notify('Network error', 'error');
+      } finally {
+        this.mcpTesting = null;
+      }
+    },
+    async deleteMcp(server) {
+      try {
+        const res = await fetch(`/api/admin/mcp-servers/${server.id}`, { method: 'DELETE' });
+        if (res.ok) { this.notify('MCP server deleted', 'success'); await this.fetchMcpServers(); }
+        else this.notify('Failed to delete', 'error');
+      } catch (e) { this.notify('Network error', 'error'); }
     },
     formatMB(mb) {
       if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';

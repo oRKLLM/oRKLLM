@@ -3,9 +3,11 @@ import path from 'path';
 import { MODELS_DIR, parseRuntimeVersion } from '../config.js';
 import pool from '../pool.js';
 import { recordRequest } from '../stats.js';
-import { dbGetModelSettings, dbSetModelSettings } from '../db.js';
+import { dbGetModelSettings, dbSetModelSettings, dbGetSetting, dbListEnabledMcpServers } from '../db.js';
 import { cacheKey, getCachePath, putCachePath, tmpCachePath, isCacheEnabled, getMaxContextTokens } from '../cache.js';
 import { traceInference } from '../langfuse.js';
+import { getAggregatedTools } from '../mcp.js';
+import { resolveWithTools } from '../mcp_inference.js';
 
 
 // Rough token estimate: ~4 chars per token
@@ -128,6 +130,7 @@ export default async function apiRoutes(fastify, options) {
         if (msg.role === 'system')    p += `<|im_start|>system\n${msg.content}<|im_end|>\n`;
         else if (msg.role === 'user') p += `<|im_start|>user\n${msg.content}<|im_end|>\n`;
         else if (msg.role === 'assistant') p += `<|im_start|>assistant\n${msg.content}<|im_end|>\n`;
+        else if (msg.role === 'tool') p += `<|im_start|>tool\n${msg.content}<|im_end|>\n`;
       }
       return p + `<|im_start|>assistant\n`;
     }
@@ -172,6 +175,70 @@ export default async function apiRoutes(fastify, options) {
       },
       metadata: { cache_hit: !!loadCachePath },
     };
+
+    // ── MCP tool use ─────────────────────────────────────────────────────
+    // When enabled and at least one enabled server advertises tools, run the
+    // prompt-driven tool loop instead of a single generation. Prefix cache and
+    // speculative paths are bypassed for tool rounds (correctness over speed).
+    if (dbGetSetting('mcp_inference_enabled') === '1') {
+      let mcpTools = null;
+      try {
+        const servers = dbListEnabledMcpServers();
+        if (servers.length > 0) {
+          const agg = await getAggregatedTools(servers);
+          if (agg.tools.length > 0) mcpTools = agg;
+        }
+      } catch (e) {
+        console.error('[MCP] Tool aggregation failed:', e.message);
+      }
+
+      if (mcpTools) {
+        const generate = async (p) => {
+          let t = '';
+          const r = await pool.generate(model, p, modelOptions, (m) => { if (m.text) t += m.text; }, {});
+          return { text: t, perf: r.perf };
+        };
+        let resolved;
+        try {
+          resolved = await resolveWithTools({
+            messages: trimmed, tools: mcpTools.tools, lookup: mcpTools.lookup, formatMessages, generate,
+          });
+        } catch (err) {
+          if (stream) {
+            reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+            reply.raw.write(`data: ${JSON.stringify({ error: { message: err.message, type: 'invalid_request_error' } })}\n\n`);
+            reply.raw.end();
+            return reply;
+          }
+          return reply.status(500).send({ error: err.message });
+        }
+        recordRequest(resolved.perf);
+        const finalText = resolved.finalText || '';
+
+        if (stream) {
+          reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+          // Emit the resolved answer as word chunks to preserve the streaming contract.
+          for (const piece of finalText.match(/\S+\s*/g) || [finalText]) {
+            reply.raw.write(`data: ${JSON.stringify({ id: completionId, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: { content: piece }, finish_reason: null }] })}\n\n`);
+          }
+          reply.raw.write(`data: ${JSON.stringify({ id: completionId, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], perf: resolved.perf, mcp_tool_calls: resolved.toolCalls })}\n\n`);
+          reply.raw.write('data: [DONE]\n\n');
+          reply.raw.end();
+          return reply;
+        }
+        return {
+          id: completionId, object: 'chat.completion', created, model,
+          choices: [{ index: 0, message: { role: 'assistant', content: finalText }, finish_reason: 'stop' }],
+          usage: {
+            prompt_tokens:     resolved.perf?.prefill_tokens  || 0,
+            completion_tokens: resolved.perf?.generate_tokens || 0,
+            total_tokens:      (resolved.perf?.prefill_tokens || 0) + (resolved.perf?.generate_tokens || 0),
+          },
+          perf: resolved.perf,
+          mcp_tool_calls: resolved.toolCalls,
+        };
+      }
+    }
 
     if (stream) {
       reply.raw.writeHead(200, {
