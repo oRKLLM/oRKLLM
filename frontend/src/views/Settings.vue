@@ -458,7 +458,34 @@
             </template>
             <template v-else>
               <v-text-field v-model="mcpForm.url" label="URL" placeholder="https://host/mcp" variant="outlined" density="compact" class="mb-3 font-mono" hide-details="auto"></v-text-field>
-              <v-textarea v-model="mcpForm.headersText" label="Headers (Key: value per line)" placeholder="Authorization: Bearer ..." variant="outlined" density="compact" rows="2" class="mb-1 font-mono" hide-details="auto"></v-textarea>
+              <v-select
+                v-model="mcpForm.authType"
+                :items="[{title:'None',value:'none'},{title:'Bearer token',value:'bearer'},{title:'API key (header)',value:'apikey'},{title:'Basic',value:'basic'},{title:'Custom headers',value:'custom'}]"
+                item-title="title" item-value="value"
+                label="Authentication" variant="outlined" density="compact" class="mb-3" hide-details
+              ></v-select>
+
+              <v-textarea
+                v-if="mcpForm.authType === 'bearer'"
+                v-model="mcpForm.bearerToken" label="Bearer token" placeholder="eyJhbGciOi…"
+                variant="outlined" density="compact" rows="2" class="mb-1 font-mono" hide-details="auto"
+              ></v-textarea>
+
+              <template v-else-if="mcpForm.authType === 'apikey'">
+                <v-text-field v-model="mcpForm.apiKeyName" label="Header name" placeholder="X-API-Key" variant="outlined" density="compact" class="mb-3 font-mono" hide-details="auto"></v-text-field>
+                <v-text-field v-model="mcpForm.apiKeyValue" label="Key value" variant="outlined" density="compact" class="mb-1 font-mono" hide-details="auto"></v-text-field>
+              </template>
+
+              <template v-else-if="mcpForm.authType === 'basic'">
+                <v-text-field v-model="mcpForm.basicUser" label="Username" variant="outlined" density="compact" class="mb-3" hide-details="auto"></v-text-field>
+                <v-text-field v-model="mcpForm.basicPass" label="Password" type="password" variant="outlined" density="compact" class="mb-1" hide-details="auto"></v-text-field>
+              </template>
+
+              <v-textarea
+                v-else-if="mcpForm.authType === 'custom'"
+                v-model="mcpForm.headersText" label="Headers (Key: value per line)" placeholder="Authorization: Bearer ...&#10;X-Custom-Header: value"
+                variant="outlined" density="compact" rows="3" class="mb-1 font-mono" hide-details="auto"
+              ></v-textarea>
             </template>
 
             <div v-if="mcpError" class="text-error text-caption mt-3">{{ mcpError }}</div>
@@ -533,7 +560,7 @@ export default {
     mcpTesting: null,
     mcpError: '',
     mcpTestResult: null,
-    mcpForm: { id: null, name: '', transport: 'stdio', command: '', argsText: '', envText: '', url: '', headersText: '' },
+    mcpForm: { id: null, name: '', transport: 'stdio', command: '', argsText: '', envText: '', url: '', authType: 'none', bearerToken: '', apiKeyName: 'X-API-Key', apiKeyValue: '', basicUser: '', basicPass: '', headersText: '' },
     snackbar: { show: false, text: '', color: 'success' },
     appVersion: __APP_VERSION__,
     themeName: localStorage.getItem('orkllm-theme') || 'customDarkTheme'
@@ -598,6 +625,20 @@ export default {
       this.mcpTestResult = null;
       if (server) {
         const c = server.config || {};
+        // Repopulate auth fields from structured config.auth; fall back to a
+        // legacy plain headers map (pre-auth servers) as "custom".
+        const auth = c.auth || null;
+        let authType = 'none', bearerToken = '', apiKeyName = 'X-API-Key', apiKeyValue = '', basicUser = '', basicPass = '', headersText = '';
+        if (auth) {
+          authType = auth.type || 'none';
+          if (authType === 'bearer') bearerToken = auth.token || '';
+          else if (authType === 'apikey') { apiKeyName = auth.headerName || 'X-API-Key'; apiKeyValue = auth.value || ''; }
+          else if (authType === 'basic') { basicUser = auth.username || ''; basicPass = auth.password || ''; }
+          else if (authType === 'custom') headersText = Object.entries(auth.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n');
+        } else if (c.headers && Object.keys(c.headers).length) {
+          authType = 'custom';
+          headersText = Object.entries(c.headers).map(([k, v]) => `${k}: ${v}`).join('\n');
+        }
         this.mcpForm = {
           id: server.id,
           name: server.name,
@@ -606,10 +647,10 @@ export default {
           argsText: Array.isArray(c.args) ? c.args.join(' ') : '',
           envText: Object.entries(c.env || {}).map(([k, v]) => `${k}=${v}`).join('\n'),
           url: c.url || '',
-          headersText: Object.entries(c.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n'),
+          authType, bearerToken, apiKeyName, apiKeyValue, basicUser, basicPass, headersText,
         };
       } else {
-        this.mcpForm = { id: null, name: '', transport: 'stdio', command: '', argsText: '', envText: '', url: '', headersText: '' };
+        this.mcpForm = { id: null, name: '', transport: 'stdio', command: '', argsText: '', envText: '', url: '', authType: 'none', bearerToken: '', apiKeyName: 'X-API-Key', apiKeyValue: '', basicUser: '', basicPass: '', headersText: '' };
       }
       this.mcpDialog = true;
     },
@@ -627,11 +668,25 @@ export default {
         }
       } else {
         config.url = f.url.trim();
-        config.headers = {};
-        for (const line of f.headersText.split('\n')) {
-          const idx = line.indexOf(':');
-          if (idx > 0) config.headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+        // Build a structured auth object; the backend turns it into request
+        // headers (resolveHeaders in src/mcp.js).
+        const auth = { type: f.authType || 'none' };
+        if (auth.type === 'bearer') {
+          auth.token = f.bearerToken.trim();
+        } else if (auth.type === 'apikey') {
+          auth.headerName = (f.apiKeyName || 'X-API-Key').trim();
+          auth.value = f.apiKeyValue.trim();
+        } else if (auth.type === 'basic') {
+          auth.username = f.basicUser;
+          auth.password = f.basicPass;
+        } else if (auth.type === 'custom') {
+          auth.headers = {};
+          for (const line of f.headersText.split('\n')) {
+            const idx = line.indexOf(':');
+            if (idx > 0) auth.headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+          }
         }
+        config.auth = auth;
       }
       return { name: f.name.trim(), transport: f.transport, config };
     },

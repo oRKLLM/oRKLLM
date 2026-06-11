@@ -23,6 +23,33 @@ function configKey(server) {
   return `${server.transport}:${JSON.stringify(server.config || {})}`;
 }
 
+// Build the HTTP request headers for an SSE/HTTP server from its structured
+// `auth` config, then merge any explicit `headers` map on top (legacy configs
+// stored a plain headers map and no auth — those still work unchanged).
+export function resolveHeaders(cfg) {
+  const auth = cfg.auth || {};
+  const h = {};
+  switch (auth.type) {
+    case 'bearer':
+      if (auth.token) h['Authorization'] = `Bearer ${auth.token}`;
+      break;
+    case 'apikey':
+      if (auth.headerName && auth.value) h[auth.headerName] = auth.value;
+      break;
+    case 'basic':
+      if (auth.username != null) {
+        const encoded = Buffer.from(`${auth.username}:${auth.password ?? ''}`).toString('base64');
+        h['Authorization'] = `Basic ${encoded}`;
+      }
+      break;
+    case 'custom':
+      Object.assign(h, auth.headers || {});
+      break;
+    // 'none' / undefined → no auth headers
+  }
+  return { ...h, ...(cfg.headers || {}) };
+}
+
 function buildTransport(server) {
   const cfg = server.config || {};
   if (server.transport === 'stdio') {
@@ -36,7 +63,7 @@ function buildTransport(server) {
   }
   if (server.transport === 'sse') {
     if (!cfg.url) throw new Error('sse transport requires a url');
-    const headers = cfg.headers || {};
+    const headers = resolveHeaders(cfg);
     return new SSEClientTransport(new URL(cfg.url), {
       requestInit: { headers },
       eventSourceInit: {
@@ -47,7 +74,7 @@ function buildTransport(server) {
   if (server.transport === 'http') {
     if (!cfg.url) throw new Error('http transport requires a url');
     return new StreamableHTTPClientTransport(new URL(cfg.url), {
-      requestInit: { headers: cfg.headers || {} },
+      requestInit: { headers: resolveHeaders(cfg) },
     });
   }
   throw new Error(`Unknown transport: ${server.transport}`);
@@ -82,8 +109,11 @@ export async function validateServer(server) {
     client = await openClient(server);
     const res = await withTimeout(client.listTools(), CONNECT_TIMEOUT_MS, 'MCP listTools');
     const tools = (res.tools || []).map(t => ({ name: t.name, description: t.description || '' }));
+    console.log(`[MCP] Validated "${server.name}" (${server.transport}): ${tools.length} tool(s)`);
     return { ok: true, tools };
   } catch (e) {
+    const detail = e.cause?.message || (e.cause ? String(e.cause) : null);
+    console.error(`[MCP] Validation failed for "${server.name}" (${server.transport}, ${server.config?.url || server.config?.command || '?'}): ${e.message}${detail ? ` — ${detail}` : ''}`);
     return { ok: false, error: e.message };
   } finally {
     if (client) { try { await client.close(); } catch (e) {} }
@@ -137,7 +167,8 @@ export async function getAggregatedTools(servers) {
         });
       }
     } catch (e) {
-      console.error(`[MCP] Skipping server "${server.name}": ${e.message}`);
+      const detail = e.cause?.message || (e.cause ? String(e.cause) : null);
+      console.error(`[MCP] Skipping server "${server.name}" (${server.transport}, ${server.config?.url || server.config?.command || '?'}): ${e.message}${detail ? ` — ${detail}` : ''}`);
     }
   }
   return { tools, lookup };
