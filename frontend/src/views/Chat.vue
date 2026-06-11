@@ -481,9 +481,15 @@ export default {
       } catch (e) {}
     },
     stripMcpBlock(text) {
-      // Remove a previously injected block (with surrounding blank lines).
-      const re = new RegExp(`\\n*${MCP_BLOCK_START}[\\s\\S]*?${MCP_BLOCK_END}\\n*`, 'g');
-      return text.replace(re, '').trimEnd();
+      // Remove a previously injected block by locating its delimiters directly.
+      // (String search — the markers contain regex-special chars like "()", so
+      // building a RegExp from them would silently fail to match.)
+      const start = text.indexOf(MCP_BLOCK_START);
+      if (start === -1) return text;
+      const endIdx = text.indexOf(MCP_BLOCK_END, start);
+      if (endIdx === -1) return text;
+      const end = endIdx + MCP_BLOCK_END.length;
+      return (text.slice(0, start) + text.slice(end)).replace(/\n{3,}/g, '\n\n').trimEnd();
     },
     async toggleMcpInject(on) {
       // Always start from a clean prompt (no stale block).
