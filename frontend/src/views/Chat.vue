@@ -203,8 +203,8 @@
               >
                 <div class="message-text" v-html="formatMessage(msg.content)"></div>
                 <div v-if="msg.perf" class="text-caption text-grey-lighten-1 mt-2 border-top-dashed pt-1">
-                  Prefill: {{ msg.perf.prefill_time_ms.toFixed(1) }}ms |
-                  Rate: {{ (msg.perf.generate_tokens / (msg.perf.generate_time_ms / 1000)).toFixed(1) }} t/s
+                  Prefill: {{ (msg.perf.prefill_time_ms ?? 0).toFixed(1) }}ms |
+                  Rate: {{ msg.perf.generate_time_ms ? (msg.perf.generate_tokens / (msg.perf.generate_time_ms / 1000)).toFixed(1) : '—' }} t/s
                 </div>
               </div>
 

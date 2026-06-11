@@ -655,10 +655,31 @@ class EnginePool {
         console.warn('[Eagle-3] Falling back to standard generate (no hidden states)');
         return this.generate(modelName, prompt, options, onToken);
       }
-      console.log(`[Eagle-3] Done — acceptance: ${(stats.acceptance_rate * 100).toFixed(0)}%  ` +
-        `draft hidden: ${stats.draft_hidden_pct || 'N/A'}  ` +
+      const acceptRate = stats.drafted > 0 ? stats.accepted / stats.drafted : 0;
+      const draftHiddenPct = stats.npu_verify_ms > 0
+        ? (stats.draft_ms / stats.npu_verify_ms * 100).toFixed(1) + '%' : 'N/A';
+      console.log(`[Eagle-3] Done — acceptance: ${(acceptRate * 100).toFixed(0)}%  ` +
+        `draft hidden: ${draftHiddenPct}  ` +
         `tokens: ${stats.accepted + stats.corrected}`);
-      return { perf: { generate_tokens: stats.accepted + stats.corrected } };
+      return {
+        perf: {
+          prefill_time_ms:  stats.npu_hidden_ms,
+          prefill_tokens:   0,
+          generate_time_ms: stats.npu_verify_ms,
+          generate_tokens:  stats.accepted + stats.corrected,
+          eagle_stats: {
+            steps:           stats.steps,
+            drafted:         stats.drafted,
+            accepted:        stats.accepted,
+            corrected:       stats.corrected,
+            acceptance_rate: acceptRate,
+            npu_hidden_ms:   stats.npu_hidden_ms,
+            npu_verify_ms:   stats.npu_verify_ms,
+            draft_ms:        stats.draft_ms,
+            draft_hidden_pct: draftHiddenPct,
+          },
+        },
+      };
     } finally {
       slot.activeGeneration = null;
       this.resetIdleTimer(slot);
