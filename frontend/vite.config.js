@@ -32,9 +32,10 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff,woff2}'],
         navigateFallback: '/index.html',
-        // Never serve the cached shell for API/WS paths — those stay network-only
-        // (live inference/metrics; a cached/stale or HTML-for-JSON response would break them).
-        navigateFallbackDenylist: [/^\/api/, /^\/v1/, /^\/ws/],
+        // Never serve the cached shell for server-handled paths — these must hit
+        // the network: API/WS (live inference/metrics), and /auth/* (OIDC/SAML
+        // redirects + callbacks — shadowing them with index.html breaks SSO).
+        navigateFallbackDenylist: [/^\/api/, /^\/v1/, /^\/ws/, /^\/auth/],
         cleanupOutdatedCaches: true,
         // No runtimeCaching: only the built app-shell is precached.
       },

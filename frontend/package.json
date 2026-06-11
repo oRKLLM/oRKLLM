@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@mdi/font": "^7.4.47",
+    "qrcode": "^1.5.4",
     "vue": "^3.5.13",
     "vue-router": "^4.3.0",
     "vuetify": "^3.7.0"

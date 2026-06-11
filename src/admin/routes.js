@@ -494,6 +494,52 @@ export default async function adminRoutes(fastify, options) {
     return { success: true, message: `Downloading runtime ${version} in background` };
   });
 
+  // ── Tailscale (optional, runtime-detected) ────────────────────────────────
+  // GET /api/admin/tailscale — current state (installed/loggedIn/serve/url)
+  fastify.get('/tailscale', { preHandler: requireAdmin }, async () => {
+    const ts = await import('../tailscale.js');
+    const state = await ts.getState();
+    state.serveEnabledSetting = dbGetSetting('tailscale_serve_enabled') === '1';
+    return state;
+  });
+
+  // POST /api/admin/tailscale/setup { authKey, hostname } — join tailnet + serve.
+  // The auth key is used once and never persisted (tailscaled keeps its own state).
+  fastify.post('/tailscale/setup', { preHandler: requireAdmin }, async (request, reply) => {
+    const { authKey, hostname } = request.body || {};
+    if (!authKey) return reply.status(400).send({ error: 'authKey required' });
+    const ts = await import('../tailscale.js');
+    if (!(await ts.isAvailable())) {
+      return reply.status(409).send({ error: 'Tailscale is not installed on the server', code: 'NOT_INSTALLED' });
+    }
+    const upRes = await ts.up({ authKey, hostname });
+    if (!upRes.ok) return reply.status(500).send({ error: upRes.error });
+    const port = request.server.server.address()?.port || 8000;
+    const serveRes = await ts.enableServe(port);
+    if (!serveRes.ok) return reply.status(500).send({ error: serveRes.error });
+    dbSetSetting('tailscale_serve_enabled', '1');
+    logAudit(request, 'tailscale_setup', hostname || null);
+    const state = await ts.getState();
+    return { success: true, serveUrl: state.serveUrl };
+  });
+
+  // POST /api/admin/tailscale/serve { enabled } — toggle serve on/off
+  fastify.post('/tailscale/serve', { preHandler: requireAdmin }, async (request, reply) => {
+    const { enabled } = request.body || {};
+    if (typeof enabled !== 'boolean') return reply.status(400).send({ error: 'enabled (boolean) required' });
+    const ts = await import('../tailscale.js');
+    if (!(await ts.isAvailable())) {
+      return reply.status(409).send({ error: 'Tailscale is not installed on the server', code: 'NOT_INSTALLED' });
+    }
+    const port = request.server.server.address()?.port || 8000;
+    const res = enabled ? await ts.enableServe(port) : await ts.disableServe();
+    if (!res.ok) return reply.status(500).send({ error: res.error });
+    dbSetSetting('tailscale_serve_enabled', enabled ? '1' : '0');
+    logAudit(request, 'tailscale_serve', enabled ? 'on' : 'off');
+    const state = await ts.getState();
+    return { success: true, serveUrl: state.serveUrl };
+  });
+
   // DELETE /api/admin/cache — clear all prefix cache files
   fastify.delete('/cache', async (request, reply) => {
     clearAllCache();

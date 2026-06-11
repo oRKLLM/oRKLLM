@@ -35,6 +35,10 @@
           <v-icon start>mdi-chart-timeline-variant</v-icon>
           Observability
         </v-tab>
+        <v-tab value="remote-access">
+          <v-icon start>mdi-shield-lock-outline</v-icon>
+          Remote Access
+        </v-tab>
       </v-tabs>
 
       <v-tabs-window v-model="tab">
@@ -816,6 +820,73 @@
           </v-card>
         </v-tabs-window-item>
 
+        <!-- Remote Access (Tailscale) -->
+        <v-tabs-window-item value="remote-access">
+          <v-card class="glass-card pa-5 mb-5">
+            <div class="section-heading mb-1">
+              <v-icon color="primary" size="18" class="mr-2">mdi-shield-lock-outline</v-icon>
+              Tailscale
+            </div>
+            <div class="text-caption text-grey mb-4">
+              Reach oRKLLM securely from anywhere over your <a href="https://tailscale.com" target="_blank" class="text-primary">Tailscale</a>
+              network — at LAN speed when home, over the relay when away — and install it as an app from the resulting HTTPS URL.
+              Only devices on your tailnet can connect; the server is never exposed to the public internet.
+            </div>
+
+            <!-- Status chips -->
+            <div class="d-flex align-center flex-wrap gap-2 mb-4">
+              <v-chip size="small" :color="ts.installed ? 'success' : 'grey'" variant="tonal">
+                <v-icon start size="14">{{ ts.installed ? 'mdi-check-circle' : 'mdi-close-circle' }}</v-icon>
+                {{ ts.installed ? 'Installed' : 'Not installed' }}
+              </v-chip>
+              <v-chip v-if="ts.installed" size="small" :color="ts.loggedIn ? 'success' : 'warning'" variant="tonal">
+                {{ ts.loggedIn ? 'On tailnet' : (ts.backendState || 'not connected') }}
+              </v-chip>
+              <v-chip v-if="ts.installed && ts.serveActive" size="small" color="primary" variant="tonal">Serving</v-chip>
+            </div>
+
+            <!-- Not installed -->
+            <v-alert v-if="!ts.installed" type="info" variant="tonal" density="comfortable" class="mb-2">
+              Tailscale must be installed on the server first.
+              <a href="https://tailscale.com/download/linux" target="_blank" class="text-primary font-weight-medium">Install Tailscale →</a>
+              Then reload this page.
+            </v-alert>
+
+            <!-- Installed, not yet serving → setup -->
+            <template v-else-if="!ts.serveActive">
+              <div class="text-subtitle-2 font-weight-medium mb-1">Connect &amp; serve</div>
+              <div class="text-caption text-grey mb-3">
+                Paste a <a href="https://login.tailscale.com/admin/settings/keys" target="_blank" class="text-primary">Tailscale auth key</a>
+                to join the tailnet headlessly and start serving. The key is used once and not stored.
+                Requires <strong>MagicDNS + HTTPS certificates</strong> enabled in your tailnet admin.
+              </div>
+              <v-text-field v-model="tsForm.authKey" label="Auth key" placeholder="tskey-auth-…" type="password"
+                variant="outlined" density="compact" class="mb-3 font-mono" hide-details="auto"></v-text-field>
+              <v-text-field v-model="tsForm.hostname" label="Hostname (optional)" placeholder="orkllm"
+                variant="outlined" density="compact" class="mb-3 font-mono" hide-details="auto" style="max-width:320px;"></v-text-field>
+              <v-btn color="primary" variant="flat" :loading="tsBusy" :disabled="!tsForm.authKey" prepend-icon="mdi-lan-connect" @click="tsSetup">
+                Connect &amp; start serving
+              </v-btn>
+            </template>
+
+            <!-- Serving → URL + QR + toggle -->
+            <template v-else>
+              <div class="text-subtitle-2 font-weight-medium mb-1">Serving at</div>
+              <div class="d-flex align-center gap-2 mb-3 flex-wrap">
+                <a :href="ts.serveUrl" target="_blank" class="text-primary font-mono">{{ ts.serveUrl }}</a>
+                <v-btn icon size="x-small" variant="text" title="Copy" @click="copyTo(ts.serveUrl)"><v-icon size="16">mdi-content-copy</v-icon></v-btn>
+              </div>
+              <div v-if="tsQr" class="mb-3">
+                <div class="text-caption text-grey mb-1">Scan to open / install on your phone (must be on your tailnet):</div>
+                <img :src="tsQr" alt="Tailscale URL QR" width="160" height="160" style="background:#fff;border-radius:8px;padding:6px;" />
+              </div>
+              <v-btn color="error" variant="outlined" size="small" :loading="tsBusy" prepend-icon="mdi-lan-disconnect" @click="tsToggleServe(false)">
+                Stop serving
+              </v-btn>
+            </template>
+          </v-card>
+        </v-tabs-window-item>
+
       </v-tabs-window>
     </v-container>
   </v-main>
@@ -829,6 +900,11 @@ export default {
   components: { AppNav },
   data: () => ({
     tab: 'users',
+    // Tailscale remote access
+    ts: { installed: false, loggedIn: false, backendState: null, serveActive: false, serveUrl: null },
+    tsForm: { authKey: '', hostname: '' },
+    tsBusy: false,
+    tsQr: null,
     langfuse: {
       enabled: false, baseUrl: '', publicKey: '', secretKey: '',
       showSecret: false, saving: false, testing: false, testResult: null,
@@ -938,6 +1014,7 @@ export default {
     this.fetchAuthProvider();
     this.fetchGlobalSettings();
     this.fetchAuditLog();
+    this.fetchTailscale();
     this.auditRefreshTimer = setInterval(() => this.fetchAuditLog(), 30000);
   },
   beforeUnmount() {
@@ -951,6 +1028,58 @@ export default {
         if (data.user) this.currentUser = data.user;
         else if (data.username) this.currentUser = { username: data.username, role: 'admin', authProvider: 'local' };
       } catch (e) {}
+    },
+
+    // ── Tailscale ─────────────────────────────────────────────────────────
+    async fetchTailscale() {
+      try {
+        const res = await fetch('/api/admin/tailscale');
+        if (res.ok) {
+          this.ts = await res.json();
+          if (this.ts.serveActive && this.ts.serveUrl) this.renderTsQr(this.ts.serveUrl);
+        }
+      } catch (e) {}
+    },
+    async renderTsQr(url) {
+      try {
+        const QR = (await import('qrcode')).default;
+        this.tsQr = await QR.toDataURL(url, { width: 320, margin: 1 });
+      } catch (e) { this.tsQr = null; }
+    },
+    async tsSetup() {
+      if (!this.tsForm.authKey) return;
+      this.tsBusy = true;
+      try {
+        const res = await fetch('/api/admin/tailscale/setup', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ authKey: this.tsForm.authKey.trim(), hostname: this.tsForm.hostname.trim() || undefined }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          this.tsForm.authKey = '';
+          this.notify('Tailscale connected — serving over HTTPS', 'success');
+          await this.fetchTailscale();
+        } else {
+          this.notify(data.error || 'Tailscale setup failed', 'error');
+        }
+      } catch (e) { this.notify('Network error', 'error'); }
+      finally { this.tsBusy = false; }
+    },
+    async tsToggleServe(enabled) {
+      this.tsBusy = true;
+      try {
+        const res = await fetch('/api/admin/tailscale/serve', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled }),
+        });
+        const data = await res.json();
+        if (res.ok) { this.notify(`Serving ${enabled ? 'started' : 'stopped'}`, 'success'); await this.fetchTailscale(); }
+        else this.notify(data.error || 'Failed', 'error');
+      } catch (e) { this.notify('Network error', 'error'); }
+      finally { this.tsBusy = false; }
+    },
+    async copyTo(text) {
+      try { await navigator.clipboard.writeText(text); this.notify('Copied', 'success'); } catch (e) {}
     },
     async fetchUsers() {
       this.loadingUsers = true;
