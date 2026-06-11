@@ -96,6 +96,7 @@
                 <div class="text-caption text-grey">GPU</div>
               </v-col>
 
+              <!-- Memory row: RAM usage, RAM bandwidth, Swap (colocated) -->
               <v-col cols="4" class="py-2">
                 <v-progress-circular :model-value="metrics.ram" :size="80" :width="7" color="teal" class="font-weight-bold mb-1">
                   <span v-if="!telemetryUnits" class="text-caption font-weight-bold">{{ metrics.ram }}%</span>
@@ -107,6 +108,30 @@
                 <div class="text-caption text-grey">RAM</div>
               </v-col>
 
+              <v-col cols="4" class="py-2">
+                <v-progress-circular :model-value="metrics.memBw" :size="80" :width="7" :color="metricsRaw.memBwAvailable ? 'deep-purple-lighten-1' : 'grey'" class="font-weight-bold mb-1">
+                  <span v-if="!metricsRaw.memBwAvailable" class="text-caption font-weight-bold text-grey">N/A</span>
+                  <span v-else-if="!telemetryUnits" class="text-caption font-weight-bold">{{ metrics.memBw }}%</span>
+                  <span v-else class="font-weight-bold" style="font-size: 0.62rem; line-height: 1.2; text-align: center;">
+                    {{ metricsRaw.memBwFreqMhz || '—' }}<br><span class="text-grey" style="font-size: 0.55rem;">MHz DDR</span>
+                  </span>
+                </v-progress-circular>
+                <div class="text-caption text-grey">RAM BW</div>
+              </v-col>
+
+              <v-col cols="4" class="py-2">
+                <v-progress-circular :model-value="metrics.swap" :size="80" :width="7" :color="metricsRaw.swapTotal ? 'blue-grey-lighten-1' : 'grey'" class="font-weight-bold mb-1">
+                  <span v-if="!metricsRaw.swapTotal" class="text-caption font-weight-bold text-grey">none</span>
+                  <span v-else-if="!telemetryUnits" class="text-caption font-weight-bold">{{ metrics.swap }}%</span>
+                  <span v-else class="font-weight-bold" style="font-size: 0.62rem; line-height: 1.2; text-align: center;">
+                    {{ formatGb(metricsRaw.swapUsed) }}<br>
+                    <span class="text-grey" style="font-size: 0.55rem;">/ {{ formatGb(metricsRaw.swapTotal) }}</span>
+                  </span>
+                </v-progress-circular>
+                <div class="text-caption text-grey">Swap</div>
+              </v-col>
+
+              <!-- Storage + thermal row: Disk, Temp, Fan (Temp & Fan colocated) -->
               <v-col cols="4" class="py-2">
                 <v-progress-circular :model-value="metrics.disk" :size="80" :width="7" color="amber" class="font-weight-bold mb-1">
                   <span v-if="!telemetryUnits" class="text-caption font-weight-bold">{{ metrics.disk }}%</span>
@@ -135,17 +160,6 @@
                   </span>
                 </v-progress-circular>
                 <div class="text-caption text-grey">Fan</div>
-              </v-col>
-
-              <v-col cols="4" class="py-2">
-                <v-progress-circular :model-value="metrics.memBw" :size="80" :width="7" :color="metricsRaw.memBwAvailable ? 'deep-purple-lighten-1' : 'grey'" class="font-weight-bold mb-1">
-                  <span v-if="!metricsRaw.memBwAvailable" class="text-caption font-weight-bold text-grey">N/A</span>
-                  <span v-else-if="!telemetryUnits" class="text-caption font-weight-bold">{{ metrics.memBw }}%</span>
-                  <span v-else class="font-weight-bold" style="font-size: 0.62rem; line-height: 1.2; text-align: center;">
-                    {{ metricsRaw.memBwFreqMhz || '—' }}<br><span class="text-grey" style="font-size: 0.55rem;">MHz DDR</span>
-                  </span>
-                </v-progress-circular>
-                <div class="text-caption text-grey">RAM BW</div>
               </v-col>
             </v-row>
 
@@ -367,11 +381,12 @@ export default {
   components: { AppNav },
   data: () => ({
     user: { username: 'admin', role: 'admin', authProvider: 'local' },
-    metrics: { cpu: 0, npu: 0, gpu: 0, ram: 0, disk: 0, temp: 0, fan: 0, memBw: 0 },
+    metrics: { cpu: 0, npu: 0, gpu: 0, ram: 0, disk: 0, temp: 0, fan: 0, memBw: 0, swap: 0 },
     metricsRaw: {
       ramUsed: 0, ramTotal: 0, diskUsed: 0, diskTotal: 0,
       fanAvailable: false, fanRpm: null,
       memBwAvailable: false, memBwFreqMhz: null,
+      swapUsed: 0, swapTotal: 0,
     },
     disks: [],
     telemetryUnits: false,
@@ -574,6 +589,9 @@ export default {
           this.metricsRaw.memBwAvailable = !!data.memBw;
           this.metrics.memBw = data.memBw?.percentage ?? 0;
           this.metricsRaw.memBwFreqMhz = data.memBw?.freqMhz ?? null;
+          this.metrics.swap = data.swap?.percentage ?? 0;
+          this.metricsRaw.swapUsed = data.swap?.used ?? 0;
+          this.metricsRaw.swapTotal = data.swap?.total ?? 0;
           if (data.stats) {
             this.stats = data.stats;
           }

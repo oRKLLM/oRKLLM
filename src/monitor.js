@@ -63,13 +63,17 @@ export async function getSystemMetrics() {
     // fallback
   }
 
-  // 2. RAM Usage
+  // 2. RAM + Swap Usage
   let totalMem = 0;
   let usedMem = 0;
+  let swapTotal = 0;
+  let swapUsed = 0;
   try {
     const memData = await si.mem();
     totalMem = memData.total;
     usedMem = memData.active;
+    swapTotal = memData.swaptotal || 0;
+    swapUsed = memData.swapused || 0;
   } catch (e) {
     // fallback
   }
@@ -200,6 +204,11 @@ export async function getSystemMetrics() {
       total: totalMem,
       used: usedMem,
       percentage: totalMem > 0 ? Math.round((usedMem / totalMem) * 100) : 0
+    },
+    swap: {
+      total: swapTotal,
+      used: swapUsed,
+      percentage: swapTotal > 0 ? Math.round((swapUsed / swapTotal) * 100) : 0
     },
     temperature: Math.round(temperature * 10) / 10,
     npu: npuLoad,
