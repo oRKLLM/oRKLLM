@@ -31,6 +31,8 @@
              '   '-'   '
 ```
 
+> **Disclaimer:** oRKLLM is an independent, community-driven project. It is **not affiliated with, endorsed by, or supported by Rockchip Semiconductor Co., Ltd.** or any of its subsidiaries. "Rockchip", "RK3576", "RK3588", "RKLLM", and "RKNN" are trademarks of Rockchip Semiconductor Co., Ltd. The `librkllmrt.so` runtime library is developed and distributed by Rockchip/Airockchip under the Apache 2.0 License — oRKLLM uses it unmodified.
+
 oRKLLM is an energy-efficient, OpenAI API-compatible local LLM inference server and premium admin console designed specifically for Rockchip NPU-powered platforms (such as the **RK3576** found in the NanoPi M5 and **RK3588** series SBCs).
 
 Inspired by [jundot/oMLX](https://github.com/jundot/omlx) (which does the same for Apple Silicon), oRKLLM is adaptively re-engineered to run on the Rockchip RKLLM runtime (`librkllmrt.so`) with its unique hardware and concurrency constraints.
