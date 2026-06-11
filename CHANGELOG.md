@@ -1,3 +1,10 @@
+# [0.8.0-alpha.53](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.52...v0.8.0-alpha.53) (2026-06-11)
+
+
+### Bug Fixes
+
+* **pwa:** deterministic update on refresh; credit llama.cpp + license gate ([b86ef19](https://github.com/oRKLLM/oRKLLM/commit/b86ef19bd0648c5ea3976664487498992cb2488b))
+
 # [0.8.0-alpha.52](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.51...v0.8.0-alpha.52) (2026-06-11)
 
 
