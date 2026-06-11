@@ -2,7 +2,7 @@ import { fork, execFileSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { MODELS_DIR, LIBRKLLMRT_PATH, RUNTIMES_DIR, parseRuntimeVersion } from './config.js';
+import { MODELS_DIR, LIBRKLLMRT_PATH, RUNTIMES_DIR, parseRuntimeVersion, getNpuCoreCount } from './config.js';
 import { dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings } from './db.js';
 import { syncRuntimes, hasRuntime } from './runtime_sync.js';
 import { eagle3Generate } from './eagle.js';
@@ -28,10 +28,17 @@ class EnginePool {
     const savedTimeout = dbGetSetting('idle_timeout_minutes');
     this.idleTimeoutMs = (savedTimeout !== null ? parseInt(savedTimeout) : 5) * 60_000;
 
-    // Multi-worker pool.  Default size = 1 (single worker, identical to the
-    // original behaviour).  Increase npu_pool_size in Settings to serve
-    // multiple concurrent requests on the RK3576's two NPU cores.
-    const poolSize = Math.max(1, parseInt(dbGetSetting('npu_pool_size') ?? '1') || 1);
+    // Multi-worker pool. Each slot is a separate worker process; with >1 slot
+    // each model is pinned to its own NPU core so they run in parallel (one
+    // model claiming all cores blocks a second init). The number of parallel
+    // models is therefore capped at the chipset's NPU core count (rk3576=2,
+    // rk3588=3); a single slot stays unpinned for max single-model throughput.
+    this.npuCores = getNpuCoreCount();
+    const requested = Math.max(1, parseInt(dbGetSetting('npu_pool_size') ?? '1') || 1);
+    const poolSize = Math.min(requested, this.npuCores);
+    if (requested > this.npuCores) {
+      console.warn(`[EnginePool] npu_pool_size ${requested} exceeds ${this.npuCores} NPU core(s) — capping at ${this.npuCores}`);
+    }
     this._slots = Array.from({ length: poolSize }, (_, i) => createSlot(i));
 
     this.pinned = false;
@@ -207,10 +214,14 @@ class EnginePool {
       const candidates = EnginePool.runtimeCandidates(modelName);
       console.log(`[EnginePool] Runtime candidates for ${modelName}: ${candidates.join(', ')}`);
 
-      // NPU domain: always 1. Testing showed base_domain_id=2 does not restrict
-      // the model to a single core — both workers still report npu_core_num=2 and
-      // there is no throughput benefit from domain pinning on RK3576.
-      const slotOptions = { ...options, base_domain_id: 1 };
+      // NPU core pinning: with a single slot, leave the model unpinned so it
+      // uses all cores (max single-model throughput). With multiple slots, pin
+      // each slot to its own core (base_domain_id = slot+1, wrapped to the
+      // core count) so multiple models load and run in parallel — one model on
+      // all cores would otherwise leave none for a second init.
+      const slotOptions = this._slots.length > 1
+        ? { ...options, base_domain_id: (s.id % this.npuCores) + 1 }
+        : { ...options };
 
       // Try each candidate lib path until one succeeds
       for (const libPath of candidates) {

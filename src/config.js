@@ -109,3 +109,33 @@ export function checkPassword(password, hash, salt) {
   const derived = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha256').toString('hex');
   return derived === hash;
 }
+
+// ── Chipset capability detection ─────────────────────────────────────────────
+// Single source of truth for SoC + NPU core count, derived from the device
+// tree. Used by the engine pool (per-core model pinning, parallel-model cap)
+// and surfaced in the admin status. Cached after first read.
+let _platformCache = undefined;
+
+const NPU_CORES_BY_SOC = { rk3576: 2, rk3588: 3, rk3588s: 3 };
+
+/** Detected SoC slug (e.g. 'rk3576', 'rk3588') or null when undetectable. */
+export function getPlatform() {
+  if (_platformCache !== undefined) return _platformCache;
+  try {
+    const compat = fs.readFileSync('/proc/device-tree/compatible', 'utf8').replace(/\0/g, ' ');
+    const m = compat.match(/rockchip,(rk\d+[a-z]?)/i);
+    _platformCache = m ? m[1].toLowerCase() : null;
+  } catch {
+    _platformCache = null;
+  }
+  return _platformCache;
+}
+
+/**
+ * Number of NPU compute cores for the detected SoC. Unknown/non-Rockchip → 1
+ * (safe default: single core, no parallel-model pinning).
+ */
+export function getNpuCoreCount() {
+  const soc = getPlatform();
+  return (soc && NPU_CORES_BY_SOC[soc]) || 1;
+}

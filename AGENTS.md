@@ -127,7 +127,8 @@ graph TD
 | :--- | :--- |
 | `src/addon/orkllm_napi.cpp` | C++ N-API addon; wraps `rkllm_init`, `rkllm_run`, `rkllm_destroy` with `Napi::ThreadSafeFunction` for non-blocking callbacks |
 | `src/worker.js` | Process-isolated inference worker; receives `load`/`run`/`unload` IPC commands from pool |
-| `src/pool.js` | Single-active-model lock, auto-swap, idle timeout, pin-to-keep-loaded; runtime version auto-discovery (`getAvailableRuntimes`, `readSoVersion`, `runtimeCandidates`, `_tryLoad`), caches winning lib path; `prefillAndCache` (abort-after-first-token KV warm); `generateSpeculative`/`generateEagle3`, `loadDraft`/`unloadDraft` for second worker slot |
+| `src/pool.js` | Single-active-model lock, auto-swap, idle timeout, pin-to-keep-loaded; runtime version auto-discovery (`getAvailableRuntimes`, `readSoVersion`, `runtimeCandidates`, `_tryLoad`), caches winning lib path; `prefillAndCache` (abort-after-first-token KV warm); `generateSpeculative`/`generateEagle3`, `loadDraft`/`unloadDraft` for second worker slot. Pool size capped at chipset NPU core count (`getNpuCoreCount`); with >1 slot each model is pinned to its own core via `base_domain_id=(slot%cores)+1` (parallel models), single slot stays unpinned (all cores) |
+| `src/config.js` (chipset) | `getPlatform()` (SoC slug from `/proc/device-tree/compatible`) + `getNpuCoreCount()` (rk3576→2, rk3588→3, else 1) — single source of truth, surfaced in `/api/admin/status` as `platform`/`npuCores` |
 | `src/admin/conversations.js` | 6 REST endpoints for conversation CRUD + message append (`/api/admin/conversations/…`) |
 | `src/tailscale.js` | Optional, runtime-detected Tailscale integration (never an apt dependency): `isAvailable()` (`which tailscale`), `getState()` (status/serve/url), `up({authKey,hostname})` (headless join, key never persisted/logged), `enableServe`/`disableServe` (`tailscale serve --bg <port>` / `reset`); pure helpers `summarizeStatus`/`serveUrlFromDNSName`/`scrubKey`. Admin endpoints `GET /api/admin/tailscale`, `POST /api/admin/tailscale/{setup,serve}`. UI in SiteManagement → Remote Access tab |
 | `src/admin/mcp.js` | REST endpoints for MCP server CRUD (`/api/admin/mcp-servers`): list, create (optional validate), patch, delete, `:id/test`, `/validate` (unsaved payload); `GET /api/admin/mcp-tools` aggregates enabled servers' tools + returns the ready-to-inject system-prompt block |
@@ -483,7 +484,9 @@ Empirical findings (NanoPi M5 / RK3576). Read before attempting related work.
 
 ### 10.1 NPU Core Count — `npu_core_num: 2`
 
-Every `rkllm_init` logs `npu_core_num: 2, target_platform: RK3576`. The RK3576 has **2 NPU compute domains** (IOMMU domains 1 and 2; dmesg shows `RKNPU: switch iommu domain from 2 to 1`). The advertised "6 TOPS" is total compute; two domains are its internal subdivision. `RKLLMExtendParam.base_domain_id` picks the starting domain — empirically `base_domain_id=2` has no effect (the NPU shares both domains for any model). Leave it at 1 (hardcoded in the addon).
+Every `rkllm_init` logs `npu_core_num`: **RK3576 = 2 cores**, **RK3588 = 3 cores** (confirmed on the Rock 5B: `npu_core_num: 3, target_platform: RK3588`). The advertised TOPS is total compute; the cores are its internal subdivision. `RKLLMExtendParam.base_domain_id` picks the starting domain/core.
+
+**Per-worker core pinning works (PoC-validated).** A single model left unpinned claims all cores — which means a *second* `rkllm_init` has no core left and fails to load. Pinning each worker process to its own `base_domain_id` (1, 2, 3…) lets up to `npu_core_num` models load and run in **parallel, one core each**. The engine pool now does this automatically: `getNpuCoreCount()` (`src/config.js`) drives the pool-size cap and per-slot `base_domain_id=(slot%cores)+1` (a single slot stays unpinned for max single-model throughput). Earlier notes that "`base_domain_id=2` has no effect on RK3576" referred to a *single* model still spanning both domains — distinct from the multi-worker parallel case above, which does isolate per core.
 
 ### 10.2 Parallel NPU Inference — two models simultaneously
 

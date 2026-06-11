@@ -1,4 +1,4 @@
-import { getCredentials, saveCredentials, verifyCredentials, hashPassword, checkPassword, MODELS_DIR, LIBRKLLMRT_PATH, RUNTIMES_DIR, parseRuntimeVersion } from '../config.js';
+import { getCredentials, saveCredentials, verifyCredentials, hashPassword, checkPassword, MODELS_DIR, LIBRKLLMRT_PATH, RUNTIMES_DIR, parseRuntimeVersion, getPlatform, getNpuCoreCount } from '../config.js';
 import { signCookie, verifyCookie, issueSessionCookie } from '../auth/session.js';
 import { clearAllCache, getCacheStats } from '../cache.js';
 import pool from '../pool.js';
@@ -234,15 +234,9 @@ export default async function adminRoutes(fastify, options) {
     status.port = port;
     status.libPath = LIBRKLLMRT_PATH;
     status.schemaVersion = dbGetSchemaVersion();
-    // Detect SoC from /proc/device-tree/compatible which lists "rockchip,rk35XX" entries
-    try {
-      const { readFileSync } = await import('fs');
-      const compat = readFileSync('/proc/device-tree/compatible', 'utf8').replace(/\0/g, ' ');
-      const m = compat.match(/rockchip,(rk\d+)/i);
-      status.platform = m ? m[1].toLowerCase() : null;
-    } catch {
-      status.platform = null;
-    }
+    // SoC + NPU core count (single source of truth in config.js)
+    status.platform = getPlatform();
+    status.npuCores = getNpuCoreCount();
     return status;
   });
 
