@@ -663,9 +663,18 @@ class EnginePool {
       throw new Error('[Eagle-3] No model loaded in slot 0');
     }
 
+    // The draft head path is stored relative to MODELS_DIR (e.g.
+    // "Foo_eagle3/model.safetensors"); resolve it to an absolute path so the
+    // native loader can open the head + its embeddings.safetensors regardless
+    // of the process cwd. (Without this the Vulkan draft silently falls back to
+    // the CPU placeholder → ~0% acceptance → constant KV rollback.)
+    const resolvedDraftPath = draftWeightsPath
+      ? (path.isAbsolute(draftWeightsPath) ? draftWeightsPath : path.join(MODELS_DIR, draftWeightsPath))
+      : null;
+
     // Mark slot as busy during Eagle generation
     const genPromise = eagle3Generate(slot.worker, prompt, options, onToken, {
-      k, draftStrategy, draftWeightsPath,
+      k, draftStrategy, draftWeightsPath: resolvedDraftPath,
     });
 
     slot.activeGeneration = genPromise;
