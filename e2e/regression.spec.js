@@ -334,9 +334,12 @@ test('Chat: conversation persists when navigating away and back', async ({ page 
   await chatInput.fill('Persistence check 123');
   await page.keyboard.press('Enter');
 
-  // Wait for the streamed mock response to complete.
+  // Wait for the streamed mock response to complete. Scope the user-message
+  // assertion to the user bubble (bg-primary) — the mock response echoes the
+  // prompt, so an unscoped .message-bubble filter matches both bubbles.
+  const userBubble = page.locator('.message-bubble.bg-primary').filter({ hasText: 'Persistence check 123' });
   await expect(page.locator('.message-bubble').last()).toContainText('simulated response', { timeout: 10000 });
-  await expect(page.locator('.message-bubble').filter({ hasText: 'Persistence check 123' })).toBeVisible();
+  await expect(userBubble).toBeVisible();
 
   // Navigate away (Dashboard) then back to Chat via SPA router links.
   await navBtn(page, 'Dashboard').click();
@@ -346,6 +349,6 @@ test('Chat: conversation persists when navigating away and back', async ({ page 
 
   // Previously chatHistory lived in component data() and was reset on remount
   // (the active conversation was not reopened); the shared store keeps it.
-  await expect(page.locator('.message-bubble').filter({ hasText: 'Persistence check 123' })).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('.message-bubble.bg-primary').filter({ hasText: 'Persistence check 123' })).toBeVisible({ timeout: 5000 });
   await expect(page.locator('.message-bubble').last()).toContainText('simulated response');
 });
