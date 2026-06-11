@@ -1,3 +1,15 @@
+# [0.8.0-alpha.55](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.54...v0.8.0-alpha.55) (2026-06-11)
+
+
+### Bug Fixes
+
+* **chat:** use plain-text MCP block delimiters; add README affiliation disclaimer ([2989d17](https://github.com/oRKLLM/oRKLLM/commit/2989d171c11e154d16acdb28bfefe0d862daabb1))
+
+
+### Features
+
+* **chat:** per-tool MCP picker that actually drives inference ([fe7db0f](https://github.com/oRKLLM/oRKLLM/commit/fe7db0f9a8b0a9804954ed9dc1eb325f9a0e38d0))
+
 # [0.8.0-alpha.54](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.53...v0.8.0-alpha.54) (2026-06-11)
 
 
