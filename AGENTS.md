@@ -128,7 +128,7 @@ graph TD
 | `src/worker.js` | Process-isolated inference worker; receives `load`/`run`/`unload` IPC commands from pool |
 | `src/pool.js` | Single-active-model lock, auto-swap, idle timeout, pin-to-keep-loaded; runtime version auto-discovery (`getAvailableRuntimes`, `readSoVersion`, `runtimeCandidates`, `_tryLoad`), caches winning lib path; `prefillAndCache` (abort-after-first-token KV warm); `generateSpeculative`/`generateEagle3`, `loadDraft`/`unloadDraft` for second worker slot |
 | `src/admin/conversations.js` | 6 REST endpoints for conversation CRUD + message append (`/api/admin/conversations/…`) |
-| `src/admin/mcp.js` | REST endpoints for MCP server CRUD (`/api/admin/mcp-servers`): list, create (optional validate), patch, delete, `:id/test`, `/validate` (unsaved payload) |
+| `src/admin/mcp.js` | REST endpoints for MCP server CRUD (`/api/admin/mcp-servers`): list, create (optional validate), patch, delete, `:id/test`, `/validate` (unsaved payload); `GET /api/admin/mcp-tools` aggregates enabled servers' tools + returns the ready-to-inject system-prompt block |
 | `src/mcp.js` | MCP client layer over `@modelcontextprotocol/sdk`: builds stdio/SSE/streamable-HTTP transports, `resolveHeaders()` turns structured `config.auth` (none/bearer/apikey/basic/custom) into request headers (legacy plain `config.headers` still honored), validates a server (lists tools), caches live clients for enabled servers, aggregates tools into OpenAI function format (`mcp__<server>__<tool>` namespacing), executes tool calls; validation/aggregation failures are logged with transport+endpoint+cause |
 | `src/mcp_inference.js` | Prompt-driven tool-use loop (RKLLM has no native function-calling): injects a tool system prompt, parses `<tool_call>{…}</tool_call>`, executes via `src/mcp.js`, feeds `tool` results back, re-generates; caps at `MAX_TOOL_ROUNDS` (5). Injectable `runTool` for unit testing |
 | `src/runtime_sync.js` | Downloads aarch64 `librkllmrt.so` versions from the mirror list (`RUNTIME_MIRRORS`, override via `ORKLLM_RUNTIME_MIRRORS`) into `RUNTIMES_DIR`, first hit wins; skips non-ARM64-Linux; runs on startup, on load failure, and via `POST /api/admin/runtimes/sync` |
@@ -153,12 +153,12 @@ graph TD
 | `frontend/src/views/Settings.vue` | Global settings, HF token, prefix cache config, trusted proxy, MCP servers (table + add/edit dialog with transport-adaptive fields and an auth-type selector — none/bearer/apikey/basic/custom — that builds `config.auth`; test/validate, enable toggle, "use MCP tools in inference" switch) |
 | `frontend/src/views/Logs.vue` | Full-page live log terminal (WebSocket) |
 | `frontend/src/views/Bench.vue` | Inference benchmark (TTFT, tok/s) |
-| `frontend/src/views/Chat.vue` | Full streaming chat against OpenAI-compatible API |
+| `frontend/src/views/Chat.vue` | Full streaming chat against OpenAI-compatible API; system-prompt panel has an "Inject MCP tool instructions" toggle that fetches `/api/admin/mcp-tools` and adds/removes a delimited tool-instructions block in the system prompt |
 | `frontend/src/views/SiteManagement.vue` | Admin-only: user CRUD, OIDC/SAML config, audit log |
 | `frontend/src/views/Login.vue` | Login page; shows SSO button when OIDC/SAML configured |
 | `e2e/orkllm.spec.js` | Playwright E2E suite (41 tests — core flow, chat history, runtime, auto-download, download queue, dashboard, platform detection) |
 | `e2e/rbac.spec.js` | Playwright E2E suite (17 tests — RBAC, trusted proxy (single + multi-IP/CIDR), mock OIDC SSO, Keycloak integration) |
-| `e2e/regression.spec.js` | Playwright E2E suite (18 tests — UI regression: navbar, theme, user drawer, drawer toggles, Contribute button, snackbar, Bench/Chat state persistence across navigation, MCP server CRUD + inference toggle) |
+| `e2e/regression.spec.js` | Playwright E2E suite (19 tests — UI regression: navbar, theme, user drawer, drawer toggles, Contribute button, snackbar, Bench/Chat state persistence across navigation, MCP server CRUD + inference toggle + Chat tool-instructions toggle) |
 
 **Other paths:** `src/` also holds `auth/` (OIDC/SAML/session) and `eagle.js`. Non-source: `models/` (`.rkllm` files), `frontend/` (Vue 3 + Vuetify 3 SPA, Vite), `e2e/` (Playwright), root build config (`package.json`, `binding.gyp`, `playwright.config.js`). `CLAUDE.md` and `GEMINI.md` both `@AGENTS.md`.
 

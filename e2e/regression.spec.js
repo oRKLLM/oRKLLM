@@ -384,6 +384,21 @@ test('Settings: MCP server can be added, listed, and deleted', async ({ page }) 
   await expect(page.locator('.mcp-table tbody tr').filter({ hasText: 'E2E MCP Server' })).toHaveCount(0, { timeout: 5000 });
 });
 
+test('Chat: MCP tool-instructions toggle is present in the system prompt panel', async ({ page }) => {
+  await login(page);
+  await loadModel(page);
+  await navBtn(page, 'Chat').click();
+  await expect(page).toHaveURL(/\/chat/);
+
+  // Expand the "System Prompt & Parameters" panel.
+  await page.locator('.v-expansion-panel-title:has-text("System Prompt")').click();
+
+  // The inject toggle and its availability hint are shown. With no enabled MCP
+  // servers in the mock environment it reports "no enabled MCP servers".
+  await expect(page.locator('text=Inject MCP tool instructions')).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('text=no enabled MCP servers')).toBeVisible();
+});
+
 test('Settings: "Use MCP tools in inference" toggle persists', async ({ page }) => {
   await login(page);
   await page.goto('/settings');

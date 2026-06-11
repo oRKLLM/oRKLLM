@@ -1,9 +1,10 @@
 import { randomUUID } from 'crypto';
 import {
   dbListMcpServers, dbGetMcpServer, dbCreateMcpServer,
-  dbUpdateMcpServer, dbDeleteMcpServer,
+  dbUpdateMcpServer, dbDeleteMcpServer, dbListEnabledMcpServers,
 } from '../db.js';
-import { validateServer, invalidateClient } from '../mcp.js';
+import { validateServer, invalidateClient, getAggregatedTools } from '../mcp.js';
+import { buildToolSystemPrompt } from '../mcp_inference.js';
 
 const TRANSPORTS = ['stdio', 'sse', 'http'];
 
@@ -27,6 +28,19 @@ export default async function mcpRoutes(fastify) {
   // GET /api/admin/mcp-servers — list all configured servers
   fastify.get('/mcp-servers', async () => {
     return { servers: dbListMcpServers() };
+  });
+
+  // GET /api/admin/mcp-tools — aggregated tools from enabled servers plus the
+  // ready-to-use system-prompt block (identical to what the inference loop
+  // injects). Used by the Chat "inject MCP tool instructions" toggle.
+  fastify.get('/mcp-tools', async () => {
+    const servers = dbListEnabledMcpServers();
+    const { tools } = await getAggregatedTools(servers);
+    return {
+      count: tools.length,
+      tools: tools.map(t => ({ name: t.function.name, description: t.function.description })),
+      systemPrompt: tools.length ? buildToolSystemPrompt(tools) : '',
+    };
   });
 
   // POST /api/admin/mcp-servers — create a server. If `validate` is truthy

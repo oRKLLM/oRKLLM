@@ -109,9 +109,26 @@
                 density="compact"
                 rows="3"
                 hide-details
-                class="mb-3"
+                class="mb-2"
                 placeholder="You are a helpful AI assistant..."
               ></v-textarea>
+
+              <!-- MCP tool instructions — inject the available-tools block into the system prompt -->
+              <div class="d-flex align-center justify-space-between mb-3">
+                <div>
+                  <span class="text-caption">Inject MCP tool instructions</span>
+                  <span class="text-caption text-grey ml-2">
+                    {{ mcpToolCount > 0 ? `${mcpToolCount} tool(s) available` : 'no enabled MCP servers' }}
+                  </span>
+                </div>
+                <v-switch
+                  :model-value="mcpInjected"
+                  :disabled="mcpToolCount === 0 && !mcpInjected"
+                  color="primary" density="compact" hide-details inset
+                  @update:model-value="toggleMcpInject"
+                ></v-switch>
+              </div>
+
               <v-row>
                 <v-col cols="12" sm="6">
                   <div class="text-caption text-grey mb-1">Temperature: {{ params.temperature }}</div>
@@ -293,6 +310,11 @@ import {
   abortGeneration as abortGen,
 } from '../chat.js';
 
+// Delimiters wrapping the auto-injected MCP tool-instructions block so the
+// toggle can add/remove exactly that section without disturbing the user's text.
+const MCP_BLOCK_START = '<<< MCP TOOLS (auto-injected) >>>';
+const MCP_BLOCK_END = '<<< END MCP TOOLS >>>';
+
 export default {
   name: 'Chat',
   components: { AppNav, RuntimeSyncDialog },
@@ -309,6 +331,9 @@ export default {
     // View-only UI state (safe to reset on navigation)
     sidebarOpen: true,
     mobileHistoryOpen: false,
+    // MCP tool-instruction injection
+    mcpToolCount: 0,
+    mcpInjected: false,
   }),
   computed: {
     isDark() {
@@ -350,6 +375,9 @@ export default {
     this.fetchAuth();
     await this.fetchModels();
     await this.fetchStatus();
+    this.fetchMcpToolCount();
+    // Reflect whether the current system prompt already carries the injected block.
+    this.mcpInjected = chatState.systemPrompt.includes(MCP_BLOCK_START);
     this.scrollToBottom();
   },
   beforeUnmount() {
@@ -444,6 +472,44 @@ export default {
     loadConversation(id) { return loadConv(id); },
     deleteConversation(id) { return delConv(id); },
     newChat() { newChatStore(); },
+
+    // ── MCP tool instructions ─────────────────────────────────────────────
+    async fetchMcpToolCount() {
+      try {
+        const res = await fetch('/api/admin/mcp-tools');
+        if (res.ok) this.mcpToolCount = (await res.json()).count || 0;
+      } catch (e) {}
+    },
+    stripMcpBlock(text) {
+      // Remove a previously injected block (with surrounding blank lines).
+      const re = new RegExp(`\\n*${MCP_BLOCK_START}[\\s\\S]*?${MCP_BLOCK_END}\\n*`, 'g');
+      return text.replace(re, '').trimEnd();
+    },
+    async toggleMcpInject(on) {
+      // Always start from a clean prompt (no stale block).
+      const base = this.stripMcpBlock(this.systemPrompt || '');
+      if (!on) {
+        this.systemPrompt = base;
+        this.mcpInjected = false;
+        return;
+      }
+      try {
+        const res = await fetch('/api/admin/mcp-tools');
+        const data = res.ok ? await res.json() : { count: 0, systemPrompt: '' };
+        this.mcpToolCount = data.count || 0;
+        if (!data.count) {
+          this.$notify('No enabled MCP servers with tools', 'warning');
+          this.mcpInjected = false;
+          return;
+        }
+        const block = `${MCP_BLOCK_START}\n${data.systemPrompt}\n${MCP_BLOCK_END}`;
+        this.systemPrompt = base ? `${base}\n\n${block}` : block;
+        this.mcpInjected = true;
+      } catch (e) {
+        this.$notify('Failed to load MCP tools', 'error');
+        this.mcpInjected = false;
+      }
+    },
     formatDate(ts) {
       const d = new Date(ts);
       const now = new Date();
