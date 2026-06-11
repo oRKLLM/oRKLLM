@@ -150,7 +150,20 @@ const distPath = path.join(process.cwd(), 'frontend', 'dist');
 if (fs.existsSync(distPath)) {
   fastify.register(fastifyStatic, {
     root: distPath,
-    prefix: '/'
+    prefix: '/',
+    cacheControl: false, // set Cache-Control ourselves below (the default `public, max-age=0` would override)
+    setHeaders(res, filePath) {
+      const base = path.basename(filePath);
+      if (base === 'sw.js' || base === 'registerSW.js' || base.endsWith('.webmanifest') || base === 'index.html') {
+        // PWA control files + SPA shell must revalidate so updates are detected.
+        res.setHeader('Cache-Control', 'no-cache');
+      } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+        // Vite content-hashed bundles — safe to cache forever.
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      } else {
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+      }
+    }
   });
   
   // Fallback for single-page application routing (Vue Router HTML5 mode)

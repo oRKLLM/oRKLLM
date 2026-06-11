@@ -419,3 +419,62 @@ test('Settings: "Use MCP tools in inference" toggle persists', async ({ page }) 
     .locator('.v-switch input[type="checkbox"]').first().isChecked();
   expect(after).toBe(!before);
 });
+
+// ---------------------------------------------------------------------------
+// PWA — installable manifest + service worker (built dist; 127.0.0.1 = secure context)
+// ---------------------------------------------------------------------------
+
+test('PWA: manifest is linked, valid, and icons resolve', async ({ page }) => {
+  await page.goto('/login');
+  const href = await page.locator('link[rel="manifest"]').getAttribute('href');
+  expect(href).toMatch(/\.webmanifest$/);
+
+  const res = await page.request.get(href);
+  expect(res.ok()).toBeTruthy();
+  const m = await res.json();
+  expect(m.name).toBe('oRKLLM');
+  expect(m.short_name).toBe('oRKLLM');
+  expect(m.display).toBe('standalone');
+  expect(m.start_url).toBe('/');
+  expect(m.theme_color).toBe('#7C3AED');
+  // icons: 192, 512, and a maskable
+  const sizes = m.icons.map(i => i.sizes);
+  expect(sizes).toContain('192x192');
+  expect(sizes).toContain('512x512');
+  expect(m.icons.some(i => i.purpose === 'maskable')).toBeTruthy();
+  for (const icon of m.icons) {
+    const ir = await page.request.get('/' + icon.src.replace(/^\//, ''));
+    expect(ir.ok()).toBeTruthy();
+  }
+});
+
+test('PWA: theme-color + apple-touch-icon present', async ({ page }) => {
+  await page.goto('/login');
+  await expect(page.locator('meta[name="theme-color"][content="#7C3AED"]')).toHaveCount(1);
+  await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveCount(1);
+});
+
+test('PWA: service worker registers and sw.js is no-cache', async ({ page }) => {
+  await page.goto('/login');
+  const ready = await page.evaluate(async () => {
+    if (!('serviceWorker' in navigator)) return false;
+    const reg = await Promise.race([
+      navigator.serviceWorker.ready.then(r => !!r),
+      new Promise(res => setTimeout(() => res(false), 8000)),
+    ]);
+    return reg;
+  });
+  expect(ready).toBeTruthy();
+
+  const swRes = await page.request.get('/sw.js');
+  expect(swRes.ok()).toBeTruthy();
+  expect((swRes.headers()['cache-control'] || '')).toContain('no-cache');
+});
+
+test('PWA: API stays network-only (not the cached shell)', async ({ page }) => {
+  await page.goto('/login');
+  await page.evaluate(() => navigator.serviceWorker?.ready);
+  const res = await page.request.get('/api/admin/auth-status');
+  expect((res.headers()['content-type'] || '')).toContain('application/json');
+  await res.json(); // parses as JSON, not index.html
+});

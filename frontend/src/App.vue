@@ -12,6 +12,16 @@
     >
       {{ snackbar.message }}
       <template #actions>
+        <v-btn
+          v-if="snackbar.action"
+          variant="text"
+          size="small"
+          color="white"
+          class="font-weight-bold"
+          @click="snackbar.action.onClick(); snackbar.show = false"
+        >
+          {{ snackbar.action.label }}
+        </v-btn>
         <v-btn variant="text" size="small" @click="snackbar.show = false">
           <v-icon>mdi-close</v-icon>
         </v-btn>

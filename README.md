@@ -60,6 +60,7 @@ Inspired by [jundot/oMLX](https://github.com/jundot/omlx) (which does the same f
 * **APT Distribution Channels**: Three channels — `stable` (main), `beta`, `alpha` — with separate `dists/<channel>/` directories on gh-pages. Users pin to their preferred channel.
 * **Trusted Proxy**: Supports `true`, single IP/CIDR, or comma-separated list (SAN-style) passed directly to Fastify's `trustProxy`.
 * **Database Migrations**: PRAGMA user_version migration runner — schema changes (v1–v3) apply automatically on startup, safe across upgrades from any previous version.
+* **Installable PWA**: The admin/chat console is a Progressive Web App — install it to your phone or desktop (manifest + icons), with the app shell cached by a service worker for instant loads and a graceful offline state. Live data (inference, metrics) stays network-only; new versions auto-update. Requires a secure context (HTTPS or `localhost`) to install.
 * **Seamless Mock Fallback**: On non-ARM64/non-Linux platforms, oRKLLM falls back to a JS mock engine — rapid UI development on macOS/Windows without a board.
 * **Dynamic N-API Bindings**: C++ addon uses `dlopen`/`dlsym` — no compile-time dependency on `librkllmrt.so`.
 * **Secure Auth**: PBKDF2-HMAC-SHA256 password hashing, signed session cookies (`userId|username|role|expires|HMAC`), backward-compatible with single-user installs.
