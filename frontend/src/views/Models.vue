@@ -8,7 +8,7 @@
   />
 
   <v-main class="bg-slate-page fill-height">
-    <v-container fluid class="pt-6 px-6" style="max-width: 1000px;">
+    <v-container fluid class="pt-6 px-6 page-container">
 
       <div class="text-h5 font-weight-bold mb-1">Models</div>
       <div class="text-caption text-grey mb-5">Manage and download .rkllm models and Eagle-3 draft heads (.safetensors, .gguf).</div>
@@ -71,6 +71,9 @@
             No active model loaded in NPU
           </v-alert>
 
+          <!-- Wide screens: model list (left) beside the Eagle-3 / auto-unload sidebar (right) -->
+          <v-row>
+          <v-col cols="12" lg="8">
           <v-card class="glass-card pa-5 mb-5">
             <div class="d-flex align-center justify-space-between mb-4">
               <div class="text-h6 font-weight-bold d-flex align-center">
@@ -159,7 +162,9 @@
               </div>
             </v-list>
           </v-card>
+          </v-col>
 
+          <v-col cols="12" lg="4">
           <!-- Eagle-3 Draft Heads -->
           <v-card class="glass-card pa-5 mb-5">
             <div class="d-flex align-center justify-space-between mb-4">
@@ -222,6 +227,8 @@
               Save Timeout
             </v-btn>
           </v-card>
+          </v-col>
+          </v-row>
 
           <!-- Model Settings Dialog -->
           <v-dialog v-model="settingsDialog" max-width="580" scrollable>
@@ -1511,6 +1518,11 @@ export default {
 </script>
 
 <style scoped>
+/* Use available horizontal space on large displays instead of a narrow column */
+.page-container {
+  max-width: 1400px;
+  margin-inline: auto;
+}
 .search-results-scroll {
   max-height: 480px;
   overflow-y: auto;
