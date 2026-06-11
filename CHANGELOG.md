@@ -1,3 +1,10 @@
+# [0.8.0-alpha.49](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.48...v0.8.0-alpha.49) (2026-06-11)
+
+
+### Features
+
+* **bench:** persist benchmark runs + Previous Runs history table ([d457935](https://github.com/oRKLLM/oRKLLM/commit/d457935cd6ce7b038243bb94aff04d3a515f38c0))
+
 # [0.8.0-alpha.48](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.47...v0.8.0-alpha.48) (2026-06-11)
 
 
