@@ -610,6 +610,10 @@ export function dbListBenchRuns(limit = 50) {
   ).all(limit));
 }
 
+export function dbDeleteBenchRun(id) {
+  return withReconnect(d => d.prepare('DELETE FROM bench_runs WHERE id = ?').run(id));
+}
+
 export function dbClearBenchRuns() {
   return withReconnect(d => d.prepare('DELETE FROM bench_runs').run());
 }

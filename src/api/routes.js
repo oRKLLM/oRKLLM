@@ -170,6 +170,17 @@ export default async function apiRoutes(fastify, options) {
     if (saved.ctx_window != null)          modelOptions.max_context_len   = saved.ctx_window;
     if (saved.thinking_enabled)            modelOptions.enable_thinking   = true;
 
+    // Speculative-decode status from the model's saved settings. Computed once
+    // and attached to the stop chunk of every response path (normal, eagle-3,
+    // and the MCP tool loop) so the benchmark records what's configured.
+    // hardware = the draft compute target.
+    const specDecode =
+      saved.speculative_mode === 'eagle3'
+        ? { enabled: true, strategy: 'eagle3', hardware: saved.eagle3_strategy || 'cpu', k: saved.spec_draft_tokens || 8 }
+        : (saved.speculative_mode === 'speculative' && saved.draft_model)
+          ? { enabled: true, strategy: 'speculative', hardware: 'npu', draftModel: saved.draft_model, k: saved.spec_draft_tokens || 8 }
+          : { enabled: false, strategy: 'none', hardware: null };
+
     const completionId = 'chatcmpl-' + Math.random().toString(36).substring(2, 15);
     const created = Math.floor(Date.now() / 1000);
 
@@ -244,7 +255,7 @@ export default async function apiRoutes(fastify, options) {
           for (const piece of finalText.match(/\S+\s*/g) || [finalText]) {
             reply.raw.write(`data: ${JSON.stringify({ id: completionId, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: { content: piece }, finish_reason: null }] })}\n\n`);
           }
-          reply.raw.write(`data: ${JSON.stringify({ id: completionId, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], perf: resolved.perf, mcp_tool_calls: resolved.toolCalls })}\n\n`);
+          reply.raw.write(`data: ${JSON.stringify({ id: completionId, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], perf: resolved.perf, mcp_tool_calls: resolved.toolCalls, specDecode })}\n\n`);
           reply.raw.write('data: [DONE]\n\n');
           reply.raw.end();
           return reply;
@@ -289,14 +300,6 @@ export default async function apiRoutes(fastify, options) {
           const draftModel  = saved.draft_model;
           const specK       = saved.spec_draft_tokens || 8;
           const eagle3Weights = saved.eagle3_weights_path ?? null;
-          // What speculative decoding actually ran — surfaced in the stop chunk
-          // so the benchmark can record it. hardware = the draft compute target.
-          const specDecode =
-            specMode === 'eagle3'
-              ? { enabled: true, strategy: 'eagle3', hardware: saved.eagle3_strategy || 'cpu', k: specK }
-              : (specMode === 'speculative' && draftModel)
-                ? { enabled: true, strategy: 'speculative', hardware: 'npu', draftModel, k: specK }
-                : { enabled: false, strategy: 'none', hardware: null };
           let finalResult;
           if (specMode === 'eagle3') {
             // Eagle-3: pipelined GET_HIDDEN_LAYER + GET_LOGITS + Mali Vulkan draft

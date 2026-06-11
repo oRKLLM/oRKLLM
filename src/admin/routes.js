@@ -12,7 +12,7 @@ import {
   dbCreateUser, dbGetUserById, dbGetUserByUsername, dbGetUserBySubject, dbListUsers, dbUpdateUser, dbUsersEmpty,
   dbGetAuthProviderConfig, dbSetAuthProviderConfig, dbClearAuthProviderConfig,
   dbLogAudit, dbGetAuditLog, dbGetSchemaVersion,
-  dbCreateBenchRun, dbListBenchRuns, dbClearBenchRuns,
+  dbCreateBenchRun, dbListBenchRuns, dbDeleteBenchRun, dbClearBenchRuns,
 } from '../db.js';
 import { v4 as uuidv4 } from 'uuid';
 import { isSpvAvailable } from '../spv_sync.js';
@@ -615,6 +615,14 @@ export default async function adminRoutes(fastify, options) {
   fastify.delete('/bench-runs', async (request) => {
     dbClearBenchRuns();
     logAudit(request, 'bench_runs_clear', null);
+    return { success: true };
+  });
+
+  // DELETE /api/admin/bench-runs/:id — delete a single run
+  fastify.delete('/bench-runs/:id', async (request) => {
+    const { id } = request.params;
+    dbDeleteBenchRun(id);
+    logAudit(request, 'bench_run_delete', id);
     return { success: true };
   });
 

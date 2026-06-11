@@ -182,6 +182,7 @@
               <th class="text-right">Total</th>
               <th class="text-right">Max</th>
               <th>Spec decode</th>
+              <th class="text-right"></th>
             </tr>
           </thead>
           <tbody>
@@ -197,6 +198,11 @@
               <td class="text-no-wrap">
                 <span v-if="r.spec_enabled" class="text-caption">{{ specLabel(r.spec_strategy) }} · {{ hwLabel(r.spec_hardware) }}</span>
                 <span v-else class="text-caption text-grey">off</span>
+              </td>
+              <td class="text-right">
+                <v-btn icon size="x-small" variant="text" color="error" title="Delete this run" @click="deleteRun(r.id)">
+                  <v-icon size="16">mdi-delete-outline</v-icon>
+                </v-btn>
               </td>
             </tr>
           </tbody>
@@ -284,6 +290,15 @@ export default {
         const res = await fetch('/api/admin/bench-runs', { method: 'DELETE' });
         if (res.ok) { this.history = []; this.$notify('Benchmark history cleared', 'success'); }
       } catch (e) { this.$notify('Failed to clear', 'error'); }
+    },
+    async deleteRun(id) {
+      try {
+        const res = await fetch(`/api/admin/bench-runs/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        if (res.ok) {
+          this.history = this.history.filter(r => r.id !== id);
+          this.$notify('Run deleted', 'success');
+        }
+      } catch (e) { this.$notify('Failed to delete run', 'error'); }
     },
     formatTime(ts) {
       const d = new Date(ts);
