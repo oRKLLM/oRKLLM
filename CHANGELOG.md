@@ -1,3 +1,11 @@
+# [0.8.0-alpha.47](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.46...v0.8.0-alpha.47) (2026-06-11)
+
+
+### Features
+
+* **pwa:** installable Progressive Web App ([d01d57b](https://github.com/oRKLLM/oRKLLM/commit/d01d57b02b45f50aa988d95200d37abad13bcb1b))
+* **tailscale:** optional Serve management (Site Management → Remote Access) ([0d3f192](https://github.com/oRKLLM/oRKLLM/commit/0d3f1920c1a0036afc781fb409aaed57e053ba99))
+
 # [0.8.0-alpha.46](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.45...v0.8.0-alpha.46) (2026-06-11)
 
 
