@@ -431,6 +431,7 @@ export default async function adminRoutes(fastify, options) {
         langfuseBaseUrl:    dbGetSetting('langfuse_base_url')   ?? '',
         langfusePublicKey:  dbGetSetting('langfuse_public_key') ?? '',
         langfuseSecretKey:  dbGetSetting('langfuse_secret_key') ?? '',
+        mcpInferenceEnabled: dbGetSetting('mcp_inference_enabled') === '1',
       },
       cacheStats: getCacheStats()
     };
@@ -443,6 +444,7 @@ export default async function adminRoutes(fastify, options) {
             kvCacheQuant,
             localAuthDisabled, trustedProxy, autoDownloadRuntimes, npuPoolSize,
             langfuseEnabled, langfuseBaseUrl, langfusePublicKey, langfuseSecretKey,
+            mcpInferenceEnabled,
           } = request.body || {};
     if (typeof idleTimeoutMinutes === 'number') {
       pool.setIdleTimeout(idleTimeoutMinutes);
@@ -471,6 +473,7 @@ export default async function adminRoutes(fastify, options) {
     if (typeof langfusePublicKey === 'string')  dbSetSetting('langfuse_public_key', langfusePublicKey);
     if (typeof langfuseSecretKey === 'string' && langfuseSecretKey)
       dbSetSetting('langfuse_secret_key', langfuseSecretKey);
+    if (typeof mcpInferenceEnabled === 'boolean') dbSetSetting('mcp_inference_enabled', mcpInferenceEnabled ? '1' : '0');
     logAudit(request, 'settings_change', null);
     return { success: true };
   });
@@ -895,4 +898,8 @@ export default async function adminRoutes(fastify, options) {
   // ── Conversation history ─────────────────────────────────────────────────
   const { default: conversationRoutes } = await import('./conversations.js');
   await fastify.register(conversationRoutes);
+
+  // ── MCP servers ──────────────────────────────────────────────────────────
+  const { default: mcpRoutes } = await import('./mcp.js');
+  await fastify.register(mcpRoutes);
 }

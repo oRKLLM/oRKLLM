@@ -175,6 +175,24 @@ const MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 4,
+    description: 'MCP servers: mcp_servers table',
+    up(d) {
+      d.exec(`
+        CREATE TABLE IF NOT EXISTS mcp_servers (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          transport TEXT NOT NULL,
+          config TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_mcp_servers_enabled ON mcp_servers(enabled);
+      `);
+    },
+  },
 ];
 
 const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
@@ -486,4 +504,64 @@ export function dbGetMessages(conversationId) {
   return withReconnect(d => d.prepare(
     'SELECT id, role, content, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC'
   ).all(conversationId));
+}
+
+// --- MCP servers ---
+// `config` holds transport-specific JSON: stdio → { command, args[], env{} };
+// sse/http → { url, headers{} }. Stored as a string, parsed by the mapper.
+
+function mapMcpRow(row) {
+  if (!row) return null;
+  let config = {};
+  try { config = JSON.parse(row.config); } catch (e) {}
+  return {
+    id: row.id,
+    name: row.name,
+    transport: row.transport,
+    config,
+    enabled: !!row.enabled,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+export function dbListMcpServers() {
+  return withReconnect(d => d.prepare(
+    'SELECT * FROM mcp_servers ORDER BY created_at ASC'
+  ).all()).map(mapMcpRow);
+}
+
+export function dbListEnabledMcpServers() {
+  return withReconnect(d => d.prepare(
+    'SELECT * FROM mcp_servers WHERE enabled = 1 ORDER BY created_at ASC'
+  ).all()).map(mapMcpRow);
+}
+
+export function dbGetMcpServer(id) {
+  return mapMcpRow(withReconnect(d => d.prepare(
+    'SELECT * FROM mcp_servers WHERE id = ?'
+  ).get(id)));
+}
+
+export function dbCreateMcpServer({ id, name, transport, config, enabled = true }) {
+  const now = Date.now();
+  return withReconnect(d => d.prepare(
+    'INSERT INTO mcp_servers (id, name, transport, config, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, name, transport, JSON.stringify(config ?? {}), enabled ? 1 : 0, now, now));
+}
+
+export function dbUpdateMcpServer(id, fields) {
+  const current = dbGetMcpServer(id);
+  if (!current) return false;
+  const name = fields.name ?? current.name;
+  const transport = fields.transport ?? current.transport;
+  const config = fields.config ?? current.config;
+  const enabled = fields.enabled ?? current.enabled;
+  return withReconnect(d => d.prepare(
+    'UPDATE mcp_servers SET name = ?, transport = ?, config = ?, enabled = ?, updated_at = ? WHERE id = ?'
+  ).run(name, transport, JSON.stringify(config ?? {}), enabled ? 1 : 0, Date.now(), id));
+}
+
+export function dbDeleteMcpServer(id) {
+  return withReconnect(d => d.prepare('DELETE FROM mcp_servers WHERE id = ?').run(id));
 }
