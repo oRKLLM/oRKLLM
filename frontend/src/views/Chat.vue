@@ -118,7 +118,7 @@
                 <div>
                   <span class="text-caption">Inject MCP tool instructions</span>
                   <span class="text-caption text-grey ml-2">
-                    {{ mcpToolCount > 0 ? `${mcpToolCount} tool(s) available` : 'no enabled MCP servers' }}
+                    {{ mcpToolCount > 0 ? `${mcpToolCount} tool(s) · ~${mcpApproxTokens} tokens` : 'no enabled MCP servers' }}
                   </span>
                 </div>
                 <v-switch
@@ -333,6 +333,7 @@ export default {
     mobileHistoryOpen: false,
     // MCP tool-instruction injection
     mcpToolCount: 0,
+    mcpApproxTokens: 0,
     mcpInjected: false,
   }),
   computed: {
@@ -477,7 +478,11 @@ export default {
     async fetchMcpToolCount() {
       try {
         const res = await fetch('/api/admin/mcp-tools');
-        if (res.ok) this.mcpToolCount = (await res.json()).count || 0;
+        if (res.ok) {
+          const d = await res.json();
+          this.mcpToolCount = d.count || 0;
+          this.mcpApproxTokens = d.approxTokens || 0;
+        }
       } catch (e) {}
     },
     stripMcpBlock(text) {
@@ -503,6 +508,7 @@ export default {
         const res = await fetch('/api/admin/mcp-tools');
         const data = res.ok ? await res.json() : { count: 0, systemPrompt: '' };
         this.mcpToolCount = data.count || 0;
+        this.mcpApproxTokens = data.approxTokens || 0;
         if (!data.count) {
           this.$notify('No enabled MCP servers with tools', 'warning');
           this.mcpInjected = false;

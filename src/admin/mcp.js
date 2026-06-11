@@ -36,10 +36,12 @@ export default async function mcpRoutes(fastify) {
   fastify.get('/mcp-tools', async () => {
     const servers = dbListEnabledMcpServers();
     const { tools } = await getAggregatedTools(servers);
+    const systemPrompt = tools.length ? buildToolSystemPrompt(tools) : '';
     return {
       count: tools.length,
       tools: tools.map(t => ({ name: t.function.name, description: t.function.description })),
-      systemPrompt: tools.length ? buildToolSystemPrompt(tools) : '',
+      systemPrompt,
+      approxTokens: Math.round(systemPrompt.length / 4),
     };
   });
 

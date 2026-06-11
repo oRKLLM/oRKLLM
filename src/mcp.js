@@ -154,7 +154,10 @@ export async function getAggregatedTools(servers) {
     try {
       const client = await getClient(server);
       const res = await withTimeout(client.listTools(), CONNECT_TIMEOUT_MS, 'MCP listTools');
+      // Per-server allow-list (raw tool names). null/absent = expose all tools.
+      const allow = Array.isArray(server.config?.allowedTools) ? new Set(server.config.allowedTools) : null;
       for (const t of res.tools || []) {
+        if (allow && !allow.has(t.name)) continue;
         const name = toolName(server, t.name);
         lookup.set(name, { serverId: server.id, toolName: t.name });
         tools.push({

@@ -489,16 +489,35 @@
             </template>
 
             <div v-if="mcpError" class="text-error text-caption mt-3">{{ mcpError }}</div>
-            <div v-if="mcpTestResult" :class="['text-caption mt-3', mcpTestResult.ok ? 'text-success' : 'text-error']">
-              <template v-if="mcpTestResult.ok">
-                Connected — {{ mcpTestResult.tools.length }} tool(s){{ mcpTestResult.tools.length ? ': ' + mcpTestResult.tools.map(t => t.name).join(', ') : '' }}
-              </template>
-              <template v-else>Failed: {{ mcpTestResult.error }}</template>
+            <div v-if="mcpTestResult && !mcpTestResult.ok" class="text-caption text-error mt-3">Failed: {{ mcpTestResult.error }}</div>
+
+            <!-- Tool picker — populated by "Test / Load tools". Only checked tools are exposed. -->
+            <div v-if="mcpForm.availableTools.length" class="mt-4">
+              <div class="d-flex align-center justify-space-between mb-1">
+                <span class="text-subtitle-2 font-weight-medium">Tools — {{ mcpForm.selectedTools.length }}/{{ mcpForm.availableTools.length }} enabled</span>
+                <div>
+                  <v-btn size="x-small" variant="text" @click="mcpSelectAllTools(true)">All</v-btn>
+                  <v-btn size="x-small" variant="text" @click="mcpSelectAllTools(false)">None</v-btn>
+                </div>
+              </div>
+              <div class="text-caption text-grey mb-2">Only checked tools are sent to the model. Fewer tools = smaller system prompt = more room for the conversation.</div>
+              <div class="mcp-tool-list">
+                <v-checkbox
+                  v-for="t in mcpForm.availableTools" :key="t.name"
+                  :model-value="mcpForm.selectedTools.includes(t.name)"
+                  :label="t.name"
+                  density="compact" hide-details color="primary" class="mcp-tool-cb"
+                  @update:model-value="mcpToggleTool(t.name, $event)"
+                ></v-checkbox>
+              </div>
+            </div>
+            <div v-else-if="mcpTestResult && mcpTestResult.ok" class="text-caption text-success mt-3">
+              Connected — 0 tools advertised
             </div>
           </v-card-text>
           <v-card-actions class="pa-5 pt-0 justify-end gap-2">
             <v-btn variant="text" color="grey" @click="mcpDialog = false">Cancel</v-btn>
-            <v-btn variant="text" color="primary" :loading="mcpDialogTesting" @click="testMcpForm">Test</v-btn>
+            <v-btn variant="text" color="primary" :loading="mcpDialogTesting" @click="testMcpForm">Test / Load tools</v-btn>
             <v-btn variant="flat" color="primary" :loading="mcpSaving" @click="saveMcp">Save</v-btn>
           </v-card-actions>
         </v-card>
@@ -560,7 +579,7 @@ export default {
     mcpTesting: null,
     mcpError: '',
     mcpTestResult: null,
-    mcpForm: { id: null, name: '', transport: 'stdio', command: '', argsText: '', envText: '', url: '', authType: 'none', bearerToken: '', apiKeyName: 'X-API-Key', apiKeyValue: '', basicUser: '', basicPass: '', headersText: '' },
+    mcpForm: { id: null, name: '', transport: 'stdio', command: '', argsText: '', envText: '', url: '', authType: 'none', bearerToken: '', apiKeyName: 'X-API-Key', apiKeyValue: '', basicUser: '', basicPass: '', headersText: '', allowedTools: null, availableTools: [], selectedTools: [] },
     snackbar: { show: false, text: '', color: 'success' },
     appVersion: __APP_VERSION__,
     themeName: localStorage.getItem('orkllm-theme') || 'customDarkTheme'
@@ -648,9 +667,11 @@ export default {
           envText: Object.entries(c.env || {}).map(([k, v]) => `${k}=${v}`).join('\n'),
           url: c.url || '',
           authType, bearerToken, apiKeyName, apiKeyValue, basicUser, basicPass, headersText,
+          allowedTools: Array.isArray(c.allowedTools) ? c.allowedTools : null,
+          availableTools: [], selectedTools: [],
         };
       } else {
-        this.mcpForm = { id: null, name: '', transport: 'stdio', command: '', argsText: '', envText: '', url: '', authType: 'none', bearerToken: '', apiKeyName: 'X-API-Key', apiKeyValue: '', basicUser: '', basicPass: '', headersText: '' };
+        this.mcpForm = { id: null, name: '', transport: 'stdio', command: '', argsText: '', envText: '', url: '', authType: 'none', bearerToken: '', apiKeyName: 'X-API-Key', apiKeyValue: '', basicUser: '', basicPass: '', headersText: '', allowedTools: null, availableTools: [], selectedTools: [] };
       }
       this.mcpDialog = true;
     },
@@ -688,6 +709,14 @@ export default {
         }
         config.auth = auth;
       }
+      // Tool allow-list: once tools have been loaded in the dialog, persist the
+      // checked subset (null when all are checked → future tools auto-included).
+      // If never loaded, keep whatever was stored.
+      if (f.availableTools.length) {
+        config.allowedTools = f.selectedTools.length === f.availableTools.length ? null : [...f.selectedTools];
+      } else if (Array.isArray(f.allowedTools)) {
+        config.allowedTools = f.allowedTools;
+      }
       return { name: f.name.trim(), transport: f.transport, config };
     },
     async testMcpForm() {
@@ -695,19 +724,39 @@ export default {
       this.mcpTestResult = null;
       this.mcpDialogTesting = true;
       try {
+        // Validate without the allow-list so we see ALL advertised tools to pick from.
+        const payload = this.mcpFormToPayload();
+        if (payload.config) delete payload.config.allowedTools;
         const res = await fetch('/api/admin/mcp-servers/validate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(this.mcpFormToPayload()),
+          body: JSON.stringify(payload),
         });
         const data = await res.json();
-        if (res.ok) this.mcpTestResult = data;
-        else this.mcpError = data.error || 'Validation failed';
+        if (res.ok) {
+          this.mcpTestResult = data;
+          this.mcpForm.availableTools = data.tools || [];
+          // Pre-check from the stored allow-list, or all tools when unset.
+          const allow = this.mcpForm.allowedTools;
+          this.mcpForm.selectedTools = allow
+            ? this.mcpForm.availableTools.filter(t => allow.includes(t.name)).map(t => t.name)
+            : this.mcpForm.availableTools.map(t => t.name);
+        } else {
+          this.mcpError = data.error || 'Validation failed';
+        }
       } catch (e) {
         this.mcpError = 'Network error';
       } finally {
         this.mcpDialogTesting = false;
       }
+    },
+    mcpToggleTool(name, on) {
+      const set = new Set(this.mcpForm.selectedTools);
+      if (on) set.add(name); else set.delete(name);
+      this.mcpForm.selectedTools = [...set];
+    },
+    mcpSelectAllTools(on) {
+      this.mcpForm.selectedTools = on ? this.mcpForm.availableTools.map(t => t.name) : [];
     },
     async saveMcp() {
       this.mcpError = '';
@@ -938,4 +987,17 @@ export default {
 }
 
 .gap-3 { gap: 12px; }
+
+.mcp-tool-list {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid rgba(139, 92, 246, 0.15);
+  border-radius: 8px;
+  padding: 4px 10px;
+}
+.mcp-tool-cb :deep(.v-label) {
+  font-family: 'Fira Code', 'Courier New', monospace;
+  font-size: 12px;
+  opacity: 1;
+}
 </style>
