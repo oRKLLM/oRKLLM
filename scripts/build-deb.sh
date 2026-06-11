@@ -40,7 +40,7 @@ Version: ${VERSION}
 Architecture: ${ARCH}
 Maintainer: Michael Fischer <mfischer@toorakcapital.io>
 Pre-Depends: debconf (>= 0.5) | debconf-2.0
-Depends: nodejs (>= 18.0.0), smartmontools
+Depends: nodejs (>= 18.0.0), smartmontools, libgomp1
 Section: net
 Priority: optional
 Homepage: https://github.com/mafischer/oRKLLM
