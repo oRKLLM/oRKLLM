@@ -152,8 +152,7 @@
 
 <script>
 import AppNav from '../components/AppNav.vue';
-
-const DEFAULT_PROMPT = 'Explain the theory of relativity in detail, covering both the special and general theories, their implications, and practical applications in modern technology.';
+import { benchState, runBenchmark as runBench, abortBenchmark as abortBench } from '../bench.js';
 
 export default {
   name: 'Bench',
@@ -164,12 +163,6 @@ export default {
     models: [],
     selectedModel: null,
     loadingModel: false,
-    benchPrompt: DEFAULT_PROMPT,
-    maxTokens: 512,
-    running: false,
-    benchOutput: '',
-    results: null,
-    abortController: null,
     appVersion: __APP_VERSION__,
     themeName: localStorage.getItem('orkllm-theme') || 'customDarkTheme'
   }),
@@ -179,7 +172,19 @@ export default {
     },
     modelItems() {
       return this.models.map(m => ({ title: m.id, value: m.id }));
-    }
+    },
+    // Benchmark state proxied from the shared store so it persists across navigation.
+    benchPrompt: {
+      get() { return benchState.benchPrompt; },
+      set(v) { benchState.benchPrompt = v; }
+    },
+    maxTokens: {
+      get() { return benchState.maxTokens; },
+      set(v) { benchState.maxTokens = v; }
+    },
+    running() { return benchState.running; },
+    benchOutput() { return benchState.benchOutput; },
+    results() { return benchState.results; }
   },
   async mounted() {
     this.fetchAuth();
@@ -237,108 +242,12 @@ export default {
         this.loadingModel = false;
       }
     },
-    async runBenchmark() {
+    runBenchmark() {
       if (!this.status.isLoaded || this.running) return;
-
-      this.running = true;
-      this.benchOutput = '';
-      this.results = null;
-      this.abortController = new AbortController();
-
-      const t0 = performance.now();
-      let ttft = null;
-      let genTokens = 0;
-      let prefillTimeMs = 0;
-      let genTimeMs = 0;
-
-      try {
-        const res = await fetch('/v1/chat/completions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: this.abortController.signal,
-          body: JSON.stringify({
-            model: this.status.model,
-            messages: [{ role: 'user', content: this.benchPrompt }],
-            stream: true,
-            max_tokens: this.maxTokens,
-            temperature: 0.7,
-            top_p: 0.9
-          })
-        });
-
-        if (!res.ok) {
-          const data = await res.json();
-          this.benchOutput = `Error: ${data.error || 'Request failed'}`;
-          this.running = false;
-          return;
-        }
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder('utf-8');
-        let buffer = '';
-
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop();
-
-          for (const line of lines) {
-            const cleanLine = line.trim();
-            if (!cleanLine.startsWith('data: ')) continue;
-
-            const dataStr = cleanLine.substring(6);
-            if (dataStr === '[DONE]') continue;
-
-            try {
-              const obj = JSON.parse(dataStr);
-
-              if (obj.choices?.[0]?.delta?.content) {
-                if (ttft === null) {
-                  ttft = performance.now() - t0;
-                }
-                this.benchOutput += obj.choices[0].delta.content;
-                genTokens++;
-              }
-
-              if (obj.perf) {
-                prefillTimeMs = obj.perf.prefill_time_ms || 0;
-                genTimeMs = obj.perf.generate_time_ms || 0;
-                genTokens = obj.perf.generate_tokens || genTokens;
-              }
-            } catch (err) {}
-          }
-        }
-
-        const total = performance.now() - t0;
-
-        this.results = {
-          ttft_ms: ttft ?? total,
-          prefill_tps: prefillTimeMs > 0 ? ((this.benchPrompt.split(' ').length) / (prefillTimeMs / 1000)) : 0,
-          gen_tps: genTimeMs > 0 ? (genTokens / (genTimeMs / 1000)) : (genTokens / (total / 1000)),
-          gen_tokens: genTokens,
-          total_ms: total,
-          model: this.status.model,
-          max_tokens: this.maxTokens
-        };
-
-      } catch (err) {
-        if (err.name !== 'AbortError') {
-          this.benchOutput += `\n[Error: ${err.message}]`;
-        }
-      } finally {
-        this.running = false;
-        this.abortController = null;
-      }
+      runBench(this.status.model);
     },
     abortBenchmark() {
-      if (this.abortController) {
-        this.abortController.abort();
-      }
-      this.running = false;
-      this.benchOutput += '\n[Benchmark aborted]';
+      abortBench();
     },
     toggleTheme() {
       const next = this.isDark ? 'customLightTheme' : 'customDarkTheme';

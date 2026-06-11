@@ -145,15 +145,17 @@ graph TD
 | `frontend/src/views/Models.vue` | Model manager + HF search/collection browser/downloader; recursive model scan; platform-aware search; download queue grouped by repo |
 | `frontend/src/components/RuntimeSyncDialog.vue` | Reusable JIT runtime download progress dialog; shown during model load when a runtime is being fetched; used by Models and Chat pages |
 | `frontend/src/notify.js` | Global notification store; `notify(message, color)` drives a `v-snackbar` in `App.vue` via `app.config.globalProperties.$notify`; replaces all `alert()` browser popups |
+| `frontend/src/bench.js` | Module-scope `reactive()` benchmark store (`benchState`, `runBenchmark`, `abortBenchmark`); keeps the streaming run + results alive across route changes so `Bench.vue` can unmount/remount without losing state |
+| `frontend/src/chat.js` | Module-scope `reactive()` chat-session store (`chatState`, `sendMessage`, `abortGeneration`, conversation CRUD); an in-flight generation and its conversation survive navigating away from `/chat` and back. Partial-response `sendBeacon` is registered here on `pagehide` (true page unload only) |
 | `frontend/src/views/Settings.vue` | Global settings, HF token, prefix cache config, trusted proxy |
 | `frontend/src/views/Logs.vue` | Full-page live log terminal (WebSocket) |
 | `frontend/src/views/Bench.vue` | Inference benchmark (TTFT, tok/s) |
 | `frontend/src/views/Chat.vue` | Full streaming chat against OpenAI-compatible API |
 | `frontend/src/views/SiteManagement.vue` | Admin-only: user CRUD, OIDC/SAML config, audit log |
 | `frontend/src/views/Login.vue` | Login page; shows SSO button when OIDC/SAML configured |
-| `e2e/orkllm.spec.js` | Playwright E2E suite (38 tests — core flow, chat history, runtime, auto-download, download queue, dashboard, platform detection) |
+| `e2e/orkllm.spec.js` | Playwright E2E suite (41 tests — core flow, chat history, runtime, auto-download, download queue, dashboard, platform detection) |
 | `e2e/rbac.spec.js` | Playwright E2E suite (17 tests — RBAC, trusted proxy (single + multi-IP/CIDR), mock OIDC SSO, Keycloak integration) |
-| `e2e/regression.spec.js` | Playwright E2E suite (14 tests — UI regression: navbar, theme, user drawer, drawer toggles, Contribute button, snackbar) |
+| `e2e/regression.spec.js` | Playwright E2E suite (16 tests — UI regression: navbar, theme, user drawer, drawer toggles, Contribute button, snackbar, Bench/Chat state persistence across navigation) |
 
 **Other paths:** `src/` also holds `auth/` (OIDC/SAML/session) and `eagle.js`. Non-source: `models/` (`.rkllm` files), `frontend/` (Vue 3 + Vuetify 3 SPA, Vite), `e2e/` (Playwright), root build config (`package.json`, `binding.gyp`, `playwright.config.js`). `CLAUDE.md` and `GEMINI.md` both `@AGENTS.md`.
 
