@@ -239,7 +239,7 @@ export default async function apiRoutes(fastify, options) {
           });
         } catch (err) {
           if (stream) {
-            reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+            reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
             reply.raw.write(`data: ${JSON.stringify({ error: { message: err.message, type: 'invalid_request_error' } })}\n\n`);
             reply.raw.end();
             return reply;
@@ -250,7 +250,7 @@ export default async function apiRoutes(fastify, options) {
         const finalText = resolved.finalText || '';
 
         if (stream) {
-          reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+          reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
           // Emit the resolved answer as word chunks to preserve the streaming contract.
           for (const piece of finalText.match(/\S+\s*/g) || [finalText]) {
             reply.raw.write(`data: ${JSON.stringify({ id: completionId, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: { content: piece }, finish_reason: null }] })}\n\n`);
@@ -278,7 +278,10 @@ export default async function apiRoutes(fastify, options) {
       reply.raw.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive'
+        'Connection': 'keep-alive',
+        // Disable proxy buffering (nginx/tailscale) so SSE tokens flush live
+        // instead of being released all at once when the response ends.
+        'X-Accel-Buffering': 'no'
       });
 
       await traceInference(traceParams, async (gen) => {
