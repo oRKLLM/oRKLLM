@@ -11,7 +11,7 @@
     <v-container fluid class="pt-6 px-6" style="max-width: 1000px;">
 
       <div class="text-h5 font-weight-bold mb-1">Models</div>
-      <div class="text-caption text-grey mb-5">Manage and download .rkllm model files.</div>
+      <div class="text-caption text-grey mb-5">Manage and download .rkllm models and Eagle-3 draft heads (.safetensors, .gguf).</div>
 
       <v-tabs v-model="tab" color="primary" class="mb-5">
         <v-tab value="manager">
@@ -156,6 +156,39 @@
               </v-list-item>
               <div v-if="models.length === 0" class="text-center py-6 text-grey">
                 No models found in scan directory.
+              </div>
+            </v-list>
+          </v-card>
+
+          <!-- Eagle-3 Draft Heads -->
+          <v-card class="glass-card pa-5 mb-5">
+            <div class="d-flex align-center justify-space-between mb-4">
+              <div class="text-h6 font-weight-bold d-flex align-center">
+                <v-icon start color="purple">mdi-lightning-bolt-outline</v-icon>
+                Eagle-3 Draft Heads
+              </div>
+              <v-btn icon size="small" variant="text" color="grey" title="Rescan" @click="fetchEagle3Heads">
+                <v-icon>mdi-refresh</v-icon>
+              </v-btn>
+            </div>
+            <v-list bg-color="transparent" class="pa-0 border rounded">
+              <v-list-item
+                v-for="head in eagle3Heads"
+                :key="head.id"
+                class="border-bottom py-3"
+              >
+                <template v-slot:prepend>
+                  <v-icon color="purple">mdi-head-flash-outline</v-icon>
+                </template>
+                <v-list-item-title class="font-weight-bold text-truncate">{{ head.id }}</v-list-item-title>
+                <v-list-item-subtitle>
+                  <v-chip size="x-small" :color="head.format === 'npu' ? 'primary' : 'purple'" variant="tonal" class="mr-1">
+                    {{ head.format === 'npu' ? 'NPU (.rkllm)' : head.id.endsWith('.safetensors') ? 'Vulkan (.safetensors)' : 'Vulkan (.gguf)' }}
+                  </v-chip>
+                </v-list-item-subtitle>
+              </v-list-item>
+              <div v-if="eagle3Heads.length === 0" class="text-center py-6 text-grey">
+                No Eagle-3 draft heads found. Download a head with "Eagle-3" in its name or path.
               </div>
             </v-list>
           </v-card>

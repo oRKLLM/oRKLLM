@@ -629,7 +629,7 @@ export default async function adminRoutes(fastify, options) {
       for (const e of entries) {
         const rel = prefix ? `${prefix}/${e.name}` : e.name;
         if (e.isDirectory()) scan(path.join(dir, e.name), rel);
-        else if (/EAGLE3|Eagle3Draft/i.test(e.name) && /\.(rkllm|gguf|safetensors)$/i.test(e.name)) {
+        else if (/EAGLE3|Eagle3Draft/i.test(rel) && /\.(rkllm|gguf|safetensors)$/i.test(e.name)) {
           heads.push({ id: rel, format: /\.rkllm$/i.test(e.name) ? 'npu' : 'vulkan' });
         }
       }
