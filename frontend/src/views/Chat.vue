@@ -283,6 +283,15 @@
 <script>
 import AppNav from '../components/AppNav.vue';
 import RuntimeSyncDialog from '../components/RuntimeSyncDialog.vue';
+import {
+  chatState,
+  fetchConversations as fetchConvs,
+  loadConversation as loadConv,
+  deleteConversation as delConv,
+  newChat as newChatStore,
+  sendMessage as sendMsg,
+  abortGeneration as abortGen,
+} from '../chat.js';
 
 export default {
   name: 'Chat',
@@ -290,32 +299,16 @@ export default {
   data: () => ({
     user: { username: 'admin', role: 'admin', authProvider: 'local' },
     models: [],
-    selectedModel: null,
-    activeModel: null,
     loadingModel: false,
     status: { isLoaded: false, model: null },
-    systemPrompt: '',
-    chatHistory: [],
-    inputText: '',
-    params: {
-      temperature: 0.8,
-      top_p: 0.9,
-      top_k: 40,
-      max_tokens: 1024
-    },
-    generating: false,
     showRuntimeSyncDialog: false,
     runtimeSyncState: { active: false, version: null, filename: null, bytesDown: 0, totalBytes: 0 },
     runtimeSyncPoller: null,
-    messageQueue: [],
-    abortController: null,
     appVersion: __APP_VERSION__,
     themeName: localStorage.getItem('orkllm-theme') || 'customDarkTheme',
-    // Conversation persistence
+    // View-only UI state (safe to reset on navigation)
     sidebarOpen: true,
     mobileHistoryOpen: false,
-    conversations: [],
-    activeConversationId: null,
   }),
   computed: {
     isDark() {
@@ -323,25 +316,46 @@ export default {
     },
     modelItems() {
       return this.models.map(m => ({ title: m.id, value: m.id }));
+    },
+    // Session state proxied from the shared store so an in-flight generation
+    // and its conversation survive navigating away from /chat and back.
+    selectedModel: {
+      get() { return chatState.selectedModel; },
+      set(v) { chatState.selectedModel = v; }
+    },
+    systemPrompt: {
+      get() { return chatState.systemPrompt; },
+      set(v) { chatState.systemPrompt = v; }
+    },
+    inputText: {
+      get() { return chatState.inputText; },
+      set(v) { chatState.inputText = v; }
+    },
+    params() { return chatState.params; },
+    activeModel() { return chatState.activeModel; },
+    chatHistory() { return chatState.chatHistory; },
+    generating() { return chatState.generating; },
+    conversations() { return chatState.conversations; },
+    activeConversationId() { return chatState.activeConversationId; }
+  },
+  watch: {
+    // Autoscroll as tokens stream in (deep — assistant content mutates in place)
+    // and when restoring history after navigating back to the page.
+    chatHistory: {
+      handler() { this.scrollToBottom(); },
+      deep: true
     }
   },
   async mounted() {
     this.fetchAuth();
     await this.fetchModels();
     await this.fetchStatus();
+    this.scrollToBottom();
   },
   beforeUnmount() {
-    // Page navigation during inference — save whatever was generated so far.
-    // sendBeacon fires even as the page unloads; a normal fetch would be cancelled.
-    if (!this.activeConversationId) return;
-    const lastMsg = this.chatHistory[this.chatHistory.length - 1];
-    if (lastMsg?.role === 'assistant' && lastMsg.content) {
-      navigator.sendBeacon(
-        `/api/admin/conversations/${this.activeConversationId}/messages`,
-        new Blob([JSON.stringify({ role: 'assistant', content: lastMsg.content })],
-          { type: 'application/json' })
-      );
-    }
+    // Generation now lives in the store and continues across route changes,
+    // persisting normally on completion — no per-navigation beacon needed.
+    // Only the component-local runtime-sync poller must be torn down here.
     if (this.runtimeSyncPoller) clearInterval(this.runtimeSyncPoller);
   },
   methods: {
@@ -383,17 +397,17 @@ export default {
         const data = await res.json();
         this.status = data;
         if (data.isLoaded && data.model) {
-          this.selectedModel = data.model;
-          this.activeModel = data.model;
-          await this.fetchConversations(data.model);
+          chatState.selectedModel = data.model;
+          chatState.activeModel = data.model;
+          await fetchConvs(data.model);
         }
       } catch (e) {}
     },
     async onModelChange(modelId) {
       if (!modelId) return;
       if (modelId === this.status.model) {
-        this.activeModel = modelId;
-        await this.fetchConversations(modelId);
+        chatState.activeModel = modelId;
+        await fetchConvs(modelId);
         return;
       }
       this.loadingModel = true;
@@ -405,16 +419,16 @@ export default {
           body: JSON.stringify({ model: modelId, options: { max_new_tokens: this.params.max_tokens } })
         });
         if (res.ok) {
-          this.activeModel = modelId;
-          this.chatHistory = [];
-          this.activeConversationId = null;
+          chatState.activeModel = modelId;
+          chatState.chatHistory = [];
+          chatState.activeConversationId = null;
           await this.fetchStatus();
-          await this.fetchConversations(modelId);
+          await fetchConvs(modelId);
         } else {
           const data = await res.json();
           this.$notify(data.error || 'Failed to load model', 'error');
-          this.selectedModel = this.status.model;
-          this.activeModel = this.status.model;
+          chatState.selectedModel = this.status.model;
+          chatState.activeModel = this.status.model;
         }
       } catch (e) {
         this.$notify('Network error', 'error');
@@ -425,65 +439,11 @@ export default {
       }
     },
 
-    // ── Conversation management ───────────────────────────────────────────
-    async fetchConversations(model) {
-      if (!model) return;
-      try {
-        const res = await fetch(`/api/admin/conversations?model=${encodeURIComponent(model)}`);
-        if (res.ok) this.conversations = await res.json();
-      } catch (e) {}
-    },
-    async loadConversation(id) {
-      try {
-        const res = await fetch(`/api/admin/conversations/${id}/messages`);
-        if (!res.ok) return;
-        const { messages } = await res.json();
-        this.chatHistory = messages.map(m => ({ role: m.role, content: m.content }));
-        this.activeConversationId = id;
-        this.scrollToBottom();
-      } catch (e) {}
-    },
-    async deleteConversation(id) {
-      try {
-        await fetch(`/api/admin/conversations/${id}`, { method: 'DELETE' });
-        if (this.activeConversationId === id) {
-          this.chatHistory = [];
-          this.activeConversationId = null;
-        }
-        await this.fetchConversations(this.activeModel);
-      } catch (e) {}
-    },
-    async ensureConversation(firstMessage) {
-      if (this.activeConversationId) return this.activeConversationId;
-      const title = firstMessage.slice(0, 80).trim();
-      const res = await fetch('/api/admin/conversations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: this.activeModel, title })
-      });
-      const { id } = await res.json();
-      this.activeConversationId = id;
-      await this.fetchConversations(this.activeModel);
-      return id;
-    },
-    async persistMessage(role, content) {
-      if (!this.activeConversationId) return;
-      try {
-        const res = await fetch(`/api/admin/conversations/${this.activeConversationId}/messages`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ role, content })
-        });
-        if (!res.ok) console.error('[chat] persistMessage failed:', res.status, await res.text());
-      } catch (e) {
-        console.error('[chat] persistMessage error:', e.message);
-      }
-    },
-    newChat() {
-      this.chatHistory = [];
-      this.inputText = '';
-      this.activeConversationId = null;
-    },
+    // ── Conversation management — delegate to the shared store ────────────
+    fetchConversations(model) { return fetchConvs(model); },
+    loadConversation(id) { return loadConv(id); },
+    deleteConversation(id) { return delConv(id); },
+    newChat() { newChatStore(); },
     formatDate(ts) {
       const d = new Date(ts);
       const now = new Date();
@@ -494,123 +454,11 @@ export default {
       return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
     },
 
-    // ── Inference ─────────────────────────────────────────────────────────
-    async sendMessage(queuedText = null, alreadyInChat = false) {
-      const text = queuedText ?? this.inputText.trim();
-      if (!text || !this.activeModel) return;
-      if (queuedText === null) this.inputText = '';
-
-      if (this.generating) {
-        // Show message immediately in chat and queue it for sending after generation
-        this.messageQueue.push({ text, inChat: true });
-        this.chatHistory.push({ role: 'user', content: text });
-        this.scrollToBottom();
-        return;
-      }
-
-      // Ensure a conversation exists (creates one on first message)
-      try {
-        await this.ensureConversation(text);
-      } catch (e) {}
-
-      // Only push to chatHistory if not already shown (queued messages are shown immediately)
-      if (!alreadyInChat) {
-        this.chatHistory.push({ role: 'user', content: text });
-        this.scrollToBottom();
-      }
-      await this.persistMessage('user', text);
-
-      this.generating = true;
-      this.chatHistory.push({ role: 'assistant', content: '' });
-      const assistantMsg = this.chatHistory[this.chatHistory.length - 1];
-
-      this.abortController = new AbortController();
-
-      const messages = [];
-      if (this.systemPrompt.trim()) {
-        messages.push({ role: 'system', content: this.systemPrompt.trim() });
-      }
-      for (const m of this.chatHistory.slice(0, -1)) {
-        messages.push({ role: m.role, content: m.content });
-      }
-
-      try {
-        const res = await fetch('/v1/chat/completions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: this.abortController.signal,
-          body: JSON.stringify({
-            model: this.activeModel,
-            messages,
-            stream: true,
-            temperature: this.params.temperature,
-            top_p: this.params.top_p,
-            top_k: this.params.top_k,
-            max_tokens: this.params.max_tokens
-          })
-        });
-
-        if (!res.ok) {
-          const data = await res.json();
-          assistantMsg.content = `Error: ${data.error || 'Request failed'}`;
-          this.generating = false;
-          return;
-        }
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder('utf-8');
-        let buffer = '';
-
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop();
-
-          for (const line of lines) {
-            const cleanLine = line.trim();
-            if (!cleanLine.startsWith('data: ')) continue;
-            const dataStr = cleanLine.substring(6);
-            if (dataStr === '[DONE]') continue;
-            try {
-              const obj = JSON.parse(dataStr);
-              if (obj.choices?.[0]?.delta?.content) {
-                assistantMsg.content += obj.choices[0].delta.content;
-                this.scrollToBottom();
-              }
-              if (obj.perf) assistantMsg.perf = obj.perf;
-            } catch (err) {}
-          }
-        }
-      } catch (err) {
-        if (err.name !== 'AbortError') {
-          assistantMsg.content += `\n[Error: ${err.message}]`;
-        } else {
-          assistantMsg.content += '\n[Generation stopped]';
-        }
-      } finally {
-        // Persist completed assistant response
-        if (assistantMsg.content) {
-          await this.persistMessage('assistant', assistantMsg.content);
-          // Refresh sidebar to show updated timestamp
-          await this.fetchConversations(this.activeModel);
-        }
-        this.generating = false;
-        this.abortController = null;
-        this.scrollToBottom();
-        if (this.messageQueue.length > 0) {
-          const { text: next, inChat } = this.messageQueue.shift();
-          this.$nextTick(() => this.sendMessage(next, inChat));
-        }
-      }
+    // ── Inference — delegate to the shared store ──────────────────────────
+    sendMessage(queuedText = null, alreadyInChat = false) {
+      return sendMsg(queuedText, alreadyInChat);
     },
-    abortGeneration() {
-      if (this.abortController) {
-        this.abortController.abort();
-      }
-    },
+    abortGeneration() { abortGen(); },
     scrollToBottom() {
       this.$nextTick(() => {
         const el = this.$refs.chatContainer;
