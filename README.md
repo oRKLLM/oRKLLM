@@ -43,7 +43,7 @@ Inspired by [jundot/oMLX](https://github.com/jundot/omlx) (which does the same f
 
 * **OpenAI API Compatibility**: Drop-in `/v1/chat/completions`, `/v1/models`, and `/v1/embeddings` endpoints — works with Open WebUI, Claude Code, and any OpenAI-compatible client.
 * **Full Admin Console**: Built with **Vue 3** and **Vuetify 3** — six dedicated pages:
-  * **Dashboard** — live CPU/NPU/GPU/RAM/Disk/Temperature gauges, serving stats, prefix cache observability, RKLLM runtime versions
+  * **Dashboard** — live CPU/NPU/GPU/RAM/Disk/Temperature/Fan/RAM-bandwidth gauges, serving stats, prefix cache observability, RKLLM runtime versions
   * **Models** — local model manager, HuggingFace search, collection browser, direct downloader
   * **Settings** — inference defaults, HF token, prefix cache config, trusted proxy
   * **Logs** — full-page real-time log terminal over WebSocket

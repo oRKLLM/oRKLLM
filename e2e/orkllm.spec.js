@@ -109,7 +109,7 @@ test('Dashboard shows telemetry and navbar does not overlap content', async ({ p
 
   // Gauge labels are .text-caption.text-grey divs inside the telemetry card
   const telemetry = page.locator('.v-card', { hasText: 'Hardware Telemetry' });
-  for (const label of ['CPU', 'NPU', 'GPU', 'RAM', 'Disk', 'Temp']) {
+  for (const label of ['CPU', 'NPU', 'GPU', 'RAM', 'Disk', 'Temp', 'Fan', 'RAM BW']) {
     await expect(telemetry.locator('.text-caption.text-grey', { hasText: label }).first()).toBeVisible();
   }
 

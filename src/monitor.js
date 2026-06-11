@@ -181,6 +181,19 @@ export async function getSystemMetrics() {
     // ignore
   }
 
+  // 8. CPU fan speed. Boards vary wildly: a tach fan exposes RPM via hwmon
+  //    fan*_input; a PWM fan exposes only a duty value (pwm1, 0–255) or a
+  //    thermal cooling_device cur_state/max_state. Read whichever exists and
+  //    normalise to a percentage (with rpm when a tach is present). Returns
+  //    null when no fan is exposed (e.g. passive cooling or unbound pwm-fan).
+  const fan = isLinux ? readFanSpeed() : mockFan(temperature);
+
+  // 9. Memory bandwidth via the DDR memory-controller devfreq monitor
+  //    (/sys/class/devfreq/dmc/load → "<load>@<freq>Hz"). `load` is the DMC
+  //    utilisation %, an excellent proxy for RAM bandwidth pressure; `freqMhz`
+  //    is the current DDR clock. Null when no DMC devfreq node exists.
+  const memBw = isLinux ? readMemBandwidth() : mockMemBw(cpuLoad);
+
   return {
     cpu: Math.round(cpuLoad),
     ram: {
@@ -197,5 +210,92 @@ export async function getSystemMetrics() {
       percentage: diskPercentage,
     },
     disks,
+    fan,
+    memBw,
   };
 }
+
+// ── Fan speed ───────────────────────────────────────────────────────────────
+// Probe order: hwmon RPM tach → hwmon PWM duty → fan thermal cooling_device.
+// Returns { percentage, rpm|null } or null when nothing is exposed.
+function readFanSpeed() {
+  try {
+    const hwmons = fs.existsSync('/sys/class/hwmon') ? fs.readdirSync('/sys/class/hwmon') : [];
+
+    // (a) Tachometer RPM — the only true speed signal. Treat ~6000 RPM as full.
+    for (const h of hwmons) {
+      const base = `/sys/class/hwmon/${h}`;
+      for (const f of safeReaddir(base)) {
+        if (/^fan\d+_input$/.test(f)) {
+          const rpm = parseInt(fs.readFileSync(`${base}/${f}`, 'utf-8').trim(), 10);
+          if (Number.isFinite(rpm) && rpm > 0) {
+            const max = readIntFile(`${base}/${f.replace('_input', '_max')}`) || 6000;
+            return { percentage: clampPct((rpm / max) * 100), rpm };
+          }
+        }
+      }
+    }
+
+    // (b) PWM duty cycle (0–255) — a speed setting, not measured RPM.
+    for (const h of hwmons) {
+      const base = `/sys/class/hwmon/${h}`;
+      const name = (readFile(`${base}/name`) || '').trim();
+      if (fs.existsSync(`${base}/pwm1`) && /fan/i.test(name)) {
+        const duty = readIntFile(`${base}/pwm1`);
+        if (duty != null) return { percentage: clampPct((duty / 255) * 100), rpm: null };
+      }
+    }
+
+    // (c) Thermal cooling device whose type mentions a fan (cur_state/max_state).
+    const cds = safeReaddir('/sys/class/thermal').filter(d => d.startsWith('cooling_device'));
+    for (const cd of cds) {
+      const base = `/sys/class/thermal/${cd}`;
+      const type = (readFile(`${base}/type`) || '').toLowerCase();
+      if (type.includes('fan')) {
+        const cur = readIntFile(`${base}/cur_state`);
+        const max = readIntFile(`${base}/max_state`);
+        if (cur != null && max) return { percentage: clampPct((cur / max) * 100), rpm: null };
+      }
+    }
+  } catch (e) {
+    // ignore — fall through to null
+  }
+  return null;
+}
+
+// ── Memory bandwidth (DDR memory-controller load) ────────────────────────────
+// Returns { percentage, freqMhz } or null when no DMC devfreq node exists.
+function readMemBandwidth() {
+  try {
+    const raw = readFile('/sys/class/devfreq/dmc/load');        // e.g. "7@528000000Hz"
+    if (raw) {
+      const m = raw.trim().match(/^(\d+)(?:@(\d+))?/);
+      if (m) {
+        const pct = clampPct(parseInt(m[1], 10));
+        const freqMhz = m[2] ? Math.round(parseInt(m[2], 10) / 1e6) : null;
+        return { percentage: pct, freqMhz };
+      }
+    }
+    // Fallback: cur_freq only (no load governor) — report freq, unknown load.
+    const cur = readIntFile('/sys/class/devfreq/dmc/cur_freq');
+    if (cur != null) return { percentage: 0, freqMhz: Math.round(cur / 1e6) };
+  } catch (e) {
+    // ignore
+  }
+  return null;
+}
+
+function mockFan(temperature) {
+  // Fan ramps with SoC temperature — idle ~30%, full near 80°C.
+  const pct = clampPct(((temperature - 35) / 45) * 100);
+  return { percentage: Math.round(20 + pct * 0.8), rpm: Math.round(1500 + pct * 35) };
+}
+function mockMemBw(cpuLoad) {
+  return { percentage: clampPct(cpuLoad * 0.5 + Math.random() * 8), freqMhz: 2112 };
+}
+
+// Small sysfs read helpers.
+function readFile(p) { try { return fs.readFileSync(p, 'utf-8'); } catch { return null; } }
+function readIntFile(p) { const v = readFile(p); if (v == null) return null; const n = parseInt(v.trim(), 10); return Number.isFinite(n) ? n : null; }
+function safeReaddir(p) { try { return fs.readdirSync(p); } catch { return []; } }
+function clampPct(n) { return Math.max(0, Math.min(100, Math.round(n))); }

@@ -124,6 +124,29 @@
                 </v-progress-circular>
                 <div class="text-caption text-grey">Temp</div>
               </v-col>
+
+              <v-col cols="4" class="py-2">
+                <v-progress-circular :model-value="metrics.fan" :size="80" :width="7" :color="metricsRaw.fanAvailable ? 'cyan' : 'grey'" class="font-weight-bold mb-1">
+                  <span v-if="!metricsRaw.fanAvailable" class="text-caption font-weight-bold text-grey">N/A</span>
+                  <span v-else-if="!telemetryUnits" class="text-caption font-weight-bold">{{ metrics.fan }}%</span>
+                  <span v-else class="font-weight-bold" style="font-size: 0.62rem; line-height: 1.2; text-align: center;">
+                    <template v-if="metricsRaw.fanRpm">{{ metricsRaw.fanRpm }}<br><span class="text-grey" style="font-size: 0.55rem;">RPM</span></template>
+                    <template v-else>{{ metrics.fan }}%<br><span class="text-grey" style="font-size: 0.55rem;">PWM</span></template>
+                  </span>
+                </v-progress-circular>
+                <div class="text-caption text-grey">Fan</div>
+              </v-col>
+
+              <v-col cols="4" class="py-2">
+                <v-progress-circular :model-value="metrics.memBw" :size="80" :width="7" :color="metricsRaw.memBwAvailable ? 'deep-purple-lighten-1' : 'grey'" class="font-weight-bold mb-1">
+                  <span v-if="!metricsRaw.memBwAvailable" class="text-caption font-weight-bold text-grey">N/A</span>
+                  <span v-else-if="!telemetryUnits" class="text-caption font-weight-bold">{{ metrics.memBw }}%</span>
+                  <span v-else class="font-weight-bold" style="font-size: 0.62rem; line-height: 1.2; text-align: center;">
+                    {{ metricsRaw.memBwFreqMhz || '—' }}<br><span class="text-grey" style="font-size: 0.55rem;">MHz DDR</span>
+                  </span>
+                </v-progress-circular>
+                <div class="text-caption text-grey">RAM BW</div>
+              </v-col>
             </v-row>
 
             <!-- Disk table -->
@@ -344,8 +367,12 @@ export default {
   components: { AppNav },
   data: () => ({
     user: { username: 'admin', role: 'admin', authProvider: 'local' },
-    metrics: { cpu: 0, npu: 0, gpu: 0, ram: 0, disk: 0, temp: 0 },
-    metricsRaw: { ramUsed: 0, ramTotal: 0, diskUsed: 0, diskTotal: 0 },
+    metrics: { cpu: 0, npu: 0, gpu: 0, ram: 0, disk: 0, temp: 0, fan: 0, memBw: 0 },
+    metricsRaw: {
+      ramUsed: 0, ramTotal: 0, diskUsed: 0, diskTotal: 0,
+      fanAvailable: false, fanRpm: null,
+      memBwAvailable: false, memBwFreqMhz: null,
+    },
     disks: [],
     telemetryUnits: false,
     models: [],
@@ -540,6 +567,13 @@ export default {
           this.metricsRaw.diskTotal = data.disk?.total ?? 0;
           if (data.disks) this.disks = data.disks;
           this.metrics.temp = data.temperature;
+          // Fan + RAM bandwidth (null when the board exposes no such sensor)
+          this.metricsRaw.fanAvailable = !!data.fan;
+          this.metrics.fan = data.fan?.percentage ?? 0;
+          this.metricsRaw.fanRpm = data.fan?.rpm ?? null;
+          this.metricsRaw.memBwAvailable = !!data.memBw;
+          this.metrics.memBw = data.memBw?.percentage ?? 0;
+          this.metricsRaw.memBwFreqMhz = data.memBw?.freqMhz ?? null;
           if (data.stats) {
             this.stats = data.stats;
           }
