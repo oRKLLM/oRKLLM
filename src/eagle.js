@@ -186,6 +186,17 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
   let totalTokens = 0;
   let done = false;
 
+  // End-of-text token ids. The verify pass computes the next token via argmax
+  // over logits, so RKLLM never signals EOS for us — we must detect it. Take
+  // the head's config.json eos_token_id (number or array) plus the Qwen3
+  // defaults (<|im_end|> 151645, <|endoftext|> 151643). Without this the loop
+  // never stops at end-of-text and grinds to maxTokens for every prompt.
+  const _cfg = draftWeightsPath ? readHeadConfig(draftWeightsPath) : {};
+  const eosTokenIds = new Set([
+    ...(Array.isArray(_cfg.eos_token_id) ? _cfg.eos_token_id : [_cfg.eos_token_id]),
+    151645, 151643,
+  ].filter(v => Number.isInteger(v)));
+
   const stats = {
     steps: 0, drafted: 0, accepted: 0, corrected: 0,
     npu_hidden_ms: 0, npu_verify_ms: 0, draft_ms: 0,
@@ -328,8 +339,9 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
     // Use it directly — no external tokenizer needed.
     const tokenTexts = verifyMsg._tokenTexts || [];
 
-    // Emit accepted tokens
+    // Emit accepted tokens (stop at end-of-text without emitting it)
     for (let i = 0; i < acceptedCount; i++) {
+      if (eosTokenIds.has(pendingDraftIds[i])) { done = true; break; }
       const text = tokenTexts[i]?.text ?? '';
       onToken({ token_id: pendingDraftIds[i], text, state: 0 });
       currentPrompt += text;
@@ -340,16 +352,20 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
       if (totalTokens >= maxTokens) { done = true; break; }
     }
 
-    // Emit correction token
+    // Emit correction token (stop at end-of-text without emitting it)
     if (!done && correctionId !== null) {
-      const corrText = tokenTexts[acceptedCount]?.text ?? '';
-      onToken({ token_id: correctionId, text: corrText, state: 0 });
-      currentPrompt += corrText;
-      totalTokens++;
-      ctxLen++;
-      lastTokenId = correctionId;
-      stats.corrected++;
-      if (totalTokens >= maxTokens) done = true;
+      if (eosTokenIds.has(correctionId)) {
+        done = true;
+      } else {
+        const corrText = tokenTexts[acceptedCount]?.text ?? '';
+        onToken({ token_id: correctionId, text: corrText, state: 0 });
+        currentPrompt += corrText;
+        totalTokens++;
+        ctxLen++;
+        lastTokenId = correctionId;
+        stats.corrected++;
+        if (totalTokens >= maxTokens) done = true;
+      }
     }
 
     // Update hidden states for next draft
@@ -379,8 +395,6 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
     }
 
     pendingDraftIds = done ? [] : nextDraftIds;
-
-    if (correctionId === null && acceptedCount === 0) done = true; // EOS
   }
 
   onToken({
