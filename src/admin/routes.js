@@ -514,6 +514,9 @@ export default async function adminRoutes(fastify, options) {
     }
     const upRes = await ts.up({ authKey, hostname });
     if (!upRes.ok) return reply.status(500).send({ error: upRes.error });
+    // Wait for the node to be fully up (final MagicDNS name) before serving,
+    // so serve binds to the correct hostname (avoids cert/name mismatch).
+    await ts.waitUntilRunning(15000);
     const port = request.server.server.address()?.port || 8000;
     const serveRes = await ts.enableServe(port);
     if (!serveRes.ok) return reply.status(500).send({ error: serveRes.error });

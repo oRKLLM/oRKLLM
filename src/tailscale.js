@@ -94,9 +94,28 @@ export async function up({ authKey, hostname } = {}) {
   }
 }
 
-/** Expose the local app over HTTPS on the tailnet (background serve). */
+/**
+ * Wait until the backend reports Running (the node's MagicDNS name is final).
+ * Avoids a race where `serve` binds to a stale name set before `up` propagated.
+ */
+export async function waitUntilRunning(timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const s = summarizeStatus(await rawStatus());
+    if (s.loggedIn && s.dnsName) return true;
+    await new Promise(r => setTimeout(r, 750));
+  }
+  return false;
+}
+
+/**
+ * Expose the local app over HTTPS on the tailnet (background serve). Always
+ * `reset`s first so serve re-binds to the node's CURRENT name — a stale serve
+ * config bound to a previous hostname yields a cert/name mismatch (TLS fails).
+ */
 export async function enableServe(port) {
   try {
+    await execFileAsync(TS, ['serve', 'reset'], { timeout: 10000 }).catch(() => {});
     await execFileAsync(TS, ['serve', '--bg', String(port)], { timeout: 15000 });
     return { ok: true };
   } catch (e) {
