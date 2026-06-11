@@ -143,7 +143,7 @@ graph TD
 | `src/cache.js` | Tiered SSD prefix KV cache (hot/cold LRU), sliding context window trim |
 | `src/server.js` | Fastify bootstrap; trustProxy config; mounts `/ws/metrics`, `/ws/logs`, static SPA, API routes |
 | `src/api/routes.js` | `/v1/chat/completions` (SSE streaming + prefix cache; runs the MCP tool-use loop when the global `mcp_inference_enabled` setting is on **or** the request carries an `mcp_tools: [names]` array — the per-request selection wins and scopes the loop to exactly those tools, empty array = no tools, absent = global setting with all tools), `/v1/models` (recursive scan of MODELS_DIR including subdirectories), `/v1/embeddings` |
-| `src/admin/routes.js` | Auth (local + OIDC + SAML), user CRUD, RBAC, HF proxy, audit log, settings (incl. trustedProxy, pinnedModel) |
+| `src/admin/routes.js` | Auth (local + OIDC + SAML), user CRUD, RBAC, HF proxy + downloader (weights + `.json` metadata), audit log, settings (incl. trustedProxy, pinnedModel); `GET /library` (models sorted into available/base/Eagle-3), `POST /eagle3/embeddings` (base-model embeddings via repo slice or local extraction) |
 | `src/auth/routes.js` | OIDC (PKCE + confidential) and SAML 2.0 routes at `/auth/*` |
 | `src/auth/session.js` | Shared signCookie / verifyCookie / issueSessionCookie (userId\|username\|role\|expires\|HMAC) |
 | `src/mock_engine.js` | JS mock engine streaming realistic fake tokens (for macOS dev) |
@@ -425,9 +425,10 @@ Include the applicable chipset tag(s). This enables oRKLLM's **Compatible chipse
 | Phase 19: Runtime Auto-Download | ✅ Done | Setup opt-in (default on); `runtime_sync.js` downloads from mirror on startup + targeted sync on load failure; opt-out disclaimer dialog; API 422 `RUNTIME_MISSING`; `autoDownloadRuntimes` setting |
 | Phase 20: Model Downloader | ✅ Done | HF search + collection browse; Download queues all repo files in parallel to `MODELS_DIR/{repoName}/`; queue persists across navigation, grouped by repo, per-file progress/speed |
 | Phase 21: Platform-Aware Search | ✅ Done | `/api/admin/status` returns `platform` (`rk3576`/`rk3588`/`null`) from device-tree; "Compatible chipset" filter appends slug to HF query; recursive scan of `models/{repoName}/`; wildcard model routes |
-| Phase 22: Speculative Decode (research) | 🔬 Research | Draft+target pool (`generateSpeculative`, `loadDraft`/`unloadDraft`); no speedup on single NPU; Eagle-3 viable at 3.73× — Sections 9 & 10 |
+| Phase 22: Speculative Decode | 🔬→✅ | Draft+target pool (`generateSpeculative`); no speedup on single NPU. Eagle-3 viable at 3.73× — Sections 9 & 10. The `vulkan` draft strategy is now implemented natively (SPIR-V shaders in `vk_eagle.hpp`, base-model embeddings via `/eagle3/embeddings`); on-board acceptance-rate validation pending — §10.6 |
 | Phase 23: prefillAndCache | ✅ Done | Abort-after-first-token KV save; `POST /api/admin/prefill-cache`, `/infer-with-cache`; 75% (4B) / 100% (8B) prefill reduction; needs model reload between warm and serve — Section 9 |
 | Phase 24: MCP servers | ✅ Done | DB v4 `mcp_servers`; admin CRUD + validate/test (`/api/admin/mcp-servers`); Settings UI (stdio/SSE/HTTP transports); `@modelcontextprotocol/sdk` client (`src/mcp.js`); prompt-driven tool-use loop in `/v1/chat/completions` gated by `mcp_inference_enabled` (`src/mcp_inference.js`) |
+| Phase 25: Eagle-3 Vulkan + model library | ✅ Done (on-board validation pending) | Native SPIR-V draft head (`vk_eagle.hpp` + shaders, `eagleDraftTokens`); base-model embeddings via repo slice or local extraction (`src/hf_embeddings.js`, `/eagle3/embeddings`); three-category model library (`/library`, Models page); HF downloader accepts base models + heads; `.deb` Vulkan deps — §10.6 |
 
 ---
 
