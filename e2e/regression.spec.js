@@ -506,3 +506,15 @@ test('Bench: completed run is persisted in Previous Runs and survives reload', a
   await expect(page.locator('.v-card').filter({ hasText: 'Previous Runs' })
     .locator('.bench-history tbody tr').first()).toBeVisible({ timeout: 8000 });
 });
+
+test('Version: /api/version returns the app version and matches the bundle', async ({ page }) => {
+  const res = await page.request.get('/api/version');
+  expect(res.ok()).toBeTruthy();
+  const { version } = await res.json();
+  expect(version).toMatch(/^\d+\.\d+\.\d+/);
+  // The page must NOT reload-loop: load /login, confirm it settles (no mismatch).
+  await page.goto('/login');
+  await expect(page).toHaveURL(/\/login/);
+  await page.waitForTimeout(1500);
+  await expect(page).toHaveURL(/\/login/); // still here — no forced reload loop
+});

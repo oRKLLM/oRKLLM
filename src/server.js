@@ -84,6 +84,15 @@ const fastify = Fastify({
 await fastify.register(fastifyCookie);
 await fastify.register(fastifyWebsocket);
 
+// App version (from package.json) — exposed publicly so the PWA can detect a
+// stale cached client on load and force a service-worker update.
+const APP_VERSION = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version;
+  } catch { return null; }
+})();
+fastify.get('/api/version', async () => ({ version: APP_VERSION }));
+
 // Mount API & Admin Routes
 await fastify.register(apiRoutes, { prefix: '/v1' });
 await fastify.register(adminRoutes, { prefix: '/api/admin' });
