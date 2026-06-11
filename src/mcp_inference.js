@@ -28,14 +28,39 @@ export function parseToolCall(text) {
   return null;
 }
 
+// Cap on the tool catalogue size. The full JSON schema for every tool can run
+// to tens of thousands of tokens (e.g. 53 tools ≈ 19k tokens) and overflow the
+// model's context, so we emit one compact line per tool (name + short
+// description + argument names) and stop listing once the budget is hit.
+const TOOL_CATALOG_CHAR_BUDGET = 12000;
+
+/** One compact line per tool: `- name: short desc [args: a*, b]` (* = required). */
+function toolLine(t) {
+  const fn = t.function || {};
+  const desc = (fn.description || '').replace(/\s+/g, ' ').trim().slice(0, 100);
+  const props = fn.parameters && fn.parameters.properties ? Object.keys(fn.parameters.properties) : [];
+  const required = (fn.parameters && fn.parameters.required) || [];
+  const args = props.length ? ` [args: ${props.map(p => (required.includes(p) ? `${p}*` : p)).join(', ')}]` : '';
+  return `- ${fn.name}: ${desc || '(no description)'}${args}`;
+}
+
 /** Build the system-prompt block describing the available tools. */
 export function buildToolSystemPrompt(tools) {
-  const lines = tools.map(t => {
-    const params = JSON.stringify(t.function.parameters || {});
-    return `- ${t.function.name}: ${t.function.description || '(no description)'}\n  parameters: ${params}`;
-  });
+  const lines = [];
+  let used = 0;
+  let omitted = 0;
+  for (const t of tools) {
+    const line = toolLine(t);
+    if (used + line.length > TOOL_CATALOG_CHAR_BUDGET && lines.length > 0) {
+      omitted = tools.length - lines.length;
+      break;
+    }
+    lines.push(line);
+    used += line.length + 1;
+  }
+  if (omitted > 0) lines.push(`- …and ${omitted} more tool(s) not listed (catalogue truncated to fit the context window)`);
   return [
-    'You can use external tools to help answer. Available tools:',
+    'You can use external tools to help answer. Available tools (* = required argument):',
     ...lines,
     '',
     'To call a tool, reply with ONLY this exact form on its own line:',

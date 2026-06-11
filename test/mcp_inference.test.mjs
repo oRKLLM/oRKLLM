@@ -27,13 +27,33 @@ describe('parseToolCall', () => {
 // ── buildToolSystemPrompt ────────────────────────────────────────────────────
 
 describe('buildToolSystemPrompt', () => {
-  test('lists tool names and the call protocol', () => {
+  test('lists tool names, args, and the call protocol', () => {
     const prompt = buildToolSystemPrompt([
-      { type: 'function', function: { name: 'mcp__a__foo', description: 'does foo', parameters: { type: 'object' } } },
+      { type: 'function', function: { name: 'mcp__a__foo', description: 'does foo', parameters: { type: 'object', properties: { path: {}, count: {} }, required: ['path'] } } },
     ]);
     assert.match(prompt, /mcp__a__foo/);
     assert.match(prompt, /does foo/);
     assert.match(prompt, /<tool_call>/);
+    assert.match(prompt, /\[args: path\*, count\]/); // compact arg list, * = required
+  });
+
+  test('stays compact — does not embed full JSON parameter schemas', () => {
+    const huge = { type: 'object', properties: {}, description: 'X'.repeat(5000) };
+    const prompt = buildToolSystemPrompt([
+      { type: 'function', function: { name: 'mcp__a__foo', description: 'd', parameters: huge } },
+    ]);
+    assert.ok(!prompt.includes('X'.repeat(200)), 'must not dump the full schema');
+  });
+
+  test('truncates the catalogue when it would overflow, with a note', () => {
+    // 400 tools with long names/descriptions → must be capped.
+    const many = Array.from({ length: 400 }, (_, i) => ({
+      type: 'function',
+      function: { name: `mcp__server__tool_number_${i}`, description: 'a fairly wordy description '.repeat(4), parameters: {} },
+    }));
+    const prompt = buildToolSystemPrompt(many);
+    assert.ok(prompt.length < 14000, `prompt should be capped, got ${prompt.length}`);
+    assert.match(prompt, /more tool\(s\) not listed/);
   });
 });
 
