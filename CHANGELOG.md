@@ -1,3 +1,11 @@
+# [0.8.0-alpha.52](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.51...v0.8.0-alpha.52) (2026-06-11)
+
+
+### Features
+
+* **spv:** opt-in Vulkan SPIR-V shader fetch + gate Eagle-3 vulkan draft ([12a1c1b](https://github.com/oRKLLM/oRKLLM/commit/12a1c1b463f9b247934cec36d28b4022d5d5d694))
+* **spv:** pick/switch Vulkan shader release tag from Settings ([133572f](https://github.com/oRKLLM/oRKLLM/commit/133572fd6923c3d2760ee569dee6f85d6b2d25b8))
+
 # [0.8.0-alpha.51](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.50...v0.8.0-alpha.51) (2026-06-11)
 
 
