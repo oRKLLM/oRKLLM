@@ -15,6 +15,7 @@ import {
   dbCreateBenchRun, dbListBenchRuns, dbClearBenchRuns,
 } from '../db.js';
 import { v4 as uuidv4 } from 'uuid';
+import { isSpvAvailable } from '../spv_sync.js';
 
 function getNetworkAddresses() {
   const interfaces = os.networkInterfaces();
@@ -237,6 +238,7 @@ export default async function adminRoutes(fastify, options) {
     // SoC + NPU core count (single source of truth in config.js)
     status.platform = getPlatform();
     status.npuCores = getNpuCoreCount();
+    status.spvAvailable = isSpvAvailable(); // Eagle-3 'vulkan' draft gated on this
     return status;
   });
 
@@ -421,6 +423,7 @@ export default async function adminRoutes(fastify, options) {
         trustedProxy: dbGetSetting('trusted_proxy') ?? '',
         pinnedModel: dbGetSetting('pinned_model') ?? '',
         autoDownloadRuntimes: dbGetSetting('auto_download_runtimes') === '1',
+        autoDownloadSpv: dbGetSetting('auto_download_spv') === '1',
         npuPoolSize: parseInt(dbGetSetting('npu_pool_size') ?? '1'),
         langfuseEnabled:    dbGetSetting('langfuse_enabled')    === '1',
         langfuseBaseUrl:    dbGetSetting('langfuse_base_url')   ?? '',
@@ -437,7 +440,7 @@ export default async function adminRoutes(fastify, options) {
     const { idleTimeoutMinutes, temperature, topP, topK, maxNewTokens, repPenalty, hfToken,
             cacheEnabled, cacheHotLimitMB, cacheColdLimitMB, cacheDir, cacheMaxContextTokens,
             kvCacheQuant,
-            localAuthDisabled, trustedProxy, autoDownloadRuntimes, npuPoolSize,
+            localAuthDisabled, trustedProxy, autoDownloadRuntimes, autoDownloadSpv, npuPoolSize,
             langfuseEnabled, langfuseBaseUrl, langfusePublicKey, langfuseSecretKey,
             mcpInferenceEnabled,
           } = request.body || {};
@@ -461,6 +464,7 @@ export default async function adminRoutes(fastify, options) {
     if (typeof localAuthDisabled === 'boolean') dbSetSetting('local_auth_disabled', localAuthDisabled ? '1' : '0');
     if (typeof trustedProxy === 'string') dbSetSetting('trusted_proxy', trustedProxy);
     if (typeof autoDownloadRuntimes === 'boolean') dbSetSetting('auto_download_runtimes', autoDownloadRuntimes ? '1' : '0');
+    if (typeof autoDownloadSpv === 'boolean') dbSetSetting('auto_download_spv', autoDownloadSpv ? '1' : '0');
     if (typeof npuPoolSize === 'number' && npuPoolSize >= 1 && npuPoolSize <= 8)
       dbSetSetting('npu_pool_size', String(npuPoolSize));
     if (typeof langfuseEnabled   === 'boolean') dbSetSetting('langfuse_enabled',    langfuseEnabled ? '1' : '0');
@@ -487,6 +491,27 @@ export default async function adminRoutes(fastify, options) {
     const { syncRuntimes } = await import('../runtime_sync.js');
     syncRuntimes(version).catch(e => console.error('[RuntimeSync] Download failed:', e.message));
     return { success: true, message: `Downloading runtime ${version} in background` };
+  });
+
+  // ── Vulkan SPIR-V shaders (Eagle-3 'vulkan' draft) ────────────────────────
+  // GET /api/admin/spv — install state + live sync progress
+  fastify.get('/spv', async () => {
+    const { isSpvAvailable, listSpvFiles, installedSpvTag, getSpvSyncState } = await import('../spv_sync.js');
+    return {
+      spvDir: process.env.ORKLLM_SPV_DIR,
+      available: isSpvAvailable(),
+      tag: installedSpvTag(),
+      files: listSpvFiles(),
+      syncState: getSpvSyncState(),
+    };
+  });
+
+  // POST /api/admin/spv/sync — fetch/refresh the shader set in the background
+  fastify.post('/spv/sync', async (request) => {
+    const { syncSpv } = await import('../spv_sync.js');
+    syncSpv().catch(e => console.error('[SpvSync] Manual sync failed:', e.message));
+    logAudit(request, 'spv_sync', null);
+    return { success: true, message: 'Vulkan shader sync started in background' };
   });
 
   // ── Tailscale (optional, runtime-detected) ────────────────────────────────

@@ -200,6 +200,8 @@ npm run dev:server
 | `ORKLLM_TRUSTED_PROXY` | *(unset)* | `true` (all), a single IP/CIDR, or comma-separated IPs/CIDRs to trust `X-Forwarded-*` headers |
 | `ORKLLM_RUNTIMES_DIR` | `~/.config/orkllm/runtimes` | Directory of versioned `librkllmrt-aarch64-vX.Y.Z.so` files for automatic runtime matching |
 | `ORKLLM_RUNTIME_MIRRORS` | `oRKLLM/rkllm-runtimes,mafischer/rkllm-runtimes` | Comma-separated list of GitHub repo slugs tried in order when downloading runtime `.so` files — first mirror that has the version wins |
+| `ORKLLM_SPV_DIR` | `~/.config/orkllm/spv` | Directory for the extracted Vulkan SPIR-V shaders (Eagle-3 GPU draft); exposed to the native Vulkan loader |
+| `ORKLLM_SPV_MIRRORS` | `oRKLLM/llama.cpp` | Comma-separated GitHub repo slugs for the prebuilt `ggml-vulkan-spirv-<tag>.tar.gz` shader releases |
 
 ---
 

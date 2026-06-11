@@ -86,6 +86,35 @@
         </div>
       </v-card>
 
+      <!-- Vulkan Shaders (Eagle-3) -->
+      <v-card class="glass-card pa-5 mb-5">
+        <div class="section-heading mb-4">
+          <v-icon color="primary" size="18" class="mr-2">mdi-expansion-card-variant</v-icon>
+          Vulkan Shaders (Eagle-3 GPU draft)
+        </div>
+        <div class="d-flex align-center justify-space-between mb-3">
+          <div>
+            <div class="text-subtitle-2 font-weight-medium mb-1">Auto-download Vulkan SPIR-V shaders</div>
+            <div class="text-caption text-grey">
+              Fetch the prebuilt Mali GPU compute kernels from
+              <a href="https://github.com/oRKLLM/llama.cpp" target="_blank" class="text-primary">oRKLLM/llama.cpp</a>
+              (harvested from llama.cpp's <code>ggml-vulkan</code> backend). Required to enable the Eagle-3
+              <strong>Vulkan</strong> draft strategy — until installed, that option is disabled. ARM64 (board) only.
+            </div>
+          </div>
+          <v-switch v-model="settings.autoDownloadSpv" color="primary" hide-details density="compact" class="ml-4 flex-shrink-0"></v-switch>
+        </div>
+        <div class="d-flex align-center gap-3">
+          <v-chip size="small" :color="spv.available ? 'success' : 'grey'" variant="tonal">
+            <v-icon start size="14">{{ spv.available ? 'mdi-check-circle' : 'mdi-close-circle' }}</v-icon>
+            {{ spv.available ? `Installed${spv.tag ? ' (' + spv.tag + ')' : ''} — ${spv.files.length} module(s)` : 'Not installed' }}
+          </v-chip>
+          <v-btn size="small" variant="tonal" color="primary" :loading="spvSyncing" prepend-icon="mdi-download" @click="downloadSpv">
+            {{ spv.available ? 'Update' : 'Download now' }}
+          </v-btn>
+        </div>
+      </v-card>
+
       <!-- Authentication -->
       <v-card class="glass-card pa-5 mb-5">
         <div class="section-heading mb-4">
@@ -567,8 +596,11 @@ export default {
       trustedProxy: '',
       autoDownloadRuntimes: true,
       savedAutoDownloadRuntimes: true,
+      autoDownloadSpv: false,
       mcpInferenceEnabled: false,
     },
+    spv: { available: false, tag: null, files: [] },
+    spvSyncing: false,
     cacheStats: null,
     clearingCache: false,
     passwordForm: { current: '', next: '', confirm: '' },
@@ -603,6 +635,7 @@ export default {
     this.fetchAuth();
     this.fetchSettings();
     this.fetchMcpServers();
+    this.fetchSpv();
   },
   methods: {
     async fetchAuth() {
@@ -637,9 +670,40 @@ export default {
         this.settings.trustedProxy          = s.trustedProxy ?? '';
         this.settings.autoDownloadRuntimes  = s.autoDownloadRuntimes ?? true;
         this.savedAutoDownloadRuntimes       = this.settings.autoDownloadRuntimes;
+        this.settings.autoDownloadSpv       = s.autoDownloadSpv ?? false;
         this.settings.mcpInferenceEnabled   = s.mcpInferenceEnabled ?? false;
         this.cacheStats = data.cacheStats || null;
       } catch (e) {}
+    },
+
+    // ── Vulkan SPIR-V shaders ─────────────────────────────────────────────
+    async fetchSpv() {
+      try {
+        const res = await fetch('/api/admin/spv');
+        if (res.ok) {
+          const d = await res.json();
+          this.spv = { available: d.available, tag: d.tag, files: d.files || [] };
+        }
+      } catch (e) {}
+    },
+    async downloadSpv() {
+      this.spvSyncing = true;
+      try {
+        const res = await fetch('/api/admin/spv/sync', { method: 'POST' });
+        if (!res.ok) { this.notify('Failed to start shader download', 'error'); return; }
+        this.notify('Downloading Vulkan shaders…', 'info');
+        // Poll for completion (the sync runs in the background).
+        for (let i = 0; i < 40; i++) {
+          await new Promise(r => setTimeout(r, 1500));
+          const s = await (await fetch('/api/admin/spv')).json();
+          if (!s.syncState?.active) {
+            this.spv = { available: s.available, tag: s.tag, files: s.files || [] };
+            this.notify(s.available ? `Vulkan shaders installed (${s.tag})` : 'Shaders not available (ARM64 board only)', s.available ? 'success' : 'warning');
+            break;
+          }
+        }
+      } catch (e) { this.notify('Network error', 'error'); }
+      finally { this.spvSyncing = false; }
     },
 
     // ── MCP servers ─────────────────────────────────────────────────────────
