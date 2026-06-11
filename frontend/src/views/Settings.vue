@@ -104,13 +104,24 @@
           </div>
           <v-switch v-model="settings.autoDownloadSpv" color="primary" hide-details density="compact" class="ml-4 flex-shrink-0"></v-switch>
         </div>
-        <div class="d-flex align-center gap-3">
+        <v-divider class="my-3"></v-divider>
+        <div class="d-flex align-center gap-3 flex-wrap">
           <v-chip size="small" :color="spv.available ? 'success' : 'grey'" variant="tonal">
             <v-icon start size="14">{{ spv.available ? 'mdi-check-circle' : 'mdi-close-circle' }}</v-icon>
-            {{ spv.available ? `Installed${spv.tag ? ' (' + spv.tag + ')' : ''} — ${spv.files.length} module(s)` : 'Not installed' }}
+            {{ spv.available ? `Installed: ${spv.tag || '?'} — ${spv.files.length} module(s)` : 'Not installed' }}
           </v-chip>
-          <v-btn size="small" variant="tonal" color="primary" :loading="spvSyncing" prepend-icon="mdi-download" @click="downloadSpv">
-            {{ spv.available ? 'Update' : 'Download now' }}
+          <v-select
+            v-model="spvSelectedTag"
+            :items="spvReleases.map(r => ({ title: r.tag === spv.tag ? `${r.tag} (installed)` : r.tag, value: r.tag }))"
+            label="Release" placeholder="latest"
+            density="compact" variant="outlined" hide-details
+            style="min-width: 180px; max-width: 260px;"
+            :no-data-text="'No releases found on the mirror yet'"
+          ></v-select>
+          <v-btn size="small" variant="tonal" color="primary" :loading="spvSyncing"
+            :disabled="!!spvSelectedTag && spvSelectedTag === spv.tag"
+            prepend-icon="mdi-download" @click="downloadSpv">
+            {{ !spvSelectedTag ? 'Download latest' : (spvSelectedTag === spv.tag ? 'Installed' : (spv.available ? 'Switch to this release' : 'Download')) }}
           </v-btn>
         </div>
       </v-card>
@@ -600,6 +611,8 @@ export default {
       mcpInferenceEnabled: false,
     },
     spv: { available: false, tag: null, files: [] },
+    spvReleases: [],
+    spvSelectedTag: null,
     spvSyncing: false,
     cacheStats: null,
     clearingCache: false,
@@ -636,6 +649,7 @@ export default {
     this.fetchSettings();
     this.fetchMcpServers();
     this.fetchSpv();
+    this.fetchSpvReleases();
   },
   methods: {
     async fetchAuth() {
@@ -683,22 +697,31 @@ export default {
         if (res.ok) {
           const d = await res.json();
           this.spv = { available: d.available, tag: d.tag, files: d.files || [] };
+          if (!this.spvSelectedTag && d.tag) this.spvSelectedTag = d.tag;
         }
+      } catch (e) {}
+    },
+    async fetchSpvReleases() {
+      try {
+        const res = await fetch('/api/admin/spv/releases');
+        if (res.ok) this.spvReleases = (await res.json()).releases || [];
       } catch (e) {}
     },
     async downloadSpv() {
       this.spvSyncing = true;
       try {
-        const res = await fetch('/api/admin/spv/sync', { method: 'POST' });
+        const body = JSON.stringify({ tag: this.spvSelectedTag || undefined });
+        const res = await fetch('/api/admin/spv/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
         if (!res.ok) { this.notify('Failed to start shader download', 'error'); return; }
-        this.notify('Downloading Vulkan shaders…', 'info');
+        this.notify(`Downloading Vulkan shaders${this.spvSelectedTag ? ` (${this.spvSelectedTag})` : ''}…`, 'info');
         // Poll for completion (the sync runs in the background).
-        for (let i = 0; i < 40; i++) {
+        for (let i = 0; i < 60; i++) {
           await new Promise(r => setTimeout(r, 1500));
           const s = await (await fetch('/api/admin/spv')).json();
           if (!s.syncState?.active) {
             this.spv = { available: s.available, tag: s.tag, files: s.files || [] };
-            this.notify(s.available ? `Vulkan shaders installed (${s.tag})` : 'Shaders not available (ARM64 board only)', s.available ? 'success' : 'warning');
+            if (s.tag) this.spvSelectedTag = s.tag;
+            this.notify(s.available ? `Vulkan shaders installed (${s.tag})` : 'Shaders not available (ARM64 board only / mirror has no release)', s.available ? 'success' : 'warning');
             break;
           }
         }

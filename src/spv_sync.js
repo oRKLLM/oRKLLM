@@ -82,19 +82,42 @@ function sha256(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
 
-export async function syncSpv() {
+const SPV_TARBALL_RE = /^ggml-vulkan-spirv-.*\.tar\.gz$/;
+const spvTarball = (release) => release.assets?.find(a => SPV_TARBALL_RE.test(a.name) && !a.name.endsWith('.sha256'));
+
+/**
+ * Available shader releases from the first reachable mirror, newest-first,
+ * for the Settings release picker. Returns [{ tag, name, size, publishedAt }].
+ */
+export async function getReleases() {
+  for (const slug of SPV_MIRRORS) {
+    try {
+      const res = await httpsGet(mirrorApi(slug) + '?per_page=30');
+      if (res.status !== 200) continue;
+      const releases = JSON.parse(res.body.toString());
+      const withTarball = (Array.isArray(releases) ? releases : []).filter(r => !r.draft && spvTarball(r));
+      if (withTarball.length) {
+        return withTarball.map(r => ({ tag: r.tag_name, name: r.name || r.tag_name, size: spvTarball(r)?.size ?? null, publishedAt: r.published_at }));
+      }
+    } catch { /* try next mirror */ }
+  }
+  return [];
+}
+
+/** Download a specific release tag (or the latest when null) and install it. */
+export async function syncSpv(requestedTag = null) {
   const isARM64Linux = process.platform === 'linux' && process.arch === 'arm64';
   if (!isARM64Linux) {
     console.log('[SpvSync] Skipping — not ARM64 Linux (no Mali GPU to run the shaders)');
     return;
   }
 
-  console.log(`[SpvSync] Checking for Vulkan SPIR-V shaders (mirrors: ${SPV_MIRRORS.join(', ')})...`);
+  console.log(`[SpvSync] Fetching Vulkan SPIR-V shaders${requestedTag ? ` (${requestedTag})` : ' (latest)'} (mirrors: ${SPV_MIRRORS.join(', ')})...`);
 
   for (const slug of SPV_MIRRORS) {
     let releases;
     try {
-      const res = await httpsGet(mirrorApi(slug) + '?per_page=10');
+      const res = await httpsGet(mirrorApi(slug) + '?per_page=30');
       if (res.status !== 200) { console.warn(`[SpvSync] Mirror ${slug}: HTTP ${res.status} — skipping`); continue; }
       releases = JSON.parse(res.body.toString());
     } catch (e) {
@@ -102,12 +125,14 @@ export async function syncSpv() {
       continue;
     }
 
-    const latest = Array.isArray(releases) ? releases.find(r => !r.draft) : null;
-    if (!latest) continue;
-    const tarball = latest.assets?.find(a => /^ggml-vulkan-spirv-.*\.tar\.gz$/.test(a.name) && !a.name.endsWith('.sha256'));
-    if (!tarball) { console.warn(`[SpvSync] Mirror ${slug}: no spirv tarball in latest release — skipping`); continue; }
+    const release = Array.isArray(releases)
+      ? (requestedTag ? releases.find(r => r.tag_name === requestedTag) : releases.find(r => !r.draft))
+      : null;
+    if (!release) continue;
+    const tarball = spvTarball(release);
+    if (!tarball) { console.warn(`[SpvSync] Mirror ${slug}: no spirv tarball in ${release.tag_name} — skipping`); continue; }
 
-    const tag = latest.tag_name;
+    const tag = release.tag_name;
     if (installedSpvTag() === tag && isSpvAvailable()) {
       console.log(`[SpvSync] Shaders ${tag} already present`);
       return;
@@ -127,7 +152,7 @@ export async function syncSpv() {
       });
 
       // Verify against the .sha256 sidecar asset when available.
-      const sumAsset = latest.assets?.find(a => a.name === `${tarball.name}.sha256`);
+      const sumAsset = release.assets?.find(a => a.name === `${tarball.name}.sha256`);
       if (sumAsset) {
         const sumRes = await httpsGet(sumAsset.browser_download_url);
         const expected = sumRes.body.toString().trim().split(/\s+/)[0];
@@ -137,7 +162,10 @@ export async function syncSpv() {
         }
       }
 
-      // Extract the .spv modules + manifest into SPV_DIR (tar is standard on the board).
+      // Clear any previously-installed shaders so switching tags can't leave
+      // stale modules behind, then extract the new set (tar is standard on the board).
+      for (const f of listSpvFiles()) { try { fs.unlinkSync(path.join(SPV_DIR, f)); } catch {} }
+      try { fs.unlinkSync(path.join(SPV_DIR, 'manifest.json')); } catch {}
       execFileSync('tar', ['-xzf', dest, '-C', SPV_DIR], { timeout: 30000 });
       fs.unlinkSync(dest);
       fs.writeFileSync(TAG_FILE, tag);

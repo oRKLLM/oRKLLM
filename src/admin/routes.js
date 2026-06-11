@@ -506,12 +506,19 @@ export default async function adminRoutes(fastify, options) {
     };
   });
 
-  // POST /api/admin/spv/sync — fetch/refresh the shader set in the background
+  // GET /api/admin/spv/releases — available shader release tags from the mirror
+  fastify.get('/spv/releases', async () => {
+    const { getReleases } = await import('../spv_sync.js');
+    return { releases: await getReleases() };
+  });
+
+  // POST /api/admin/spv/sync { tag? } — install a specific tag (or latest) in the background
   fastify.post('/spv/sync', async (request) => {
+    const tag = request.body?.tag || null;
     const { syncSpv } = await import('../spv_sync.js');
-    syncSpv().catch(e => console.error('[SpvSync] Manual sync failed:', e.message));
-    logAudit(request, 'spv_sync', null);
-    return { success: true, message: 'Vulkan shader sync started in background' };
+    syncSpv(tag).catch(e => console.error('[SpvSync] Manual sync failed:', e.message));
+    logAudit(request, 'spv_sync', tag);
+    return { success: true, message: `Vulkan shader sync started${tag ? ` (${tag})` : ''}` };
   });
 
   // ── Tailscale (optional, runtime-detected) ────────────────────────────────
