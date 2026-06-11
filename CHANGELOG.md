@@ -1,3 +1,10 @@
+# [0.8.0-alpha.45](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.44...v0.8.0-alpha.45) (2026-06-11)
+
+
+### Features
+
+* **mcp:** per-tool allow-list + token-cost indicator ([ba22755](https://github.com/oRKLLM/oRKLLM/commit/ba22755a8e57d543dd0f19b77eb4cffe6a47f49a))
+
 # [0.8.0-alpha.44](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.43...v0.8.0-alpha.44) (2026-06-11)
 
 
