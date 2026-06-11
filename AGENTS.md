@@ -545,9 +545,11 @@ Fast because: GET_LOGITS(k) ≈ GET_LOGITS(1); Mali draft (~60ms) hides in the 2
 
 Loop: `GET_LAST_HIDDEN_LAYER(prompt)` → draft `[d0..dk]` → **(concurrent)** NPU `GET_LOGITS(token_ids=[d0..dk], keep_history=true)` + Mali drafts next k → `rejectionSample(logits, draft)` → emit accepted via `_tokenTexts[i].text` → on partial rejection clearKV + re-run hidden-layer.
 
-**Status:** `RKLLM_INPUT_TOKEN`, `keep_history`, `_tokenTexts` collection, KV rollback all ✅ wired. `cpuPlaceholderDraft` ✅ (loop validation, ~0% accept — placeholder IDs). `vulkanDraft` (Mali) 🚧 stub, falls through to CPU until a trained head exists. Trained draft head 🔄 in progress.
+**Draft compute target (`eagle3_strategy`): `cpu` | `npu` | `vulkan`.** Dispatched via `draftTokens()` in `src/eagle.js`. `cpu` = `cpuPlaceholderDraft` (loop validation, ~0% accept). `npu` = `.rkllm` head on a spare NPU core (uses the dynamic core-count pinning — natural on RK3588's 3rd core). `vulkan` = `.safetensors` head on Mali GPU. **Both `npu` (`npuDraft`) and `vulkan` (`vulkanDraft`) are stubs that fall back to the placeholder** until a trained head exists + the compute kernel/IO is built — the selector and the format-flexible downloader are wired so heads of either format can be fetched and chosen now.
 
-**Draft head naming:** `{Family}-{TargetParams}-Eagle3Draft-{DraftParams}-{Chipset}-{Quant}-{Algo}-v{Version}-EAGLE3.rkllm` — e.g. `Qwen3-VL-2B-Instruct-Eagle3Draft-445M-rk3576-w4a16-grq-v1.2.3-EAGLE3.rkllm`.
+**Status:** `RKLLM_INPUT_TOKEN`, `keep_history`, `_tokenTexts` collection, KV rollback all ✅ wired. Strategy selector + `npu`/`vulkan` stubs + format-flexible downloader ✅ wired. Trained draft head + real `npuDraft`/`vulkanDraft` compute 🔄 research.
+
+**Draft head naming + format:** `{Family}-{TargetParams}-Eagle3Draft-{DraftParams}-{Chipset}-{Quant}-{Algo}-v{Version}-EAGLE3.{rkllm|safetensors}` — `.rkllm` for the NPU strategy, `.safetensors` for the Vulkan strategy. The downloader accepts both (`hf/files`/`download` allow `.rkllm`+`.safetensors`); `GET /api/admin/eagle3-heads` scans `MODELS_DIR` for heads of either format (tagged `format: npu|vulkan`) for the config picker, since `/v1/models` lists only servable `.rkllm` models.
 
 **Why 445M:** untied LM head `nn.Linear(2048, 151936)` = 311M; 2-layer SwiGLU body (intermediate 8192) = 134M. fp32 ~1.78GB, bf16 release ~891MB, w4a16 ~222MB on disk. Mali timing: the original 60ms estimate assumed ~50M; at 445M the LM-head matmul dominates — still under the 2200ms window on Mali G52, but benchmark on-board before relying on it.
 

@@ -386,35 +386,38 @@
                           v-model="settingsForm.eagle3_strategy"
                           :items="[
                             {title:'CPU placeholder (validates pipeline, no trained head required)',value:'cpu'},
-                            {title:'Vulkan Mali GPU (requires trained Eagle-3 draft head)',value:'vulkan'},
+                            {title:'NPU — .rkllm head on a spare NPU core (multi-core chips)',value:'npu'},
+                            {title:'Vulkan Mali GPU — .safetensors head on the GPU',value:'vulkan'},
                           ]"
                           label="Draft head compute"
                           density="compact" variant="outlined" hide-details class="mb-3"
                         ></v-select>
 
-                        <template v-if="settingsForm.eagle3_strategy === 'vulkan'">
-                          <div class="text-caption text-grey mb-1">Eagle-3 draft head model</div>
+                        <template v-if="settingsForm.eagle3_strategy === 'npu' || settingsForm.eagle3_strategy === 'vulkan'">
+                          <div class="text-caption text-grey mb-1">Eagle-3 draft head</div>
                           <div class="text-caption text-grey mb-2">
-                            Select the trained Eagle-3 draft head for this target model.
-                            Search HuggingFace with the <strong>Eagle-3 draft heads only</strong> filter to find published heads,
-                            or train your own using the prompt on the Desktop.
+                            Select the trained draft head for this target. The
+                            <strong>{{ settingsForm.eagle3_strategy === 'vulkan' ? 'Vulkan' : 'NPU' }}</strong> strategy uses a
+                            <code>{{ settingsForm.eagle3_strategy === 'vulkan' ? '.safetensors' : '.rkllm' }}</code> head.
+                            Download published heads from HuggingFace (Eagle-3 filter) or train your own.
                           </div>
                           <v-select
                             v-model="settingsForm.eagle3_weights_path"
                             :items="[
                               {title:'(none — select a draft head)',value:null},
-                              ...models
-                                .filter(m => m.id.includes('Eagle3Draft') || m.id.includes('EAGLE3'))
-                                .map(m => ({title: m.id, value: m.id})),
-                              ...models
-                                .filter(m => !m.id.includes('Eagle3Draft') && !m.id.includes('EAGLE3'))
-                                .map(m => ({title: m.id + ' (not an Eagle-3 head)', value: m.id})),
+                              ...eagle3Heads
+                                .filter(h => h.format === settingsForm.eagle3_strategy)
+                                .map(h => ({title: h.id, value: h.id})),
+                              ...eagle3Heads
+                                .filter(h => h.format !== settingsForm.eagle3_strategy)
+                                .map(h => ({title: `${h.id} (${h.format} head — wrong format for this strategy)`, value: h.id})),
                             ]"
                             label="Eagle-3 draft head"
                             density="compact" variant="outlined" hide-details class="mb-2"
+                            no-data-text="No Eagle-3 heads found — download one first"
                           ></v-select>
                           <div class="text-caption text-grey">
-                            Naming convention: <code>{Family}-{TargetParams}-Eagle3Draft-{DraftParams}-{Chipset}-{Quant}-{Algo}-v{Version}-EAGLE3.rkllm</code>
+                            Naming: <code>{Family}-{TargetParams}-Eagle3Draft-{DraftParams}-{Chipset}-{Quant}-{Algo}-v{Version}-EAGLE3.{{ settingsForm.eagle3_strategy === 'vulkan' ? 'safetensors' : 'rkllm' }}</code>
                           </div>
                         </template>
                       </template>
@@ -846,6 +849,7 @@ export default {
     user: { username: 'admin', role: 'admin', authProvider: 'local' },
     tab: 'manager',
     models: [],
+    eagle3Heads: [],
     status: { isLoaded: false, model: null, isMock: false, pinned: false },
     loadingModelId: null,
     scanningModels: false,
@@ -966,6 +970,7 @@ export default {
     this.fetchAllModelSettings();
     this.fetchGlobalSettings();
     this.fetchPlatform();
+    this.fetchEagle3Heads();
     this.refreshDownloadQueue();
     // Poll server state so the loaded-model indicator stays current across tabs
     this.statusPoller = setInterval(() => this.fetchStatus(), 5000);
@@ -994,6 +999,12 @@ export default {
         const res = await fetch('/v1/models');
         const data = await res.json();
         this.models = data.data || [];
+      } catch (e) {}
+    },
+    async fetchEagle3Heads() {
+      try {
+        const res = await fetch('/api/admin/eagle3-heads');
+        if (res.ok) this.eagle3Heads = (await res.json()).heads || [];
       } catch (e) {}
     },
     async rescanModels() {

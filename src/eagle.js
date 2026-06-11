@@ -83,9 +83,28 @@ export function cpuPlaceholderDraft(hiddenStates, embdSize, numTokens, k, vocabS
   return draft;
 }
 
-// Vulkan Mali GPU draft (real Eagle-3 head — requires trained weights)
+// Vulkan Mali GPU draft (real Eagle-3 head — requires a trained Vulkan-format head)
 async function vulkanDraft(hiddenStates, embdSize, numTokens, k, vocabSize, draftWeightsPath) {
-  // TODO: implement via VkEagleDraftHead in vk_eagle.hpp
+  // TODO: implement via VkEagleDraftHead in vk_eagle.hpp (from-scratch Mali kernel).
+  return cpuPlaceholderDraft(hiddenStates, embdSize, numTokens, k, vocabSize);
+}
+
+// NPU draft (real Eagle-3 head — requires a trained `.rkllm` head loaded on a
+// dedicated core; on a multi-core NPU it runs concurrently with target verify).
+async function npuDraft(hiddenStates, embdSize, numTokens, k, vocabSize, draftWorker) {
+  // TODO: feed hidden states to the draft-head worker and read back k token ids.
+  // Blocked on the same artifact as vulkan (no trained head yet) + addon
+  // hidden-state input I/O for the draft model. Falls back to the placeholder.
+  return cpuPlaceholderDraft(hiddenStates, embdSize, numTokens, k, vocabSize);
+}
+
+// Dispatch the draft pass to the chosen compute target. 'cpu' = pipeline
+// placeholder (no head needed); 'vulkan' = Mali GPU head; 'npu' = `.rkllm` head
+// on a spare NPU core. vulkan/npu currently fall back to the placeholder until a
+// trained head exists.
+async function draftTokens(strategy, hiddenStates, embdSize, numTokens, k, vocabSize, draftWeightsPath, draftWorker) {
+  if (strategy === 'vulkan') return vulkanDraft(hiddenStates, embdSize, numTokens, k, vocabSize, draftWeightsPath);
+  if (strategy === 'npu')    return npuDraft(hiddenStates, embdSize, numTokens, k, vocabSize, draftWorker);
   return cpuPlaceholderDraft(hiddenStates, embdSize, numTokens, k, vocabSize);
 }
 
@@ -97,13 +116,15 @@ async function vulkanDraft(hiddenStates, embdSize, numTokens, k, vocabSize, draf
 // options: { max_new_tokens, temperature, ... }
 // onToken: callback({ text, state, ... }) for each accepted token
 // k: number of draft tokens per step (default 8, empirically optimal)
-// draftStrategy: 'cpu' | 'vulkan'
-// draftWeightsPath: path to trained Eagle draft head weights (for 'vulkan' strategy)
+// draftStrategy: 'cpu' | 'vulkan' | 'npu'
+// draftWeightsPath: path to the trained Eagle draft head (vulkan/npu strategies)
+// draftWorker: IPC worker for the draft head loaded on a dedicated NPU core ('npu' strategy)
 
 export async function eagle3Generate(worker, prompt, options, onToken, {
   k = 8,
   draftStrategy = 'cpu',
   draftWeightsPath = null,
+  draftWorker = null,
 } = {}) {
   const maxTokens = options.max_new_tokens || 512;
   let currentPrompt = prompt;
@@ -192,9 +213,7 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
 
   // ── Initial draft ──────────────────────────────────────────────────────
   const td0 = Date.now();
-  let pendingDraftIds = await (draftStrategy === 'vulkan'
-    ? vulkanDraft(lastHiddenStates, lastEmbdSize, lastNumTokens, k, vocabSize, draftWeightsPath)
-    : Promise.resolve(cpuPlaceholderDraft(lastHiddenStates, lastEmbdSize, lastNumTokens, k, vocabSize)));
+  let pendingDraftIds = await draftTokens(draftStrategy, lastHiddenStates, lastEmbdSize, lastNumTokens, k, vocabSize, draftWeightsPath, draftWorker);
   stats.draft_ms += Date.now() - td0;
   stats.drafted  += pendingDraftIds.length;
 
@@ -212,9 +231,7 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
       // Mali (or CPU): draft next k tokens concurrently — hidden inside NPU's ~2200ms window
       (async () => {
         const td = Date.now();
-        const ids = await (draftStrategy === 'vulkan'
-          ? vulkanDraft(lastHiddenStates, lastEmbdSize, lastNumTokens, k, vocabSize, draftWeightsPath)
-          : Promise.resolve(cpuPlaceholderDraft(lastHiddenStates, lastEmbdSize, lastNumTokens, k, vocabSize)));
+        const ids = await draftTokens(draftStrategy, lastHiddenStates, lastEmbdSize, lastNumTokens, k, vocabSize, draftWeightsPath, draftWorker);
         stats.draft_ms += Date.now() - td;
         stats.drafted  += ids.length;
         return ids;
