@@ -10,6 +10,13 @@ import { eagle3Generate } from './eagle.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Default rkllm context length when neither an explicit option nor a per-model
+// `ctx_window` setting is given. 4096 matches the common RK3576/RK3588 model
+// build and is large enough for chat templates the old 2048 default overflowed;
+// rkllm clamps to the model's own max_context_limit. Override per model via the
+// ctx_window setting (e.g. raise for long-context models, lower for 2048-only).
+const DEFAULT_MAX_CONTEXT_LEN = 4096;
+
 // Per-worker slot — each holds one loaded model and one worker process.
 function createSlot(id) {
   return {
@@ -195,9 +202,23 @@ class EnginePool {
 
     if (s.loadingPromise) return s.loadingPromise;
 
+    // Resolve the rkllm context length (init-time `max_context_len`) once, so
+    // every caller — pinned autoload (no options), admin load, chat route —
+    // gets a consistent value. Precedence: explicit option → per-model
+    // `ctx_window` setting → DEFAULT_MAX_CONTEXT_LEN. Without this the addon
+    // silently defaults to 2048, which is too small for some chat templates
+    // (e.g. Qwen3-VL) and makes every prompt overflow → empty replies.
+    if (options.max_context_len == null || options.max_context_len === 0) {
+      const saved = dbGetModelSettings(modelName) || {};
+      const fromSetting = Number(saved.ctx_window) > 0 ? Number(saved.ctx_window) : 0;
+      options = { ...options, max_context_len: fromSetting || DEFAULT_MAX_CONTEXT_LEN };
+    }
+
     s.loadingPromise = (async () => {
-      // If already loaded and it is the same model, reuse it
-      if (s.isLoaded && s.activeModel?.name === modelName) {
+      // Reuse only if it is the same model AND the same context length — a
+      // changed ctx_window must force a re-init (max_context_len is init-time).
+      if (s.isLoaded && s.activeModel?.name === modelName &&
+          s.activeModel?.options?.max_context_len === options.max_context_len) {
         this.resetIdleTimer(s);
         return { status: 0, activeModel: s.activeModel };
       }
