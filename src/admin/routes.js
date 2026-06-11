@@ -12,6 +12,7 @@ import {
   dbCreateUser, dbGetUserById, dbGetUserByUsername, dbGetUserBySubject, dbListUsers, dbUpdateUser, dbUsersEmpty,
   dbGetAuthProviderConfig, dbSetAuthProviderConfig, dbClearAuthProviderConfig,
   dbLogAudit, dbGetAuditLog, dbGetSchemaVersion,
+  dbCreateBenchRun, dbListBenchRuns, dbClearBenchRuns,
 } from '../db.js';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -541,6 +542,28 @@ export default async function adminRoutes(fastify, options) {
     logAudit(request, 'tailscale_serve', enabled ? 'on' : 'off');
     const state = await ts.getState();
     return { success: true, serveUrl: state.serveUrl };
+  });
+
+  // ── Benchmark history ─────────────────────────────────────────────────────
+  // GET /api/admin/bench-runs — recent runs, newest first
+  fastify.get('/bench-runs', async () => {
+    return { runs: dbListBenchRuns(50) };
+  });
+
+  // POST /api/admin/bench-runs — persist a completed run
+  fastify.post('/bench-runs', async (request, reply) => {
+    const { model, ttft_ms, prefill_tps, gen_tps, gen_tokens, total_ms, max_tokens } = request.body || {};
+    if (!model) return reply.status(400).send({ error: 'model required' });
+    const id = uuidv4();
+    dbCreateBenchRun({ id, model, ttft_ms, prefill_tps, gen_tps, gen_tokens, total_ms, max_tokens });
+    return { id };
+  });
+
+  // DELETE /api/admin/bench-runs — clear history
+  fastify.delete('/bench-runs', async (request) => {
+    dbClearBenchRuns();
+    logAudit(request, 'bench_runs_clear', null);
+    return { success: true };
   });
 
   // DELETE /api/admin/cache — clear all prefix cache files

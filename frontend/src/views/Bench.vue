@@ -146,6 +146,43 @@
         </v-row>
       </v-card>
 
+      <!-- Previous runs -->
+      <v-card v-if="history.length" class="glass-card pa-5 mt-5">
+        <div class="d-flex align-center justify-space-between mb-3 flex-wrap gap-2">
+          <div class="text-h6 font-weight-bold d-flex align-center">
+            <v-icon start color="primary">mdi-history</v-icon>
+            Previous Runs
+          </div>
+          <v-btn size="small" variant="text" color="error" prepend-icon="mdi-delete-outline" @click="clearHistory">Clear</v-btn>
+        </div>
+        <v-table density="comfortable" class="bench-history">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th class="text-truncate">Model</th>
+              <th class="text-right">TTFT</th>
+              <th class="text-right">Prefill</th>
+              <th class="text-right">Gen</th>
+              <th class="text-right">Tokens</th>
+              <th class="text-right">Total</th>
+              <th class="text-right">Max</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in history" :key="r.id">
+              <td class="text-caption text-no-wrap">{{ formatTime(r.created_at) }}</td>
+              <td class="text-caption text-truncate" style="max-width: 180px;">{{ r.model }}</td>
+              <td class="text-right text-no-wrap">{{ r.ttft_ms != null ? r.ttft_ms.toFixed(0) + ' ms' : '—' }}</td>
+              <td class="text-right text-no-wrap">{{ r.prefill_tps != null ? r.prefill_tps.toFixed(1) : '—' }}</td>
+              <td class="text-right text-no-wrap">{{ r.gen_tps != null ? r.gen_tps.toFixed(1) : '—' }}</td>
+              <td class="text-right">{{ r.gen_tokens ?? '—' }}</td>
+              <td class="text-right text-no-wrap">{{ r.total_ms != null ? (r.total_ms / 1000).toFixed(2) + 's' : '—' }}</td>
+              <td class="text-right">{{ r.max_tokens ?? '—' }}</td>
+            </tr>
+          </tbody>
+        </v-table>
+      </v-card>
+
     </v-container>
   </v-main>
 </template>
@@ -163,6 +200,7 @@ export default {
     models: [],
     selectedModel: null,
     loadingModel: false,
+    history: [],
     appVersion: __APP_VERSION__,
     themeName: localStorage.getItem('orkllm-theme') || 'customDarkTheme'
   }),
@@ -184,12 +222,20 @@ export default {
     },
     running() { return benchState.running; },
     benchOutput() { return benchState.benchOutput; },
-    results() { return benchState.results; }
+    results() { return benchState.results; },
+    historyDirty() { return benchState.historyDirty; }
+  },
+  watch: {
+    // The store flips historyDirty after persisting a finished run → refresh the table.
+    historyDirty(v) {
+      if (v) { benchState.historyDirty = false; this.fetchHistory(); }
+    }
   },
   async mounted() {
     this.fetchAuth();
     await this.fetchModels();
     await this.fetchStatus();
+    this.fetchHistory();
   },
   methods: {
     async fetchAuth() {
@@ -206,6 +252,26 @@ export default {
         const data = await res.json();
         this.models = data.data || [];
       } catch (e) {}
+    },
+    async fetchHistory() {
+      try {
+        const res = await fetch('/api/admin/bench-runs');
+        if (res.ok) this.history = (await res.json()).runs || [];
+      } catch (e) {}
+    },
+    async clearHistory() {
+      try {
+        const res = await fetch('/api/admin/bench-runs', { method: 'DELETE' });
+        if (res.ok) { this.history = []; this.$notify('Benchmark history cleared', 'success'); }
+      } catch (e) { this.$notify('Failed to clear', 'error'); }
+    },
+    formatTime(ts) {
+      const d = new Date(ts);
+      const now = new Date();
+      const sameDay = d.toDateString() === now.toDateString();
+      return sameDay
+        ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     },
     async fetchStatus() {
       try {

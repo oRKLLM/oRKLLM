@@ -136,7 +136,7 @@ graph TD
 | `src/runtime_sync.js` | Downloads aarch64 `librkllmrt.so` versions from the mirror list (`RUNTIME_MIRRORS`, override via `ORKLLM_RUNTIME_MIRRORS`) into `RUNTIMES_DIR`, first hit wins; skips non-ARM64-Linux; runs on startup, on load failure, and via `POST /api/admin/runtimes/sync` |
 | `src/monitor.js` | Polls CPU, RAM, SoC Temp, NPU load, GPU load (Mali), disk utilization; Rockchip-native on ARM64 Linux, simulated elsewhere |
 | `src/stats.js` | Records prefill/generation tokens and latencies in SQLite |
-| `src/db.js` | SQLite + PRAGMA user_version migration runner; 4 versioned migrations; all table accessors (incl. `mcp_servers`) |
+| `src/db.js` | SQLite + PRAGMA user_version migration runner; 5 versioned migrations; all table accessors (incl. `mcp_servers`, `bench_runs`) |
 | `src/config.js` | Env-driven settings; multi-user credential helpers; PBKDF2-HMAC-SHA256 |
 | `src/cache.js` | Tiered SSD prefix KV cache (hot/cold LRU), sliding context window trim |
 | `src/server.js` | Fastify bootstrap; trustProxy config; mounts `/ws/metrics`, `/ws/logs`, static SPA, API routes |
@@ -155,7 +155,7 @@ graph TD
 | `frontend/src/chat.js` | Module-scope `reactive()` chat-session store (`chatState`, `sendMessage`, `abortGeneration`, conversation CRUD); an in-flight generation and its conversation survive navigating away from `/chat` and back. Partial-response `sendBeacon` is registered here on `pagehide` (true page unload only) |
 | `frontend/src/views/Settings.vue` | Global settings, HF token, prefix cache config, trusted proxy, MCP servers (table + add/edit dialog with transport-adaptive fields and an auth-type selector — none/bearer/apikey/basic/custom — that builds `config.auth`; test/validate, a per-tool allow-list picker — Test/Load tools then check which to expose, persisted as `config.allowedTools`; enable toggle, "use MCP tools in inference" switch) |
 | `frontend/src/views/Logs.vue` | Full-page live log terminal (WebSocket) |
-| `frontend/src/views/Bench.vue` | Inference benchmark (TTFT, tok/s) |
+| `frontend/src/views/Bench.vue` | Inference benchmark (TTFT, tok/s); completed runs persist to `bench_runs` (`/api/admin/bench-runs`) and show in a Previous Runs table |
 | `frontend/src/views/Chat.vue` | Full streaming chat against OpenAI-compatible API; system-prompt panel has an "Inject MCP tool instructions" toggle that fetches `/api/admin/mcp-tools` (showing tool count + approx token cost) and adds/removes a delimited tool-instructions block in the system prompt |
 | `frontend/src/views/SiteManagement.vue` | Admin-only: user CRUD, OIDC/SAML config, audit log |
 | `frontend/src/views/Login.vue` | Login page; shows SSO button when OIDC/SAML configured |
@@ -299,6 +299,7 @@ Append to the `MIGRATIONS` array in `src/db.js`:
 | v2 | Multi-user RBAC: users, auth_provider_config, audit_log |
 | v3 | Chat history: conversations, messages (with FK cascade delete and indexes) |
 | v4 | MCP servers: mcp_servers table (id, name, transport, config JSON, enabled) |
+| v5 | Benchmark history: bench_runs table (model, ttft/prefill/gen metrics, tokens, timestamp) |
 
 ---
 

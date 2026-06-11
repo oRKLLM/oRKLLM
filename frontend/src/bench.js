@@ -12,6 +12,7 @@ export const benchState = reactive({
   running: false,
   benchOutput: '',
   results: null,
+  historyDirty: false, // set true after a run is persisted so the view re-fetches
 });
 
 let abortController = null;
@@ -102,6 +103,16 @@ export async function runBenchmark(model) {
       model,
       max_tokens: benchState.maxTokens
     };
+
+    // Persist the completed run so it appears in the history table.
+    try {
+      await fetch('/api/admin/bench-runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(benchState.results),
+      });
+      benchState.historyDirty = true; // signal the view to refresh
+    } catch (e) {}
 
   } catch (err) {
     if (err.name !== 'AbortError') {

@@ -193,6 +193,26 @@ const MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 5,
+    description: 'Benchmark history: bench_runs table',
+    up(d) {
+      d.exec(`
+        CREATE TABLE IF NOT EXISTS bench_runs (
+          id TEXT PRIMARY KEY,
+          model TEXT NOT NULL,
+          ttft_ms REAL,
+          prefill_tps REAL,
+          gen_tps REAL,
+          gen_tokens INTEGER,
+          total_ms REAL,
+          max_tokens INTEGER,
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_bench_runs_created ON bench_runs(created_at DESC);
+      `);
+    },
+  },
 ];
 
 const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
@@ -564,4 +584,23 @@ export function dbUpdateMcpServer(id, fields) {
 
 export function dbDeleteMcpServer(id) {
   return withReconnect(d => d.prepare('DELETE FROM mcp_servers WHERE id = ?').run(id));
+}
+
+// --- Benchmark runs ---
+
+export function dbCreateBenchRun({ id, model, ttft_ms, prefill_tps, gen_tps, gen_tokens, total_ms, max_tokens }) {
+  return withReconnect(d => d.prepare(
+    `INSERT INTO bench_runs (id, model, ttft_ms, prefill_tps, gen_tps, gen_tokens, total_ms, max_tokens, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(id, model, ttft_ms ?? null, prefill_tps ?? null, gen_tps ?? null, gen_tokens ?? null, total_ms ?? null, max_tokens ?? null, Date.now()));
+}
+
+export function dbListBenchRuns(limit = 50) {
+  return withReconnect(d => d.prepare(
+    'SELECT * FROM bench_runs ORDER BY created_at DESC LIMIT ?'
+  ).all(limit));
+}
+
+export function dbClearBenchRuns() {
+  return withReconnect(d => d.prepare('DELETE FROM bench_runs').run());
 }

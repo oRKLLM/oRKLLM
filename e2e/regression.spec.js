@@ -478,3 +478,31 @@ test('PWA: API stays network-only (not the cached shell)', async ({ page }) => {
   expect((res.headers()['content-type'] || '')).toContain('application/json');
   await res.json(); // parses as JSON, not index.html
 });
+
+// ---------------------------------------------------------------------------
+// Benchmark history persistence
+// ---------------------------------------------------------------------------
+
+test('Bench: completed run is persisted in Previous Runs and survives reload', async ({ page }) => {
+  await login(page);
+  await loadModel(page);
+  await navBtn(page, 'Bench').click();
+  await expect(page).toHaveURL(/\/bench/);
+
+  const runBtn = page.locator('button:has-text("Run Benchmark")');
+  await expect(runBtn).toBeEnabled({ timeout: 8000 });
+  await runBtn.click();
+
+  // Wait for the run to finish (Results card appears).
+  await expect(page.locator('.v-card').filter({ hasText: /Results/ })).toBeVisible({ timeout: 20000 });
+
+  // Previous Runs table appears with at least one row.
+  const history = page.locator('.v-card').filter({ hasText: 'Previous Runs' });
+  await expect(history).toBeVisible({ timeout: 5000 });
+  await expect(history.locator('.bench-history tbody tr').first()).toBeVisible();
+
+  // Persists across a full reload (fetched from the DB on mount).
+  await page.reload();
+  await expect(page.locator('.v-card').filter({ hasText: 'Previous Runs' })
+    .locator('.bench-history tbody tr').first()).toBeVisible({ timeout: 8000 });
+});
