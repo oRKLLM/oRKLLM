@@ -257,8 +257,37 @@ function readFanSpeed() {
         if (cur != null && max) return { percentage: clampPct((cur / max) * 100), rpm: null };
       }
     }
+
+    // (d) Raw PWM channel driven by a userspace fan daemon. On many DietPi /
+    //     Armbian SBCs the kernel pwm-fan driver fails to bind (it stays
+    //     `waiting_for_supplier`) and a script drives the PWM directly via
+    //     /sys/class/pwm — so no hwmon/cooling_device exists, but the live
+    //     duty cycle still tells us the fan speed. Read the first *enabled*
+    //     channel and convert, honouring inverted polarity (where a higher
+    //     duty means a slower fan, as the Rock 5B fan daemon uses).
+    const fanPwm = readPwmFan();
+    if (fanPwm) return fanPwm;
   } catch (e) {
     // ignore — fall through to null
+  }
+  return null;
+}
+
+function readPwmFan() {
+  for (const chip of safeReaddir('/sys/class/pwm').filter(d => d.startsWith('pwmchip'))) {
+    const chipBase = `/sys/class/pwm/${chip}`;
+    for (const ch of safeReaddir(chipBase).filter(d => /^pwm\d+$/.test(d))) {
+      const base = `${chipBase}/${ch}`;
+      const enable = readIntFile(`${base}/enable`);
+      if (enable === 0) return { percentage: 0, rpm: null };   // explicitly off
+      const period = readIntFile(`${base}/period`);
+      const duty = readIntFile(`${base}/duty_cycle`);
+      if (!period || duty == null) continue;
+      const inverted = /invers/i.test(readFile(`${base}/polarity`) || '');
+      const frac = Math.min(1, duty / period);
+      const speed = inverted ? 1 - frac : frac;
+      return { percentage: clampPct(speed * 100), rpm: null };
+    }
   }
   return null;
 }
