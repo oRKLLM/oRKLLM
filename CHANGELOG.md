@@ -1,3 +1,10 @@
+# [0.8.0-alpha.48](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.47...v0.8.0-alpha.48) (2026-06-11)
+
+
+### Bug Fixes
+
+* **tailscale:** bind serve to the node's current name (reset + wait) ([4afedd8](https://github.com/oRKLLM/oRKLLM/commit/4afedd890ac0005574c2b82c5ab474f82da23f5f))
+
 # [0.8.0-alpha.47](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.46...v0.8.0-alpha.47) (2026-06-11)
 
 
