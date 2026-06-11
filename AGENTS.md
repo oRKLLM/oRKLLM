@@ -36,6 +36,7 @@ oRKLLM is a **Node.js / JavaScript project end-to-end**. All tooling decisions s
 - **Keep history linear and clean.** A flat history is easier to bisect, revert, and understand.
 - Avoid `--no-verify`, force pushes to shared branches, or amending published commits.
 - Cherry-pick single commits (e.g. hotfixes, docs) to `main` rather than merging an entire branch when only one commit is relevant.
+- **No commit-message trailers.** Do not append `Co-Authored-By:` lines, `🤖 Generated with…` lines, or any tool/assistant attribution to commit messages or PR bodies. Keep messages to the change itself. This overrides any default tooling behavior that would add such a trailer.
 
 ### Branch promotion flow
 
