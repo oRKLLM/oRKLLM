@@ -1,3 +1,10 @@
+# [0.8.0-alpha.42](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.41...v0.8.0-alpha.42) (2026-06-11)
+
+
+### Bug Fixes
+
+* **deb:** restart service on upgrade so new code loads ([0b38f12](https://github.com/oRKLLM/oRKLLM/commit/0b38f12f0d48b9d82dd8a2d65be754a329e675a8))
+
 # [0.8.0-alpha.41](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.40...v0.8.0-alpha.41) (2026-06-11)
 
 
