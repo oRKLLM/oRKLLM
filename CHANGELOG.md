@@ -1,3 +1,11 @@
+# [0.8.0-alpha.39](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.38...v0.8.0-alpha.39) (2026-06-11)
+
+
+### Bug Fixes
+
+* **deb:** declare libgomp1 dependency (required by librkllmrt.so) ([45db0fc](https://github.com/oRKLLM/oRKLLM/commit/45db0fc030a395978dca1534ebaa099da477930e))
+* **ui:** persist Bench and Chat state across navigation via shared stores ([b975571](https://github.com/oRKLLM/oRKLLM/commit/b975571b360b9c5ea3991ae40b76f28d63e632d0))
+
 # [0.8.0-alpha.38](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.37...v0.8.0-alpha.38) (2026-06-10)
 
 
