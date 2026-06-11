@@ -1,3 +1,10 @@
+# [0.8.0-alpha.46](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.45...v0.8.0-alpha.46) (2026-06-11)
+
+
+### Features
+
+* **mcp:** select-all master checkbox in the tool picker ([ecc5950](https://github.com/oRKLLM/oRKLLM/commit/ecc59506a194813ae8cf0541ea2b98037f41d055))
+
 # [0.8.0-alpha.45](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.44...v0.8.0-alpha.45) (2026-06-11)
 
 
