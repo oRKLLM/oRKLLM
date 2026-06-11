@@ -1,0 +1,45 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage                   : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+
+// Eagle-3 draft head: RMSNorm with BF16 scale weights.
+//
+//   out[i] = in[i] * rsqrt(mean(in^2) + eps) * scale[i]
+//
+// Single workgroup (64 threads) with a shared-memory reduction over DIM.
+// Dispatch exactly 1 workgroup. u0 = DIM, f0 = eps.
+
+layout(local_size_x = 64) in;
+
+layout(set=0, binding=0) readonly buffer In    { float    inp[];  };  // [DIM] FP32
+layout(set=0, binding=1) readonly buffer Scale { uint16_t s[];    };  // [DIM] BF16
+layout(set=0, binding=2)          buffer Out   { float    outp[]; };  // [DIM] FP32
+
+layout(push_constant) uniform PC { uint u0; uint u1; float f0; } pc;
+
+shared float shared_sq[64];
+
+float bf16_to_f32(uint16_t b) { return uintBitsToFloat(uint(b) << 16u); }
+
+void main() {
+    uint lid = gl_LocalInvocationID.x;
+    uint DIM = pc.u0;
+    float eps = pc.f0;
+
+    float sq = 0.0;
+    for (uint i = lid; i < DIM; i += 64u)
+        sq += inp[i] * inp[i];
+    shared_sq[lid] = sq;
+    memoryBarrierShared();
+    barrier();
+
+    for (uint stride = 32u; stride > 0u; stride >>= 1u) {
+        if (lid < stride) shared_sq[lid] += shared_sq[lid + stride];
+        memoryBarrierShared();
+        barrier();
+    }
+
+    float rms = inversesqrt(shared_sq[0] / float(DIM) + eps);
+    for (uint i = lid; i < DIM; i += 64u)
+        outp[i] = inp[i] * rms * bf16_to_f32(s[i]);
+}

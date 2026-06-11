@@ -21,10 +21,38 @@
 //   Baseline (sequential GENERATE):  0.5 tok/s
 //   Pipelined Eagle-3:               ~3.7 tok/s  → 3.73× speedup
 
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
+
+// Read the Eagle-3 head's companion config.json (downloaded alongside the
+// .safetensors head) for the hyperparameters the draft kernel needs. Cached per
+// directory. Falls back to {} so the addon uses its built-in defaults.
+const _headConfigCache = new Map();
+function readHeadConfig(headPath) {
+  const dir = path.dirname(headPath);
+  if (_headConfigCache.has(dir)) return _headConfigCache.get(dir);
+  let cfg = {};
+  try { cfg = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')); }
+  catch { /* no config.json → defaults */ }
+  _headConfigCache.set(dir, cfg);
+  return cfg;
+}
+
+// Lazy-load the native addon that hosts the Vulkan Eagle-3 draft head.
+// Returns null if the addon isn't built or lacks the export (→ CPU fallback).
+let _addon;
+function getAddon() {
+  if (_addon === undefined) {
+    try { _addon = require(path.join(__dirname, '../build/Release/kvcache_quant_napi.node')); }
+    catch { _addon = null; }
+  }
+  return _addon;
+}
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const INFER_GENERATE           = 0;
@@ -83,27 +111,54 @@ export function cpuPlaceholderDraft(hiddenStates, embdSize, numTokens, k, vocabS
   return draft;
 }
 
-// Vulkan Mali GPU draft (real Eagle-3 head — requires a trained Vulkan-format head)
-async function vulkanDraft(hiddenStates, embdSize, numTokens, k, vocabSize, draftWeightsPath) {
-  // TODO: implement via VkEagleDraftHead in vk_eagle.hpp (from-scratch Mali kernel).
-  return cpuPlaceholderDraft(hiddenStates, embdSize, numTokens, k, vocabSize);
+// Vulkan Mali GPU draft — runs the EAGLE-3 draft head (`vk_eagle.hpp`) on Mali.
+// hiddenStates is the target model's last-layer hidden states [numTokens × embd].
+// lastTokenId is the token preceding the draft (-1 → zero embedding on the first
+// batch, before any token has been accepted). ctxLen seeds the RoPE positions.
+// Returns k target-vocab token IDs; falls back to the placeholder if the addon,
+// GPU, or draft head are unavailable.
+async function vulkanDraft(hiddenStates, embdSize, numTokens, k, vocabSize, draftWeightsPath, lastTokenId, ctxLen) {
+  const addon = getAddon();
+  if (!addon?.eagleDraftTokens || !draftWeightsPath) {
+    return cpuPlaceholderDraft(hiddenStates, embdSize, numTokens, k, vocabSize);
+  }
+  try {
+    const cfg = readHeadConfig(draftWeightsPath);
+    const ids = await addon.eagleDraftTokens({
+      hidden_states: hiddenStates instanceof Float32Array ? hiddenStates : new Float32Array(hiddenStates),
+      embd_size: embdSize,
+      num_tokens: numTokens,
+      k,
+      last_token_id: lastTokenId ?? -1,
+      ctx_len: ctxLen ?? numTokens,
+      weights_path: draftWeightsPath,
+      embeddings_path: path.join(path.dirname(draftWeightsPath), 'embeddings.safetensors'),
+      // Hyperparameters from the head's config.json (0 → addon default).
+      rope_theta: cfg.rope_theta ?? 0,
+      rms_norm_eps: cfg.rms_norm_eps ?? 0,
+    });
+    return Array.from(ids);
+  } catch (e) {
+    console.warn('[Eagle-3] vulkanDraft failed:', e.message, '— using placeholder');
+    return cpuPlaceholderDraft(hiddenStates, embdSize, numTokens, k, vocabSize);
+  }
 }
 
 // NPU draft (real Eagle-3 head — requires a trained `.rkllm` head loaded on a
 // dedicated core; on a multi-core NPU it runs concurrently with target verify).
 async function npuDraft(hiddenStates, embdSize, numTokens, k, vocabSize, draftWorker) {
   // TODO: feed hidden states to the draft-head worker and read back k token ids.
-  // Blocked on the same artifact as vulkan (no trained head yet) + addon
-  // hidden-state input I/O for the draft model. Falls back to the placeholder.
+  // Blocked on a trained `.rkllm` head + addon hidden-state input I/O for the
+  // draft model. Falls back to the placeholder.
   return cpuPlaceholderDraft(hiddenStates, embdSize, numTokens, k, vocabSize);
 }
 
 // Dispatch the draft pass to the chosen compute target. 'cpu' = pipeline
 // placeholder (no head needed); 'vulkan' = Mali GPU head; 'npu' = `.rkllm` head
-// on a spare NPU core. vulkan/npu currently fall back to the placeholder until a
-// trained head exists.
-async function draftTokens(strategy, hiddenStates, embdSize, numTokens, k, vocabSize, draftWeightsPath, draftWorker) {
-  if (strategy === 'vulkan') return vulkanDraft(hiddenStates, embdSize, numTokens, k, vocabSize, draftWeightsPath);
+// on a spare NPU core. 'npu' still falls back to the placeholder until a trained
+// `.rkllm` head exists.
+async function draftTokens(strategy, hiddenStates, embdSize, numTokens, k, vocabSize, draftWeightsPath, draftWorker, lastTokenId, ctxLen) {
+  if (strategy === 'vulkan') return vulkanDraft(hiddenStates, embdSize, numTokens, k, vocabSize, draftWeightsPath, lastTokenId, ctxLen);
   if (strategy === 'npu')    return npuDraft(hiddenStates, embdSize, numTokens, k, vocabSize, draftWorker);
   return cpuPlaceholderDraft(hiddenStates, embdSize, numTokens, k, vocabSize);
 }
@@ -217,9 +272,15 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
   let lastNumTokens     = hiddenMsg.hidden_num_tokens;
   const vocabSize       = hiddenMsg.logits_vocab_size || 151936;
 
+  // Token preceding the draft (RKLLM doesn't expose the prompt's final token ID,
+  // so the first batch uses -1 → zero embedding; subsequent batches are exact)
+  // and running context length used to seed the draft's RoPE positions.
+  let lastTokenId = -1;
+  let ctxLen      = lastNumTokens;
+
   // ── Initial draft ──────────────────────────────────────────────────────
   const td0 = Date.now();
-  let pendingDraftIds = await draftTokens(draftStrategy, lastHiddenStates, lastEmbdSize, lastNumTokens, k, vocabSize, draftWeightsPath, draftWorker);
+  let pendingDraftIds = await draftTokens(draftStrategy, lastHiddenStates, lastEmbdSize, lastNumTokens, k, vocabSize, draftWeightsPath, draftWorker, lastTokenId, ctxLen);
   stats.draft_ms += Date.now() - td0;
   stats.drafted  += pendingDraftIds.length;
 
@@ -239,7 +300,7 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
       // Mali (or CPU): draft next k tokens concurrently — hidden inside NPU's ~2200ms window
       (async () => {
         const td = Date.now();
-        const ids = await draftTokens(draftStrategy, lastHiddenStates, lastEmbdSize, lastNumTokens, k, vocabSize, draftWeightsPath, draftWorker);
+        const ids = await draftTokens(draftStrategy, lastHiddenStates, lastEmbdSize, lastNumTokens, k, vocabSize, draftWeightsPath, draftWorker, lastTokenId, ctxLen);
         stats.draft_ms += Date.now() - td;
         stats.drafted  += ids.length;
         return ids;
@@ -273,6 +334,8 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
       onToken({ token_id: pendingDraftIds[i], text, state: 0 });
       currentPrompt += text;
       totalTokens++;
+      ctxLen++;
+      lastTokenId = pendingDraftIds[i];
       stats.accepted++;
       if (totalTokens >= maxTokens) { done = true; break; }
     }
@@ -283,6 +346,8 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
       onToken({ token_id: correctionId, text: corrText, state: 0 });
       currentPrompt += corrText;
       totalTokens++;
+      ctxLen++;
+      lastTokenId = correctionId;
       stats.corrected++;
       if (totalTokens >= maxTokens) done = true;
     }
@@ -309,6 +374,7 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
         lastHiddenStates  = reHiddenMsg.hidden_states;
         lastEmbdSize      = reHiddenMsg.hidden_embd_size;
         lastNumTokens     = reHiddenMsg.hidden_num_tokens;
+        ctxLen            = reHiddenMsg.hidden_num_tokens;  // resync RoPE base after rollback
       }
     }
 

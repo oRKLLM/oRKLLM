@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstring>
 #include "vk_quant.hpp"   // no-op when HAS_VULKAN is not defined
+#include "vk_eagle.hpp"   // Eagle-3 draft head; no-op when HAS_VULKAN is not defined
 #include <stdexcept>
 #include <string>
 #include <algorithm>
@@ -575,11 +576,87 @@ static Napi::Value JsDequantize(const Napi::CallbackInfo& info) {
     return def.Promise();
 }
 
+// ── Eagle-3 Vulkan draft head ──────────────────────────────────────────────
+// Runs the AngelSlim EAGLE-3 draft head on the Mali GPU to produce k draft
+// token IDs. Async (libuv thread pool) so it never blocks the main thread; the
+// JS layer pipelines it concurrently with NPU verification. Gated on HAS_VULKAN
+// — without it the worker rejects and eagle.js falls back to the CPU placeholder.
+class EagleDraftWorker : public Napi::AsyncWorker {
+public:
+    EagleDraftWorker(Napi::Env env, Napi::Promise::Deferred def,
+                     std::vector<float> hidden, uint32_t embd, uint32_t num_tokens,
+                     uint32_t k, int32_t last_token_id, uint32_t ctx_len,
+                     std::string head_path, std::string embed_path,
+                     double rope_theta, double rms_norm_eps)
+        : Napi::AsyncWorker(env), def_(def), hidden_(std::move(hidden)),
+          embd_(embd), num_tokens_(num_tokens), k_(k),
+          last_token_id_(last_token_id), ctx_len_(ctx_len),
+          head_path_(std::move(head_path)), embed_path_(std::move(embed_path)),
+          rope_theta_(rope_theta), rms_norm_eps_(rms_norm_eps) {}
+
+    void Execute() override {
+#ifdef HAS_VULKAN
+        auto& head = VkEagleDraftHead::get();
+        if (!head.ok())
+            return SetError("Eagle-3 Vulkan GPU not available");
+        if (!head.load_weights(head_path_, embed_path_))
+            return SetError("Eagle-3 draft head weights failed to load");
+        // 0 → keep the harness's built-in default for that hyperparameter.
+        if (rope_theta_   > 0) head.set_rope_theta((float)rope_theta_);
+        if (rms_norm_eps_ > 0) head.set_rms_eps((float)rms_norm_eps_);
+        result_ = head.forward(hidden_.data(), embd_, num_tokens_, k_,
+                               last_token_id_, ctx_len_);
+        if (result_.empty()) SetError("Eagle-3 forward pass failed");
+#else
+        SetError("Eagle-3 Vulkan support not compiled in");
+#endif
+    }
+    void OnOK() override {
+        Napi::Env env = Env();
+        auto arr = Napi::Int32Array::New(env, result_.size());
+        for (size_t i = 0; i < result_.size(); i++) arr[i] = result_[i];
+        def_.Resolve(arr);
+    }
+    void OnError(const Napi::Error& e) override { def_.Reject(e.Value()); }
+private:
+    Napi::Promise::Deferred def_;
+    std::vector<float> hidden_;
+    uint32_t embd_, num_tokens_, k_;
+    int32_t  last_token_id_;
+    uint32_t ctx_len_;
+    std::string head_path_, embed_path_;
+    double rope_theta_, rms_norm_eps_;
+    std::vector<int32_t> result_;
+};
+
+static Napi::Value JsEagleDraftTokens(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    auto def = Napi::Promise::Deferred::New(env);
+    auto opts = info[0].As<Napi::Object>();
+
+    auto hs  = opts.Get("hidden_states").As<Napi::Float32Array>();
+    std::vector<float> hidden(hs.Data(), hs.Data() + hs.ElementLength());
+    uint32_t embd  = opts.Get("embd_size").As<Napi::Number>().Uint32Value();
+    uint32_t ntok  = opts.Get("num_tokens").As<Napi::Number>().Uint32Value();
+    uint32_t k     = opts.Get("k").As<Napi::Number>().Uint32Value();
+    int32_t  last  = opts.Get("last_token_id").As<Napi::Number>().Int32Value();
+    uint32_t ctx   = opts.Get("ctx_len").As<Napi::Number>().Uint32Value();
+    std::string head  = opts.Get("weights_path").As<Napi::String>().Utf8Value();
+    std::string embed = opts.Get("embeddings_path").As<Napi::String>().Utf8Value();
+    double theta = opts.Has("rope_theta")   ? opts.Get("rope_theta").As<Napi::Number>().DoubleValue()   : 0.0;
+    double eps   = opts.Has("rms_norm_eps") ? opts.Get("rms_norm_eps").As<Napi::Number>().DoubleValue() : 0.0;
+
+    (new EagleDraftWorker(env, def, std::move(hidden), embd, ntok, k, last, ctx,
+                          std::move(head), std::move(embed), theta, eps))->Queue();
+    return def.Promise();
+}
+
 Napi::Object InitKVCacheQuant(Napi::Env env, Napi::Object exports) {
     exports.Set("quantize",       Napi::Function::New(env, JsQuantize));
     exports.Set("quantizePolar8", Napi::Function::New(env, JsQuantizePolar8));
     exports.Set("quantizePolar4", Napi::Function::New(env, JsQuantizePolar4));
     exports.Set("dequantize",     Napi::Function::New(env, JsDequantize));
+    exports.Set("eagleDraftTokens", Napi::Function::New(env, JsEagleDraftTokens));
     return exports;
 }
 

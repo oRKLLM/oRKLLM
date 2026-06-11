@@ -11,7 +11,7 @@
     <v-container fluid class="pt-6 px-6 page-container">
 
       <div class="text-h5 font-weight-bold mb-1">Models</div>
-      <div class="text-caption text-grey mb-5">Manage and download .rkllm models and Eagle-3 draft heads (.safetensors, .gguf).</div>
+      <div class="text-caption text-grey mb-5">Manage and download servable .rkllm models, base models, and Eagle-3 draft heads.</div>
 
       <v-tabs v-model="tab" color="primary" class="mb-5">
         <v-tab value="manager">
@@ -172,31 +172,113 @@
                 <v-icon start color="purple">mdi-lightning-bolt-outline</v-icon>
                 Eagle-3 Draft Heads
               </div>
-              <v-btn icon size="small" variant="text" color="grey" title="Rescan" @click="fetchEagle3Heads">
+              <v-btn icon size="small" variant="text" color="grey" title="Rescan" @click="fetchEagle3Heads(); fetchLibrary();">
                 <v-icon>mdi-refresh</v-icon>
               </v-btn>
             </div>
             <v-list bg-color="transparent" class="pa-0 border rounded">
               <v-list-item
-                v-for="head in eagle3Heads"
-                :key="head.id"
+                v-for="head in library.eagle3"
+                :key="head.dir"
                 class="border-bottom py-3"
               >
                 <template v-slot:prepend>
                   <v-icon color="purple">mdi-head-flash-outline</v-icon>
                 </template>
-                <v-list-item-title class="font-weight-bold text-truncate">{{ head.id }}</v-list-item-title>
-                <v-list-item-subtitle>
-                  <v-chip size="x-small" :color="head.format === 'npu' ? 'primary' : 'purple'" variant="tonal" class="mr-1">
-                    {{ head.format === 'npu' ? 'NPU (.rkllm)' : head.id.endsWith('.safetensors') ? 'Vulkan (.safetensors)' : 'Vulkan (.gguf)' }}
+                <v-list-item-title class="font-weight-bold text-truncate">{{ head.dir }}</v-list-item-title>
+                <v-list-item-subtitle class="d-flex align-center flex-wrap" style="gap:4px;">
+                  <v-chip size="x-small" :color="head.format === 'npu' ? 'primary' : 'purple'" variant="tonal">
+                    {{ head.format === 'npu' ? 'NPU (.rkllm)' : 'Vulkan (.safetensors)' }}
+                  </v-chip>
+                  <v-chip size="x-small" :color="head.embeddingsPresent ? 'success' : 'warning'" variant="tonal">
+                    <v-icon start size="x-small">{{ head.embeddingsPresent ? 'mdi-check' : 'mdi-alert-outline' }}</v-icon>
+                    {{ head.embeddingsPresent ? 'embeddings ready' : 'embeddings missing' }}
                   </v-chip>
                 </v-list-item-subtitle>
+                <template v-slot:append v-if="!head.embeddingsPresent">
+                  <v-btn size="x-small" variant="tonal" color="purple" @click="openEmbedDialog(head)">Add embeddings</v-btn>
+                </template>
               </v-list-item>
-              <div v-if="eagle3Heads.length === 0" class="text-center py-6 text-grey">
+              <div v-if="library.eagle3.length === 0" class="text-center py-6 text-grey">
                 No Eagle-3 draft heads found. Download a head with "Eagle-3" in its name or path.
               </div>
             </v-list>
+            <div class="text-caption text-grey mt-2">
+              Vulkan heads need their base model's embeddings (not shipped in the head repo).
+            </div>
           </v-card>
+
+          <!-- Base Models (Eagle-3 embedding source) -->
+          <v-card class="glass-card pa-5 mb-5">
+            <div class="d-flex align-center justify-space-between mb-4">
+              <div class="text-h6 font-weight-bold d-flex align-center">
+                <v-icon start color="teal">mdi-database-outline</v-icon>
+                Base Models
+              </div>
+              <v-btn icon size="small" variant="text" color="grey" title="Rescan" @click="fetchLibrary">
+                <v-icon>mdi-refresh</v-icon>
+              </v-btn>
+            </div>
+            <v-list bg-color="transparent" class="pa-0 border rounded">
+              <v-list-item v-for="b in library.base" :key="b.dir" class="border-bottom py-3">
+                <template v-slot:prepend>
+                  <v-icon color="teal">mdi-cube-outline</v-icon>
+                </template>
+                <v-list-item-title class="font-weight-bold text-truncate">{{ b.dir }}</v-list-item-title>
+                <v-list-item-subtitle class="d-flex align-center flex-wrap" style="gap:4px;">
+                  <v-chip v-if="b.arch" size="x-small" color="teal" variant="tonal">{{ b.arch }}</v-chip>
+                  <v-chip size="x-small" :color="b.hasEmbeddings ? 'success' : 'grey'" variant="tonal">
+                    {{ b.hasEmbeddings ? 'has embed_tokens' : 'no embed_tokens' }}
+                  </v-chip>
+                </v-list-item-subtitle>
+              </v-list-item>
+              <div v-if="library.base.length === 0" class="text-center py-6 text-grey">
+                No base models downloaded. Download a base model to supply Eagle-3 embeddings.
+              </div>
+            </v-list>
+          </v-card>
+
+          <!-- Add embeddings dialog -->
+          <v-dialog v-model="embedDialog" max-width="560">
+            <v-card class="glass-card pa-2">
+              <v-card-title class="text-h6">Add base-model embeddings</v-card-title>
+              <v-card-subtitle class="text-wrap">
+                {{ embedTarget?.dir }} needs its base model's <code>embed_tokens</code>.
+              </v-card-subtitle>
+              <v-card-text>
+                <v-radio-group v-model="embedSource" density="compact" hide-details class="mb-3">
+                  <v-radio value="local" label="Use a downloaded base model" :disabled="library.base.filter(b=>b.hasEmbeddings).length===0"></v-radio>
+                  <v-radio value="repo" label="Fetch the embedding slice from a base repo (~778 MB)"></v-radio>
+                </v-radio-group>
+
+                <v-select
+                  v-if="embedSource === 'local'"
+                  v-model="embedBaseDir"
+                  :items="library.base.filter(b=>b.hasEmbeddings).map(b=>b.dir)"
+                  label="Base model"
+                  density="compact" variant="outlined" hide-details
+                ></v-select>
+
+                <v-text-field
+                  v-else
+                  v-model="embedBaseRepo"
+                  label="Base model HF repo (e.g. Qwen/Qwen3-VL-4B-Instruct)"
+                  placeholder="owner/name"
+                  density="compact" variant="outlined" hide-details
+                ></v-text-field>
+                <div class="text-caption text-grey mt-2">
+                  Only the embedding tensor is fetched, not the whole model.
+                </div>
+              </v-card-text>
+              <v-card-actions>
+                <v-spacer></v-spacer>
+                <v-btn variant="text" @click="embedDialog = false">Cancel</v-btn>
+                <v-btn color="purple" variant="flat" :loading="embedSubmitting"
+                  :disabled="embedSource === 'local' ? !embedBaseDir : !embedBaseRepo.trim()"
+                  @click="submitEmbeddings">Fetch embeddings</v-btn>
+              </v-card-actions>
+            </v-card>
+          </v-dialog>
 
           <!-- Auto-unload timeout -->
           <v-card class="glass-card pa-5 mb-5">
@@ -890,6 +972,15 @@ export default {
     tab: 'manager',
     models: [],
     eagle3Heads: [],
+    // Downloaded models sorted into categories (GET /api/admin/library)
+    library: { available: [], base: [], eagle3: [] },
+    // "Add embeddings" dialog for an Eagle-3 head
+    embedDialog: false,
+    embedTarget: null,          // the eagle3 head row
+    embedSource: 'local',       // 'local' (downloaded base) | 'repo' (HF slice)
+    embedBaseDir: null,         // selected base model dir (local source)
+    embedBaseRepo: '',          // base repo id (repo source)
+    embedSubmitting: false,
     status: { isLoaded: false, model: null, isMock: false, pinned: false },
     loadingModelId: null,
     scanningModels: false,
@@ -1012,6 +1103,7 @@ export default {
     this.fetchGlobalSettings();
     this.fetchPlatform();
     this.fetchEagle3Heads();
+    this.fetchLibrary();
     this.refreshDownloadQueue();
     // Poll server state so the loaded-model indicator stays current across tabs
     this.statusPoller = setInterval(() => this.fetchStatus(), 5000);
@@ -1048,11 +1140,56 @@ export default {
         if (res.ok) this.eagle3Heads = (await res.json()).heads || [];
       } catch (e) {}
     },
+    async fetchLibrary() {
+      try {
+        const res = await fetch('/api/admin/library');
+        if (res.ok) this.library = await res.json();
+      } catch (e) {}
+    },
+    openEmbedDialog(head) {
+      this.embedTarget = head;
+      // Default to a local base model if one with embeddings is available.
+      const localBase = this.library.base.find(b => b.hasEmbeddings);
+      this.embedSource = localBase ? 'local' : 'repo';
+      this.embedBaseDir = localBase ? localBase.dir : null;
+      this.embedBaseRepo = '';
+      this.embedDialog = true;
+    },
+    async submitEmbeddings() {
+      if (!this.embedTarget) return;
+      const body = { headDir: this.embedTarget.dir };
+      if (this.embedSource === 'local') {
+        if (!this.embedBaseDir) return;
+        body.baseDir = this.embedBaseDir;
+      } else {
+        if (!this.embedBaseRepo.trim()) return;
+        body.baseRepoId = this.embedBaseRepo.trim();
+      }
+      this.embedSubmitting = true;
+      try {
+        const res = await fetch('/api/admin/eagle3/embeddings', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) { this.$notify(data.error || 'Failed to start embeddings download', 'error'); return; }
+        this.embedDialog = false;
+        this.$notify('Fetching base-model embeddings — see the download queue.', 'info');
+        this.tab = 'downloader';
+        this.refreshDownloadQueue();
+        // Refresh library once the job likely finished.
+        setTimeout(() => this.fetchLibrary(), 3000);
+      } catch (e) {
+        this.$notify('Failed to start embeddings download: ' + e.message, 'error');
+      } finally {
+        this.embedSubmitting = false;
+      }
+    },
     async rescanModels() {
       this.scanningModels = true;
       try {
         await this.fetchModels();
         await this.fetchAllModelSettings();
+        await this.fetchLibrary();
       } finally {
         this.scanningModels = false;
       }

@@ -1,0 +1,22 @@
+#version 450
+
+// Eagle-3 draft head: element-wise SwiGLU gate fusion.
+//
+//   out[i] = SiLU(gate[i]) * up[i]   where SiLU(x) = x * sigmoid(x)
+//
+// One invocation per element; dispatch ceil(DIM / 64) workgroups. u0 = DIM.
+
+layout(local_size_x = 64) in;
+
+layout(set=0, binding=0) readonly buffer Gate { float gate[]; };  // [DIM] FP32
+layout(set=0, binding=1) readonly buffer Up   { float up[];   };  // [DIM] FP32
+layout(set=0, binding=2)          buffer Out  { float outp[]; };  // [DIM] FP32
+
+layout(push_constant) uniform PC { uint u0; uint u1; float f0; } pc;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.u0) return;
+    float g = gate[i];
+    outp[i] = (g / (1.0 + exp(-g))) * up[i];
+}

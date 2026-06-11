@@ -16,6 +16,7 @@ import {
 } from '../db.js';
 import { v4 as uuidv4 } from 'uuid';
 import { isSpvAvailable } from '../spv_sync.js';
+import { fetchBaseEmbeddings, extractLocalEmbeddings, localBaseHasEmbeddings } from '../hf_embeddings.js';
 
 function getNetworkAddresses() {
   const interfaces = os.networkInterfaces();
@@ -648,6 +649,51 @@ export default async function adminRoutes(fastify, options) {
     return { heads };
   });
 
+  // GET /api/admin/library — downloaded models sorted into three categories for
+  // the Models page: servable `.rkllm` models, base models (safetensors source
+  // of Eagle-3 embeddings), and Eagle-3 draft heads. Classification is by the
+  // files present + each repo's config.json architecture (no name guessing).
+  fastify.get('/library', async () => {
+    const available = [], base = [], eagle3 = [];
+    const readJson = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } };
+    const listFiles = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; } };
+    const sizeOf = (p) => { try { return fs.statSync(p).size; } catch { return null; } };
+
+    // Servable models: every .rkllm anywhere under MODELS_DIR.
+    (function scanRkllm(dir, prefix = '') {
+      for (const e of listFiles(dir)) {
+        const rel = prefix ? `${prefix}/${e.name}` : e.name;
+        if (e.isDirectory()) scanRkllm(path.join(dir, e.name), rel);
+        else if (/\.rkllm$/i.test(e.name)) available.push({ id: rel, sizeBytes: sizeOf(path.join(dir, e.name)) });
+      }
+    })(MODELS_DIR);
+
+    // Classify each repo subdirectory that holds safetensors as base vs Eagle-3.
+    for (const e of listFiles(MODELS_DIR)) {
+      if (!e.isDirectory()) continue;
+      const dir = path.join(MODELS_DIR, e.name);
+      const names = listFiles(dir).filter(f => f.isFile()).map(f => f.name);
+      if (!names.some(n => /\.safetensors$/i.test(n))) continue;  // .rkllm-only → covered above
+      const cfg = readJson(path.join(dir, 'config.json'));
+      const arch = cfg?.architectures?.[0] || '';
+      const isEagle = /eagle3/i.test(arch) || /eagle-?3/i.test(e.name);
+      if (isEagle) {
+        const head = names.find(n => /\.rkllm$/i.test(n)) || names.find(n => /\.safetensors$/i.test(n) && n !== 'embeddings.safetensors') || names.find(n => /\.gguf$/i.test(n));
+        eagle3.push({
+          dir: e.name,
+          headFile: head ? `${e.name}/${head}` : null,
+          format: head && /\.rkllm$/i.test(head) ? 'npu' : 'vulkan',
+          hasConfig: !!cfg,
+          targetModelType: cfg?.target_model_type || null,
+          embeddingsPresent: names.includes('embeddings.safetensors'),
+        });
+      } else {
+        base.push({ dir: e.name, arch: arch || null, hasEmbeddings: localBaseHasEmbeddings(dir) });
+      }
+    }
+    return { available, base, eagle3 };
+  });
+
   // DELETE /api/admin/cache — clear all prefix cache files
   fastify.delete('/cache', async (request, reply) => {
     clearAllCache();
@@ -917,7 +963,47 @@ export default async function adminRoutes(fastify, options) {
     };
   }
 
-  // GET /api/admin/hf/files?repoId=<id> — list .rkllm files in a HF repo
+  // Extract an Eagle-3 head's base-model embeddings into the head directory
+  // (headDirName under MODELS_DIR) as a download-queue job. The base is chosen
+  // explicitly — no derivation — from one of:
+  //   source.baseRepoId : range-download only the embed tensor from a HF repo
+  //   source.baseDir    : slice it out of an already-downloaded base model dir
+  // Idempotent: skips when embeddings.safetensors exists or a job is in flight.
+  function startEmbeddingsJob(headDirName, source, hfToken) {
+    const repoDir = path.join(MODELS_DIR, headDirName);
+    const destPath = path.join(repoDir, 'embeddings.safetensors');
+    if (fs.existsSync(destPath)) return { skipped: 'exists' };
+    for (const j of downloadJobs.values())
+      if (j._dest === destPath && j.status === 'downloading') return { skipped: 'in-progress' };
+    if (!fs.existsSync(repoDir)) fs.mkdirSync(repoDir, { recursive: true });
+
+    const fromRepo = !!source.baseRepoId;
+    const label = fromRepo ? source.baseRepoId : `local:${source.baseDir}`;
+    const id = uuidv4();
+    const job = { id, repoId: label, filename: `${headDirName}/embeddings.safetensors`, status: 'downloading',
+                  bytesDown: 0, totalBytes: 0, speedBps: 0, startedAt: Date.now(), error: null, _dest: destPath };
+    downloadJobs.set(id, job);
+
+    (async () => {
+      try {
+        if (fromRepo) {
+          await fetchBaseEmbeddings({ baseRepoId: source.baseRepoId, destPath, hfToken, job });
+        } else {
+          await extractLocalEmbeddings({ baseDir: path.join(MODELS_DIR, source.baseDir), destPath, job });
+        }
+        if (job.status !== 'cancelled') { job.status = 'done'; job.speedBps = 0; job.finishedAt = Date.now(); }
+        console.log(`[Embeddings] Completed: ${label} → ${headDirName}/embeddings.safetensors`);
+      } catch (e) {
+        job.status = 'error';
+        job.error = e.message;
+        console.error(`[Embeddings] Failed ${label}: ${e.message}`);
+      }
+    })();
+    return { id, source: label };
+  }
+
+  // GET /api/admin/hf/files?repoId=<id> — list downloadable files in a HF repo
+  // (weight files + companion config.json)
   fastify.get('/hf/files', async (request, reply) => {
     const { repoId } = request.query;
     if (!repoId) return reply.status(400).send({ error: 'repoId required' });
@@ -930,10 +1016,15 @@ export default async function adminRoutes(fastify, options) {
       const res = await fetch(`https://huggingface.co/api/models/${encodedId}?full=true`, { headers });
       if (!res.ok) return reply.status(res.status).send({ error: `HF API error: ${res.status}` });
       const data = await res.json();
-      // .rkllm = NPU models/heads; .gguf = Vulkan Eagle-3 draft heads (the
-      // ggml-vulkan-consumable format); .safetensors = pre-conversion intermediate.
+      // Downloadable: weight files (.rkllm NPU models/heads, .safetensors Eagle-3
+      // heads + base models, .gguf alt heads) plus the .json metadata that base
+      // models and Eagle-3 heads need (config.json carries the head's
+      // hyperparameters; model.safetensors.index.json maps a base model's shards).
       const files = (data.siblings ?? [])
-        .filter(f => /\.(rkllm|gguf|safetensors)$/.test(f.rfilename || ''))
+        .filter(f => {
+          const n = f.rfilename || '';
+          return /\.(rkllm|gguf|safetensors)$/.test(n) || /\.json$/.test(n);
+        })
         .map(f => ({ name: f.rfilename, size: f.size ?? null }));
       return { repoId, files };
     } catch (e) {
@@ -945,7 +1036,8 @@ export default async function adminRoutes(fastify, options) {
   fastify.post('/download', async (request, reply) => {
     const { repoId, filename, hfToken: tokenOverride } = request.body || {};
     if (!repoId || !filename) return reply.status(400).send({ error: 'repoId and filename required' });
-    if (!/\.(rkllm|gguf|safetensors)$/.test(filename)) return reply.status(400).send({ error: 'Only .rkllm, .gguf or .safetensors files allowed' });
+    if (!/\.(rkllm|gguf|safetensors)$/.test(filename) && !/\.json$/.test(filename))
+      return reply.status(400).send({ error: 'Only .rkllm, .gguf, .safetensors or .json files allowed' });
 
     const id = uuidv4();
     // Save as {MODELS_DIR}/{repoName}/{filename} to avoid collisions across repos
@@ -1013,6 +1105,22 @@ export default async function adminRoutes(fastify, options) {
     })();
 
     return { success: true, id, message: `Downloading ${filename}` };
+  });
+
+  // POST /api/admin/eagle3/embeddings — give an Eagle-3 head its base-model
+  // embeddings. The base is chosen explicitly (no name derivation):
+  //   { headDir, baseRepoId }  → range-download just embed_tokens from a HF repo
+  //   { headDir, baseDir }     → slice it from an already-downloaded base model
+  // Runs as a download-queue job (progress visible in the queue).
+  fastify.post('/eagle3/embeddings', async (request, reply) => {
+    const { headDir, baseRepoId, baseDir, hfToken: tokenOverride } = request.body || {};
+    if (!headDir) return reply.status(400).send({ error: 'headDir required' });
+    if (!baseRepoId && !baseDir) return reply.status(400).send({ error: 'baseRepoId or baseDir required' });
+    if (headDir.includes('..') || (baseDir && baseDir.includes('..'))) return reply.status(400).send({ error: 'invalid path' });
+    const hfToken = tokenOverride || (dbGetSetting('hf_token') ?? '');
+    const r = startEmbeddingsJob(headDir, { baseRepoId, baseDir }, hfToken);
+    if (r.error) return reply.status(422).send(r);
+    return { success: true, ...r };
   });
 
   // GET /api/admin/download/status — all jobs

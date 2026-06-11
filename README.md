@@ -173,6 +173,7 @@ journalctl -u orkllm -f
 
 - Node.js ≥ 18 (≥ 22.5 preferred for native `node:sqlite`)
 - `node-gyp` dependencies: Python 3, C++ compiler (Xcode CLT on macOS, `build-essential` on Linux)
+- *(optional, ARM64 Linux)* `libvulkan-dev` at build time for the GPU-accelerated paths (KV-cache quantisation and the Eagle-3 Mali draft head); at runtime `libvulkan1` + `mesa-vulkan-drivers` provide the loader and the Mali driver across chipsets (Mali-G52 on RK3576, Mali-G610 on RK3588). The `.deb` package declares these as dependencies; without Vulkan, oRKLLM falls back to NEON/CPU.
 - A compiled `.rkllm` model (use `rkllm-toolkit` to convert from HuggingFace)
 - `librkllmrt.so` on the target board (typically at `/usr/lib/librkllmrt.so`)
 

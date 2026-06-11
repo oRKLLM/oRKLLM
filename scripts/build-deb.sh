@@ -40,7 +40,7 @@ Version: ${VERSION}
 Architecture: ${ARCH}
 Maintainer: Michael Fischer <mfischer@toorakcapital.io>
 Pre-Depends: debconf (>= 0.5) | debconf-2.0
-Depends: nodejs (>= 18.0.0), smartmontools, libgomp1
+Depends: nodejs (>= 18.0.0), smartmontools, libgomp1, libvulkan1, mesa-vulkan-drivers
 Suggests: tailscale
 Section: net
 Priority: optional
