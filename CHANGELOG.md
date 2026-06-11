@@ -1,3 +1,10 @@
+# [0.8.0-alpha.40](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.39...v0.8.0-alpha.40) (2026-06-11)
+
+
+### Features
+
+* **mcp:** manage MCP servers in Settings + tool use in inference ([e2c6e96](https://github.com/oRKLLM/oRKLLM/commit/e2c6e96ef1ad420eb221410c2fcfa8a7229c1308))
+
 # [0.8.0-alpha.39](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.38...v0.8.0-alpha.39) (2026-06-11)
 
 
