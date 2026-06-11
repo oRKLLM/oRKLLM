@@ -1,3 +1,10 @@
+# [0.8.0-alpha.50](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.49...v0.8.0-alpha.50) (2026-06-11)
+
+
+### Features
+
+* **pwa:** version check on load to force update when client is stale ([afb5660](https://github.com/oRKLLM/oRKLLM/commit/afb56604054b21378bac4059cfb4b62374278556))
+
 # [0.8.0-alpha.49](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.48...v0.8.0-alpha.49) (2026-06-11)
 
 
