@@ -1,3 +1,15 @@
+# [0.8.0-alpha.54](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.53...v0.8.0-alpha.54) (2026-06-11)
+
+
+### Bug Fixes
+
+* **eagle3:** vulkan draft head is GGUF, not safetensors ([04e81aa](https://github.com/oRKLLM/oRKLLM/commit/04e81aa27018cbdd20ab4417e8724ff9ecae4ec1))
+
+
+### Features
+
+* **eagle3:** downloader + UI cover all 3 head formats ([efa8db3](https://github.com/oRKLLM/oRKLLM/commit/efa8db3118bc3d188a7e2d77302509794fb2d842))
+
 # [0.8.0-alpha.53](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.52...v0.8.0-alpha.53) (2026-06-11)
 
 
