@@ -1,3 +1,10 @@
+# [0.8.0-alpha.43](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.42...v0.8.0-alpha.43) (2026-06-11)
+
+
+### Bug Fixes
+
+* **chat:** MCP toggle off now removes injected tool block ([d2a40ed](https://github.com/oRKLLM/oRKLLM/commit/d2a40ed3ab3cb10a8385591497e12f5d4c4dc251))
+
 # [0.8.0-alpha.42](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.41...v0.8.0-alpha.42) (2026-06-11)
 
 
