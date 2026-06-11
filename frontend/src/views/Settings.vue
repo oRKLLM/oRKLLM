@@ -494,14 +494,20 @@
             <!-- Tool picker — populated by "Test / Load tools". Only checked tools are exposed. -->
             <div v-if="mcpForm.availableTools.length" class="mt-4">
               <div class="d-flex align-center justify-space-between mb-1">
-                <span class="text-subtitle-2 font-weight-medium">Tools — {{ mcpForm.selectedTools.length }}/{{ mcpForm.availableTools.length }} enabled</span>
-                <div>
-                  <v-btn size="x-small" variant="text" @click="mcpSelectAllTools(true)">All</v-btn>
-                  <v-btn size="x-small" variant="text" @click="mcpSelectAllTools(false)">None</v-btn>
-                </div>
+                <span class="text-subtitle-2 font-weight-medium">Tools</span>
+                <span class="text-caption text-grey">{{ mcpForm.selectedTools.length }}/{{ mcpForm.availableTools.length }} enabled</span>
               </div>
               <div class="text-caption text-grey mb-2">Only checked tools are sent to the model. Fewer tools = smaller system prompt = more room for the conversation.</div>
               <div class="mcp-tool-list">
+                <!-- Select-all master checkbox (indeterminate when a subset is chosen) -->
+                <v-checkbox
+                  :model-value="mcpAllToolsSelected"
+                  :indeterminate="mcpForm.selectedTools.length > 0 && !mcpAllToolsSelected"
+                  label="Select all"
+                  density="compact" hide-details color="primary" class="mcp-tool-cb font-weight-medium"
+                  @update:model-value="mcpSelectAllTools"
+                ></v-checkbox>
+                <v-divider class="my-1"></v-divider>
                 <v-checkbox
                   v-for="t in mcpForm.availableTools" :key="t.name"
                   :model-value="mcpForm.selectedTools.includes(t.name)"
@@ -587,6 +593,10 @@ export default {
   computed: {
     isDark() {
       return this.themeName === 'customDarkTheme';
+    },
+    mcpAllToolsSelected() {
+      return this.mcpForm.availableTools.length > 0
+        && this.mcpForm.selectedTools.length === this.mcpForm.availableTools.length;
     }
   },
   mounted() {
