@@ -33,12 +33,23 @@ export default async function mcpRoutes(fastify) {
   // GET /api/admin/mcp-tools — aggregated tools from enabled servers plus the
   // ready-to-use system-prompt block (identical to what the inference loop
   // injects). Used by the Chat "inject MCP tool instructions" toggle.
-  fastify.get('/mcp-tools', async () => {
+  //
+  // Optional `?tools=a,b,c` filters the prompt to a selected subset (the Chat
+  // page's per-tool checkboxes); omitted/empty = all tools (backward compatible).
+  // `count`/`approxTokens` reflect the selected subset; `tools[]` always lists
+  // the full catalogue so the UI can render every checkbox.
+  fastify.get('/mcp-tools', async (request) => {
     const servers = dbListEnabledMcpServers();
     const { tools } = await getAggregatedTools(servers);
-    const systemPrompt = tools.length ? buildToolSystemPrompt(tools) : '';
+
+    const raw = (request.query?.tools ?? '').toString().trim();
+    const selectedSet = raw ? new Set(raw.split(',').map(s => s.trim()).filter(Boolean)) : null;
+    const chosen = selectedSet ? tools.filter(t => selectedSet.has(t.function.name)) : tools;
+
+    const systemPrompt = chosen.length ? buildToolSystemPrompt(chosen) : '';
     return {
-      count: tools.length,
+      count: chosen.length,
+      total: tools.length,
       tools: tools.map(t => ({ name: t.function.name, description: t.function.description })),
       systemPrompt,
       approxTokens: Math.round(systemPrompt.length / 4),

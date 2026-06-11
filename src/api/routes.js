@@ -85,8 +85,17 @@ export default async function apiRoutes(fastify, options) {
       temperature = 0.8,
       top_p = 0.9,
       top_k = 40,
-      max_tokens = 512
+      max_tokens = 512,
+      mcp_tools = undefined
     } = request.body || {};
+
+    // Per-request MCP tool selection (sent by the Chat page's tool picker).
+    // An array — even empty — is an explicit override: run the tool-use loop
+    // scoped to exactly these tool names, regardless of the global
+    // `mcp_inference_enabled` setting. `undefined` (field absent) falls back to
+    // the global setting (all enabled tools) so external API clients are
+    // unaffected.
+    const mcpToolsRequested = Array.isArray(mcp_tools) ? mcp_tools : null;
 
     if (!model) {
       return reply.status(400).send({ error: "Missing required field 'model'" });
@@ -177,16 +186,30 @@ export default async function apiRoutes(fastify, options) {
     };
 
     // ── MCP tool use ─────────────────────────────────────────────────────
-    // When enabled and at least one enabled server advertises tools, run the
-    // prompt-driven tool loop instead of a single generation. Prefix cache and
-    // speculative paths are bypassed for tool rounds (correctness over speed).
-    if (dbGetSetting('mcp_inference_enabled') === '1') {
+    // Run the prompt-driven tool loop (instead of a single generation) when
+    // either the global `mcp_inference_enabled` setting is on, OR this request
+    // carries an explicit `mcp_tools` selection (the Chat page's per-chat tool
+    // picker). The per-request selection wins: an empty array means "no tools"
+    // and skips the loop entirely. Prefix cache and speculative paths are
+    // bypassed for tool rounds (correctness over speed).
+    const mcpLoopEnabled = mcpToolsRequested
+      ? mcpToolsRequested.length > 0
+      : dbGetSetting('mcp_inference_enabled') === '1';
+    if (mcpLoopEnabled) {
       let mcpTools = null;
       try {
         const servers = dbListEnabledMcpServers();
         if (servers.length > 0) {
           const agg = await getAggregatedTools(servers);
-          if (agg.tools.length > 0) mcpTools = agg;
+          // Scope to the requested subset when the Chat page sent one.
+          if (mcpToolsRequested) {
+            const want = new Set(mcpToolsRequested);
+            const tools = agg.tools.filter(t => want.has(t.function.name));
+            const lookup = new Map([...agg.lookup].filter(([name]) => want.has(name)));
+            if (tools.length > 0) mcpTools = { tools, lookup };
+          } else if (agg.tools.length > 0) {
+            mcpTools = agg;
+          }
         }
       } catch (e) {
         console.error('[MCP] Tool aggregation failed:', e.message);

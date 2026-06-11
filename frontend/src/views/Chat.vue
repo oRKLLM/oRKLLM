@@ -113,20 +113,51 @@
                 placeholder="You are a helpful AI assistant..."
               ></v-textarea>
 
-              <!-- MCP tool instructions — inject the available-tools block into the system prompt -->
-              <div class="d-flex align-center justify-space-between mb-3">
-                <div>
-                  <span class="text-caption">Inject MCP tool instructions</span>
-                  <span class="text-caption text-grey ml-2">
-                    {{ mcpToolCount > 0 ? `${mcpToolCount} tool(s) · ~${mcpApproxTokens} tokens` : 'no enabled MCP servers' }}
-                  </span>
+              <!-- MCP tools — pick which tools the server may call during this chat.
+                   Selected tools are sent as `mcp_tools`, which runs the server-side
+                   tool-execution loop scoped to them (no system-prompt text pasting). -->
+              <div class="mb-3">
+                <div class="d-flex align-center justify-space-between">
+                  <div>
+                    <span class="text-caption">Use MCP tools</span>
+                    <span class="text-caption text-grey ml-2">
+                      {{ mcpTools.length
+                        ? `${mcpSelectedTools.length}/${mcpTools.length} selected · ~${mcpApproxTokens} tokens`
+                        : 'no enabled MCP servers' }}
+                    </span>
+                  </div>
+                  <v-switch
+                    :model-value="mcpEnabled"
+                    :disabled="mcpTools.length === 0"
+                    color="primary" density="compact" hide-details inset
+                    @update:model-value="toggleMcpEnabled"
+                  ></v-switch>
                 </div>
-                <v-switch
-                  :model-value="mcpInjected"
-                  :disabled="mcpToolCount === 0 && !mcpInjected"
-                  color="primary" density="compact" hide-details inset
-                  @update:model-value="toggleMcpInject"
-                ></v-switch>
+
+                <template v-if="mcpEnabled && mcpTools.length">
+                  <div class="d-flex align-center justify-space-between mt-1">
+                    <span class="text-caption text-grey">Tools the model may call</span>
+                    <div>
+                      <v-btn size="x-small" variant="text" color="primary" @click="selectAllMcp(true)">Select all</v-btn>
+                      <v-btn size="x-small" variant="text" @click="selectAllMcp(false)">Clear</v-btn>
+                    </div>
+                  </div>
+                  <div class="mcp-tool-picker">
+                    <v-checkbox
+                      v-for="t in mcpTools" :key="t.name"
+                      :model-value="mcpSelectedSet.has(t.name)"
+                      density="compact" hide-details color="primary" class="mcp-tool-check"
+                      @update:model-value="v => onToggleTool(t.name, v)"
+                    >
+                      <template #label>
+                        <span class="mcp-tool-label">
+                          <code class="text-caption">{{ t.name }}</code>
+                          <span class="text-caption text-grey mcp-tool-desc">{{ t.description }}</span>
+                        </span>
+                      </template>
+                    </v-checkbox>
+                  </div>
+                </template>
               </div>
 
               <v-row>
@@ -331,10 +362,11 @@ export default {
     // View-only UI state (safe to reset on navigation)
     sidebarOpen: true,
     mobileHistoryOpen: false,
-    // MCP tool-instruction injection
-    mcpToolCount: 0,
-    mcpApproxTokens: 0,
-    mcpInjected: false,
+    // MCP tool picker — catalogue of available tools (the selection itself and
+    // the enabled flag live in chatState so they persist across navigation).
+    mcpTools: [],          // [{ name, description }] from enabled servers
+    mcpApproxTokens: 0,    // token cost of the current selection (server-computed)
+    mcpTokenTimer: null,   // debounce for the token-cost refresh
   }),
   computed: {
     isDark() {
@@ -358,6 +390,9 @@ export default {
       set(v) { chatState.inputText = v; }
     },
     params() { return chatState.params; },
+    mcpEnabled() { return chatState.mcpEnabled; },
+    mcpSelectedTools() { return chatState.mcpSelectedTools; },
+    mcpSelectedSet() { return new Set(chatState.mcpSelectedTools); },
     activeModel() { return chatState.activeModel; },
     chatHistory() { return chatState.chatHistory; },
     generating() { return chatState.generating; },
@@ -376,9 +411,12 @@ export default {
     this.fetchAuth();
     await this.fetchModels();
     await this.fetchStatus();
-    this.fetchMcpToolCount();
-    // Reflect whether the current system prompt already carries the injected block.
-    this.mcpInjected = chatState.systemPrompt.includes(MCP_BLOCK_START);
+    // Clean up any tool-instructions block pasted by the old (text-injection)
+    // version of this feature — the loop now injects server-side.
+    if (chatState.systemPrompt.includes(MCP_BLOCK_START)) {
+      chatState.systemPrompt = this.stripMcpBlock(chatState.systemPrompt);
+    }
+    await this.fetchMcpTools();
     this.scrollToBottom();
   },
   beforeUnmount() {
@@ -474,16 +512,53 @@ export default {
     deleteConversation(id) { return delConv(id); },
     newChat() { newChatStore(); },
 
-    // ── MCP tool instructions ─────────────────────────────────────────────
-    async fetchMcpToolCount() {
+    // ── MCP tool picker ───────────────────────────────────────────────────
+    async fetchMcpTools() {
       try {
         const res = await fetch('/api/admin/mcp-tools');
-        if (res.ok) {
-          const d = await res.json();
-          this.mcpToolCount = d.count || 0;
-          this.mcpApproxTokens = d.approxTokens || 0;
-        }
+        if (!res.ok) return;
+        const d = await res.json();
+        this.mcpTools = d.tools || [];
+        // Drop any selected names that no longer exist (server config changed).
+        const valid = new Set(this.mcpTools.map(t => t.name));
+        const pruned = chatState.mcpSelectedTools.filter(n => valid.has(n));
+        if (pruned.length !== chatState.mcpSelectedTools.length) chatState.mcpSelectedTools = pruned;
+        if (this.mcpEnabled) this.refreshMcpTokens();
       } catch (e) {}
+    },
+    toggleMcpEnabled(on) {
+      chatState.mcpEnabled = !!on;
+      if (on) {
+        // Default to all tools when nothing has been picked yet.
+        if (chatState.mcpSelectedTools.length === 0) {
+          chatState.mcpSelectedTools = this.mcpTools.map(t => t.name);
+        }
+        this.refreshMcpTokens();
+      }
+    },
+    onToggleTool(name, checked) {
+      const set = new Set(chatState.mcpSelectedTools);
+      if (checked) set.add(name); else set.delete(name);
+      // Preserve catalogue order for a stable prompt.
+      chatState.mcpSelectedTools = this.mcpTools.map(t => t.name).filter(n => set.has(n));
+      this.refreshMcpTokens();
+    },
+    selectAllMcp(all) {
+      chatState.mcpSelectedTools = all ? this.mcpTools.map(t => t.name) : [];
+      this.refreshMcpTokens();
+    },
+    // Exact token cost of the selection, from the server (same builder the loop
+    // uses). Debounced so rapid checkbox toggling doesn't spam the aggregator.
+    refreshMcpTokens() {
+      clearTimeout(this.mcpTokenTimer);
+      if (!chatState.mcpSelectedTools.length) { this.mcpApproxTokens = 0; return; }
+      this.mcpTokenTimer = setTimeout(async () => {
+        try {
+          const q = encodeURIComponent(chatState.mcpSelectedTools.join(','));
+          const res = await fetch(`/api/admin/mcp-tools?tools=${q}`);
+          if (res.ok) this.mcpApproxTokens = (await res.json()).approxTokens || 0;
+        } catch (e) {}
+      }, 350);
     },
     stripMcpBlock(text) {
       // Remove a previously injected block by locating its delimiters directly.
@@ -495,32 +570,6 @@ export default {
       if (endIdx === -1) return text;
       const end = endIdx + MCP_BLOCK_END.length;
       return (text.slice(0, start) + text.slice(end)).replace(/\n{3,}/g, '\n\n').trimEnd();
-    },
-    async toggleMcpInject(on) {
-      // Always start from a clean prompt (no stale block).
-      const base = this.stripMcpBlock(this.systemPrompt || '');
-      if (!on) {
-        this.systemPrompt = base;
-        this.mcpInjected = false;
-        return;
-      }
-      try {
-        const res = await fetch('/api/admin/mcp-tools');
-        const data = res.ok ? await res.json() : { count: 0, systemPrompt: '' };
-        this.mcpToolCount = data.count || 0;
-        this.mcpApproxTokens = data.approxTokens || 0;
-        if (!data.count) {
-          this.$notify('No enabled MCP servers with tools', 'warning');
-          this.mcpInjected = false;
-          return;
-        }
-        const block = `${MCP_BLOCK_START}\n${data.systemPrompt}\n${MCP_BLOCK_END}`;
-        this.systemPrompt = base ? `${base}\n\n${block}` : block;
-        this.mcpInjected = true;
-      } catch (e) {
-        this.$notify('Failed to load MCP tools', 'error');
-        this.mcpInjected = false;
-      }
     },
     formatDate(ts) {
       const d = new Date(ts);
@@ -734,6 +783,35 @@ export default {
 
 .gap-3 { gap: 12px; }
 .gap-2 { gap: 8px; }
+
+/* MCP tool picker — scrollable so a long tool list can't overflow the panel */
+.mcp-tool-picker {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid rgba(139, 92, 246, 0.15);
+  border-radius: 8px;
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.15);
+}
+.mcp-tool-check :deep(.v-selection-control) {
+  align-items: flex-start;
+  min-height: unset;
+}
+.mcp-tool-check :deep(.v-label) {
+  opacity: 1;
+  padding-top: 2px;
+}
+.mcp-tool-label {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.mcp-tool-desc {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 
 /* Hide sidebar on small screens */
 @media (max-width: 599px) {

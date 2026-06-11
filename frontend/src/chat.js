@@ -21,6 +21,10 @@ export const chatState = reactive({
   messageQueue: [],
   conversations: [],
   activeConversationId: null,
+  // MCP tool use for this chat: when enabled, the selected tool names are sent
+  // as `mcp_tools` so the server runs the tool-execution loop scoped to them.
+  mcpEnabled: false,
+  mcpSelectedTools: [],
 });
 
 let abortController = null;
@@ -162,7 +166,9 @@ export async function sendMessage(queuedText = null, alreadyInChat = false) {
         temperature: chatState.params.temperature,
         top_p: chatState.params.top_p,
         top_k: chatState.params.top_k,
-        max_tokens: chatState.params.max_tokens
+        max_tokens: chatState.params.max_tokens,
+        // Drive the server-side tool-execution loop scoped to the picked tools.
+        ...(chatState.mcpEnabled ? { mcp_tools: chatState.mcpSelectedTools } : {})
       })
     });
 
