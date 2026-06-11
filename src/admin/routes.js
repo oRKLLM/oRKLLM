@@ -616,8 +616,11 @@ export default async function adminRoutes(fastify, options) {
   });
 
   // GET /api/admin/eagle3-heads — Eagle-3 draft heads in MODELS_DIR, any format.
-  // (/v1/models lists only servable .rkllm models; a Vulkan head is .safetensors,
-  // so the Eagle-3 config picker uses this instead.) format: 'npu' | 'vulkan'.
+  // (/v1/models lists only servable .rkllm models; a Vulkan head is .gguf — the
+  // format the ggml-vulkan .spv kernels consume — so the Eagle-3 config picker
+  // uses this instead.) format: 'npu' (.rkllm) | 'vulkan' (.gguf). A bf16
+  // .safetensors is the training intermediate and is also surfaced (tagged
+  // 'vulkan') so a head pending GGUF conversion is still visible.
   fastify.get('/eagle3-heads', async () => {
     const heads = [];
     (function scan(dir, prefix = '') {
@@ -626,8 +629,8 @@ export default async function adminRoutes(fastify, options) {
       for (const e of entries) {
         const rel = prefix ? `${prefix}/${e.name}` : e.name;
         if (e.isDirectory()) scan(path.join(dir, e.name), rel);
-        else if (/EAGLE3|Eagle3Draft/i.test(e.name) && /\.(rkllm|safetensors)$/i.test(e.name)) {
-          heads.push({ id: rel, format: e.name.toLowerCase().endsWith('.safetensors') ? 'vulkan' : 'npu' });
+        else if (/EAGLE3|Eagle3Draft/i.test(e.name) && /\.(rkllm|gguf|safetensors)$/i.test(e.name)) {
+          heads.push({ id: rel, format: /\.rkllm$/i.test(e.name) ? 'npu' : 'vulkan' });
         }
       }
     })(MODELS_DIR);
@@ -916,9 +919,10 @@ export default async function adminRoutes(fastify, options) {
       const res = await fetch(`https://huggingface.co/api/models/${encodedId}?full=true`, { headers });
       if (!res.ok) return reply.status(res.status).send({ error: `HF API error: ${res.status}` });
       const data = await res.json();
-      // .rkllm = NPU models/heads; .safetensors = Vulkan Eagle-3 draft heads.
+      // .rkllm = NPU models/heads; .gguf = Vulkan Eagle-3 draft heads (the
+      // ggml-vulkan-consumable format); .safetensors = pre-conversion intermediate.
       const files = (data.siblings ?? [])
-        .filter(f => /\.(rkllm|safetensors)$/.test(f.rfilename || ''))
+        .filter(f => /\.(rkllm|gguf|safetensors)$/.test(f.rfilename || ''))
         .map(f => ({ name: f.rfilename, size: f.size ?? null }));
       return { repoId, files };
     } catch (e) {
@@ -930,7 +934,7 @@ export default async function adminRoutes(fastify, options) {
   fastify.post('/download', async (request, reply) => {
     const { repoId, filename, hfToken: tokenOverride } = request.body || {};
     if (!repoId || !filename) return reply.status(400).send({ error: 'repoId and filename required' });
-    if (!/\.(rkllm|safetensors)$/.test(filename)) return reply.status(400).send({ error: 'Only .rkllm or .safetensors files allowed' });
+    if (!/\.(rkllm|gguf|safetensors)$/.test(filename)) return reply.status(400).send({ error: 'Only .rkllm, .gguf or .safetensors files allowed' });
 
     const id = uuidv4();
     // Save as {MODELS_DIR}/{repoName}/{filename} to avoid collisions across repos
