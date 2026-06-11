@@ -391,6 +391,7 @@ export default async function adminRoutes(fastify, options) {
       return reply.status(400).send({ error: 'Timeout value in minutes required' });
     }
     pool.setIdleTimeout(timeout);
+    dbSetSetting('idle_timeout_minutes', String(timeout));
     return { success: true, idleTimeoutMs: pool.idleTimeoutMs };
   });
 
