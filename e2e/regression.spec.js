@@ -421,6 +421,38 @@ test('Settings: "Use MCP tools in inference" toggle persists', async ({ page }) 
   expect(after).toBe(!before);
 });
 
+test('Models: auto-unload timeout persists and displays after page reload', async ({ page }) => {
+  await login(page);
+  await page.goto('/models');
+
+  const card = page.locator('.v-card').filter({ hasText: 'Inactivity Auto-Unload Timeout' });
+  await expect(card).toBeVisible({ timeout: 8000 });
+
+  // Set the slider to a non-default value (default is 5) via keyboard, which is
+  // deterministic for a Vuetify slider (Home → min, ArrowRight → +step).
+  const thumb = card.locator('[role="slider"]');
+  await thumb.click();
+  await page.keyboard.press('Home');
+  for (let i = 0; i < 12; i++) await page.keyboard.press('ArrowRight');
+  await expect(card.locator('.v-chip')).toHaveText('12m');
+
+  // Save, then do a FULL page reload (not SPA nav) and re-fetch status.
+  await card.getByRole('button', { name: 'Save Timeout' }).click();
+  await page.reload();
+
+  // Regression: the saved value must be shown after reload — previously the UI
+  // read it from the wrong field (active model's load options) and fell back to
+  // the 5m default, so the saved value was lost on refresh.
+  const cardAfter = page.locator('.v-card').filter({ hasText: 'Inactivity Auto-Unload Timeout' });
+  await expect(cardAfter.locator('.v-chip')).toHaveText('12m', { timeout: 8000 });
+
+  // Restore the default so later tests start from a known timeout.
+  await cardAfter.locator('[role="slider"]').click();
+  await page.keyboard.press('Home');
+  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowRight');
+  await cardAfter.getByRole('button', { name: 'Save Timeout' }).click();
+});
+
 // ---------------------------------------------------------------------------
 // PWA — installable manifest + service worker (built dist; 127.0.0.1 = secure context)
 // ---------------------------------------------------------------------------

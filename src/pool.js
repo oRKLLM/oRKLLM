@@ -787,6 +787,9 @@ class EnginePool {
       model:      primary.activeModel?.name  ?? null,
       isMock:     primary.activeModel?.isMock ?? false,
       options:    primary.activeModel?.options ?? null,
+      // Current idle-unload timeout (independent of whether a model is loaded),
+      // so the UI can restore the saved value on page refresh.
+      idleTimeoutMs: this.idleTimeoutMs,
       pinned:     this.pinned,
       poolSize:   this._slots.length,
       slots:      this._slots.map(s => ({

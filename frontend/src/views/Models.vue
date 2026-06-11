@@ -1199,8 +1199,8 @@ export default {
         const res = await fetch('/api/admin/status');
         const data = await res.json();
         this.status = data;
-        if (data.options && typeof data.options.idleTimeoutMs === 'number') {
-          this.timeoutSlider = Math.round(data.options.idleTimeoutMs / 60000);
+        if (typeof data.idleTimeoutMs === 'number') {
+          this.timeoutSlider = Math.round(data.idleTimeoutMs / 60000);
         }
       } catch (e) {}
     },

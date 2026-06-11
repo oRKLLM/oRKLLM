@@ -97,7 +97,7 @@ graph TD
 | **Frontend** | Vue 3 + Vuetify 3 SPA, built with Vite, route-based code splitting |
 | **Database** | SQLite via `node:sqlite` (Node ≥22.5) or `node-sqlite3-wasm` (Node <22.5) |
 | **Auth** | Local PBKDF2 + OIDC (PKCE) + SAML 2.0 |
-| **Testing** | Playwright E2E (77 tests across 3 spec files) + node:test unit tests, mock OIDC service container in CI |
+| **Testing** | Playwright E2E (81 tests across 3 spec files) + node:test unit tests, mock OIDC service container in CI |
 
 ---
 
