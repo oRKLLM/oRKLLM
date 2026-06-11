@@ -1,3 +1,11 @@
+# [0.8.0-alpha.51](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.50...v0.8.0-alpha.51) (2026-06-11)
+
+
+### Features
+
+* **eagle3:** draft compute target cpu/npu/vulkan + format-flexible downloader ([e55ad58](https://github.com/oRKLLM/oRKLLM/commit/e55ad58769b4dbc3d14d76a3356649a20bb80b32))
+* **npu:** dynamic core count — cap pool + pin one core per model ([7d501d2](https://github.com/oRKLLM/oRKLLM/commit/7d501d2861bb8a8da03b4089ba19630e277db872))
+
 # [0.8.0-alpha.50](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.49...v0.8.0-alpha.50) (2026-06-11)
 
 
