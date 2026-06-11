@@ -1,3 +1,10 @@
+# [0.8.0-alpha.44](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.43...v0.8.0-alpha.44) (2026-06-11)
+
+
+### Bug Fixes
+
+* **mcp:** compact tool catalogue so it fits the context window ([79ff5b9](https://github.com/oRKLLM/oRKLLM/commit/79ff5b997cafcdd8879091adc6af6c66cba9add9))
+
 # [0.8.0-alpha.43](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.42...v0.8.0-alpha.43) (2026-06-11)
 
 
