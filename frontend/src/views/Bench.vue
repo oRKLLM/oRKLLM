@@ -144,6 +144,21 @@
             <div class="text-body-1 font-weight-bold">{{ results.max_tokens }}</div>
           </v-col>
         </v-row>
+        <v-divider class="my-4"></v-divider>
+        <div class="d-flex align-center flex-wrap gap-2">
+          <span class="text-caption text-grey">Speculative decoding</span>
+          <template v-if="results.spec_enabled">
+            <v-chip size="small" color="primary" variant="tonal" prepend-icon="mdi-rocket-launch-outline">
+              {{ specLabel(results.spec_strategy) }}
+            </v-chip>
+            <v-chip size="small" color="cyan" variant="tonal" prepend-icon="mdi-chip">
+              {{ hwLabel(results.spec_hardware) }}
+            </v-chip>
+          </template>
+          <v-chip v-else size="small" color="grey" variant="tonal">
+            Disabled — standard autoregressive decode
+          </v-chip>
+        </div>
       </v-card>
 
       <!-- Previous runs -->
@@ -166,6 +181,7 @@
               <th class="text-right">Tokens</th>
               <th class="text-right">Total</th>
               <th class="text-right">Max</th>
+              <th>Spec decode</th>
             </tr>
           </thead>
           <tbody>
@@ -178,6 +194,10 @@
               <td class="text-right">{{ r.gen_tokens ?? '—' }}</td>
               <td class="text-right text-no-wrap">{{ r.total_ms != null ? (r.total_ms / 1000).toFixed(2) + 's' : '—' }}</td>
               <td class="text-right">{{ r.max_tokens ?? '—' }}</td>
+              <td class="text-no-wrap">
+                <span v-if="r.spec_enabled" class="text-caption">{{ specLabel(r.spec_strategy) }} · {{ hwLabel(r.spec_hardware) }}</span>
+                <span v-else class="text-caption text-grey">off</span>
+              </td>
             </tr>
           </tbody>
         </v-table>
@@ -272,6 +292,12 @@ export default {
       return sameDay
         ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    },
+    specLabel(strategy) {
+      return { eagle3: 'Eagle-3', speculative: 'Draft + Target' }[strategy] || 'None';
+    },
+    hwLabel(hw) {
+      return { npu: 'NPU', vulkan: 'Mali GPU (Vulkan)', cpu: 'CPU' }[hw] || '—';
     },
     async fetchStatus() {
       try {

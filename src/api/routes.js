@@ -289,6 +289,14 @@ export default async function apiRoutes(fastify, options) {
           const draftModel  = saved.draft_model;
           const specK       = saved.spec_draft_tokens || 8;
           const eagle3Weights = saved.eagle3_weights_path ?? null;
+          // What speculative decoding actually ran — surfaced in the stop chunk
+          // so the benchmark can record it. hardware = the draft compute target.
+          const specDecode =
+            specMode === 'eagle3'
+              ? { enabled: true, strategy: 'eagle3', hardware: saved.eagle3_strategy || 'cpu', k: specK }
+              : (specMode === 'speculative' && draftModel)
+                ? { enabled: true, strategy: 'speculative', hardware: 'npu', draftModel, k: specK }
+                : { enabled: false, strategy: 'none', hardware: null };
           let finalResult;
           if (specMode === 'eagle3') {
             // Eagle-3: pipelined GET_HIDDEN_LAYER + GET_LOGITS + Mali Vulkan draft
@@ -320,7 +328,8 @@ export default async function apiRoutes(fastify, options) {
           const stopChunk = {
             id: completionId, object: 'chat.completion.chunk', created, model,
             choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
-            perf: finalResult.perf
+            perf: finalResult.perf,
+            specDecode
           };
           reply.raw.write(`data: ${JSON.stringify(stopChunk)}\n\n`);
           reply.raw.write('data: [DONE]\n\n');

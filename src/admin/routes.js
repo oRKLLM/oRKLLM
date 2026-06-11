@@ -601,10 +601,12 @@ export default async function adminRoutes(fastify, options) {
 
   // POST /api/admin/bench-runs — persist a completed run
   fastify.post('/bench-runs', async (request, reply) => {
-    const { model, ttft_ms, prefill_tps, gen_tps, gen_tokens, total_ms, max_tokens } = request.body || {};
+    const { model, ttft_ms, prefill_tps, gen_tps, gen_tokens, total_ms, max_tokens,
+            spec_enabled, spec_strategy, spec_hardware } = request.body || {};
     if (!model) return reply.status(400).send({ error: 'model required' });
     const id = uuidv4();
-    dbCreateBenchRun({ id, model, ttft_ms, prefill_tps, gen_tps, gen_tokens, total_ms, max_tokens });
+    dbCreateBenchRun({ id, model, ttft_ms, prefill_tps, gen_tps, gen_tokens, total_ms, max_tokens,
+                       spec_enabled, spec_strategy, spec_hardware });
     return { id };
   });
 

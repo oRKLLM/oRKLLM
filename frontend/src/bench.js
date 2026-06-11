@@ -30,6 +30,7 @@ export async function runBenchmark(model) {
   let genTokens = 0;
   let prefillTimeMs = 0;
   let genTimeMs = 0;
+  let specDecode = null;   // { enabled, strategy, hardware, k } from the stop chunk
 
   try {
     const res = await fetch('/v1/chat/completions', {
@@ -88,6 +89,7 @@ export async function runBenchmark(model) {
             genTimeMs = obj.perf.generate_time_ms || 0;
             genTokens = obj.perf.generate_tokens || genTokens;
           }
+          if (obj.specDecode) specDecode = obj.specDecode;
         } catch (err) {}
       }
     }
@@ -101,7 +103,11 @@ export async function runBenchmark(model) {
       gen_tokens: genTokens,
       total_ms: total,
       model,
-      max_tokens: benchState.maxTokens
+      max_tokens: benchState.maxTokens,
+      // Speculative-decode status of this run (for the results card + history).
+      spec_enabled:  specDecode?.enabled ? 1 : 0,
+      spec_strategy: specDecode?.strategy || 'none',
+      spec_hardware: specDecode?.hardware || null,
     };
 
     // Persist the completed run so it appears in the history table.

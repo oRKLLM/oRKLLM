@@ -213,6 +213,15 @@ const MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 6,
+    description: 'Benchmark speculative-decode status columns',
+    up(d) {
+      d.exec(`ALTER TABLE bench_runs ADD COLUMN spec_enabled INTEGER DEFAULT 0;`);
+      d.exec(`ALTER TABLE bench_runs ADD COLUMN spec_strategy TEXT;`);
+      d.exec(`ALTER TABLE bench_runs ADD COLUMN spec_hardware TEXT;`);
+    },
+  },
 ];
 
 const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
@@ -588,11 +597,11 @@ export function dbDeleteMcpServer(id) {
 
 // --- Benchmark runs ---
 
-export function dbCreateBenchRun({ id, model, ttft_ms, prefill_tps, gen_tps, gen_tokens, total_ms, max_tokens }) {
+export function dbCreateBenchRun({ id, model, ttft_ms, prefill_tps, gen_tps, gen_tokens, total_ms, max_tokens, spec_enabled, spec_strategy, spec_hardware }) {
   return withReconnect(d => d.prepare(
-    `INSERT INTO bench_runs (id, model, ttft_ms, prefill_tps, gen_tps, gen_tokens, total_ms, max_tokens, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, model, ttft_ms ?? null, prefill_tps ?? null, gen_tps ?? null, gen_tokens ?? null, total_ms ?? null, max_tokens ?? null, Date.now()));
+    `INSERT INTO bench_runs (id, model, ttft_ms, prefill_tps, gen_tps, gen_tokens, total_ms, max_tokens, spec_enabled, spec_strategy, spec_hardware, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(id, model, ttft_ms ?? null, prefill_tps ?? null, gen_tps ?? null, gen_tokens ?? null, total_ms ?? null, max_tokens ?? null, spec_enabled ? 1 : 0, spec_strategy ?? null, spec_hardware ?? null, Date.now()));
 }
 
 export function dbListBenchRuns(limit = 50) {

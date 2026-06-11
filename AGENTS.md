@@ -138,7 +138,7 @@ graph TD
 | `src/spv_sync.js` | Opt-in Vulkan SPIR-V shader fetch (Eagle-3 `vulkan` draft) — same model as runtime_sync: downloads a chosen `ggml-vulkan-spirv-<tag>.tar.gz` (or latest) from `SPV_MIRRORS` (default `oRKLLM/llama.cpp`, override `ORKLLM_SPV_MIRRORS`), verifies its `.sha256`, clears stale modules + extracts the `.spv` + `manifest.json` into `SPV_DIR` (`ORKLLM_SPV_DIR`, exposed to the addon's Vulkan loader via env), records the tag; ARM64-Linux only. `getReleases()` lists available tags for the Settings picker; `syncSpv(tag?)`; `isSpvAvailable()` gates the Eagle-3 `vulkan` option. `auto_download_spv` setting; `GET /api/admin/spv`, `GET /api/admin/spv/releases`, `POST /api/admin/spv/sync {tag?}`; `spvAvailable` in `/api/admin/status` |
 | `src/monitor.js` | Polls CPU, RAM, Swap, SoC Temp, NPU load, GPU load (Mali), disk utilization, CPU fan, RAM bandwidth; Rockchip-native on ARM64 Linux, simulated elsewhere. Dashboard gauges are grouped: memory (RAM / RAM BW / Swap) and storage+thermal (Disk / Temp / Fan) rows. `fan` (`readFanSpeed`): probes hwmon `fan*_input` (RPM) → hwmon `pwm1` (PWM duty) → fan thermal `cooling_device` (cur/max_state) → raw `/sys/class/pwm/pwmchip*/pwm*` enabled channel (`readPwmFan`, honouring inverted polarity where higher duty = slower fan), normalised to `{percentage, rpm\|null}`; `null` when no fan sensor is exposed. The PWM-channel path is what catches userspace fan daemons (e.g. DietPi's `rock5b-fan-control` on the Rock 5B, where the kernel `pwm-fan` driver fails to bind and a script drives the PWM directly). `memBw` (`readMemBandwidth`): DDR memory-controller load from `/sys/class/devfreq/dmc/load` (`"<load>@<freq>Hz"`) → `{percentage, freqMhz}`; `null` when no DMC devfreq node |
 | `src/stats.js` | Records prefill/generation tokens and latencies in SQLite |
-| `src/db.js` | SQLite + PRAGMA user_version migration runner; 5 versioned migrations; all table accessors (incl. `mcp_servers`, `bench_runs`) |
+| `src/db.js` | SQLite + PRAGMA user_version migration runner; 6 versioned migrations; all table accessors (incl. `mcp_servers`, `bench_runs`) |
 | `src/config.js` | Env-driven settings; multi-user credential helpers; PBKDF2-HMAC-SHA256 |
 | `src/cache.js` | Tiered SSD prefix KV cache (hot/cold LRU), sliding context window trim |
 | `src/server.js` | Fastify bootstrap; trustProxy config; mounts `/ws/metrics`, `/ws/logs`, static SPA, API routes |
@@ -157,7 +157,7 @@ graph TD
 | `frontend/src/chat.js` | Module-scope `reactive()` chat-session store (`chatState`, `sendMessage`, `abortGeneration`, conversation CRUD); an in-flight generation and its conversation survive navigating away from `/chat` and back. Partial-response `sendBeacon` is registered here on `pagehide` (true page unload only) |
 | `frontend/src/views/Settings.vue` | Global settings, HF token, prefix cache config, trusted proxy, MCP servers (table + add/edit dialog with transport-adaptive fields and an auth-type selector — none/bearer/apikey/basic/custom — that builds `config.auth`; test/validate, a per-tool allow-list picker — Test/Load tools then check which to expose, persisted as `config.allowedTools`; enable toggle, "use MCP tools in inference" switch) |
 | `frontend/src/views/Logs.vue` | Full-page live log terminal (WebSocket) |
-| `frontend/src/views/Bench.vue` | Inference benchmark (TTFT, tok/s); completed runs persist to `bench_runs` (`/api/admin/bench-runs`) and show in a Previous Runs table |
+| `frontend/src/views/Bench.vue` | Inference benchmark (TTFT, tok/s); records the speculative-decode status of each run (enabled?, strategy = Eagle-3 / Draft+Target / None, hardware = NPU / Mali GPU / CPU) surfaced from the chat-completion stop chunk's `specDecode`; completed runs persist to `bench_runs` (`/api/admin/bench-runs`) and show in a Previous Runs table with a Spec-decode column |
 | `frontend/src/views/Chat.vue` | Full streaming chat against OpenAI-compatible API; system-prompt panel has a "Use MCP tools" switch + a scrollable per-tool checkbox picker (Select all / Clear, with selection-scoped approx token cost). The picked tool names are sent as `mcp_tools` on each request so the server runs the tool-execution loop scoped to them — no system-prompt text pasting (the old delimited-block injection is stripped on mount for backward compat). Enabled flag + selection live in `chat.js` `chatState` so they persist across navigation |
 | `frontend/src/views/SiteManagement.vue` | Admin-only: user CRUD, OIDC/SAML config, audit log |
 | `frontend/src/views/Login.vue` | Login page; shows SSO button when OIDC/SAML configured |
@@ -302,6 +302,7 @@ Append to the `MIGRATIONS` array in `src/db.js`:
 | v3 | Chat history: conversations, messages (with FK cascade delete and indexes) |
 | v4 | MCP servers: mcp_servers table (id, name, transport, config JSON, enabled) |
 | v5 | Benchmark history: bench_runs table (model, ttft/prefill/gen metrics, tokens, timestamp) |
+| v6 | Benchmark speculative-decode status: bench_runs `spec_enabled`, `spec_strategy`, `spec_hardware` columns |
 
 ---
 
