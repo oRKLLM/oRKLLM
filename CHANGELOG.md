@@ -1,3 +1,10 @@
+# [0.8.0-alpha.56](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.55...v0.8.0-alpha.56) (2026-06-11)
+
+
+### Bug Fixes
+
+* **models:** surface eagle3 heads by dir name; add draft heads section to manager tab ([c1692e0](https://github.com/oRKLLM/oRKLLM/commit/c1692e06f141ea715504fb0e11cd950fe68195b8))
+
 # [0.8.0-alpha.55](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.54...v0.8.0-alpha.55) (2026-06-11)
 
 
