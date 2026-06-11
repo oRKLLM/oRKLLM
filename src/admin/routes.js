@@ -503,7 +503,30 @@ export default async function adminRoutes(fastify, options) {
       tag: installedSpvTag(),
       files: listSpvFiles(),
       syncState: getSpvSyncState(),
+      licenseAccepted: dbGetSetting('spv_license_accepted') === '1',
     };
+  });
+
+  // GET /api/admin/spv/license — upstream LICENSE text (shown in the accept modal)
+  let _spvLicense = null;
+  fastify.get('/spv/license', async () => {
+    if (_spvLicense) return _spvLicense;
+    const { SPV_MIRRORS } = await import('../config.js');
+    for (const slug of SPV_MIRRORS) {
+      try {
+        const res = await fetch(`https://api.github.com/repos/${slug}/contents/LICENSE`,
+          { headers: { 'User-Agent': 'oRKLLM', 'Accept': 'application/vnd.github.raw' } });
+        if (res.ok) { _spvLicense = { source: slug, text: await res.text() }; return _spvLicense; }
+      } catch (e) { /* try next */ }
+    }
+    return { source: null, text: 'License text unavailable. See https://github.com/ggml-org/llama.cpp/blob/master/LICENSE (MIT).' };
+  });
+
+  // POST /api/admin/spv/accept-license — record that the admin accepted the upstream license
+  fastify.post('/spv/accept-license', async (request) => {
+    dbSetSetting('spv_license_accepted', '1');
+    logAudit(request, 'spv_license_accept', null);
+    return { success: true };
   });
 
   // GET /api/admin/spv/releases — available shader release tags from the mirror

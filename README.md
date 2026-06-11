@@ -364,3 +364,4 @@ These are fast-forward pushes — no checkout, no merge commit. `beta` is a 48-h
 
 * **[jundot/oMLX](https://github.com/jundot/omlx)**: Inspired the dashboard layout, metrics design, single-model lifecycle, and OpenAI compatibility structures.
 * **Rockchip**: SDKs and runtime libraries (`librkllmrt.so`) powering localized NPU inference.
+* **[ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)** (MIT): the Vulkan SPIR-V compute kernels used by the Eagle-3 `vulkan` draft strategy are built and licensed by the llama.cpp project (its `ggml-vulkan` backend shaders); oRKLLM only mirrors and fetches them. Full credit to the llama.cpp / ggml authors. Their license is shown and must be accepted before download.

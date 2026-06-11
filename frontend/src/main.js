@@ -18,7 +18,7 @@ app.mount('#app');
 // built app it precaches the shell. registerType is 'autoUpdate', so a new
 // version is fetched and applied automatically, reloading on the next load.
 import { registerSW } from 'virtual:pwa-register';
-const updateSW = registerSW({
+registerSW({
   immediate: true,
   onOfflineReady() {
     notify('oRKLLM is ready to use offline', 'success');
@@ -27,21 +27,23 @@ const updateSW = registerSW({
 
 // Deterministic staleness check: on load, ask the server its version and
 // compare to the version baked into this bundle. If the cached client is
-// behind (the service worker served an old shell), proactively pull the new
-// service worker so it re-caches and reloads — rather than waiting for the
-// browser's lazy update cycle. Guards against a reload loop (only acts on a
-// genuine mismatch; once reloaded, versions match and it's a no-op).
+// behind (the service worker is serving an old shell), don't rely on the SW's
+// own update/activation timing — which is browser-dependent and was leaving
+// users stale until a manual hard-reload. Instead clear the precache, drop the
+// service worker, and reload so the new build is fetched straight from the
+// server; the SW then re-registers fresh. Guarded by the version check, so it
+// fires at most once per deploy and can't loop (after reload, versions match).
 async function checkForNewVersion() {
+  if (!('serviceWorker' in navigator)) return;
   try {
     const res = await fetch('/api/version', { cache: 'no-store' });
     if (!res.ok) return;
     const { version } = await res.json();
-    if (version && version !== __APP_VERSION__) {
-      console.info(`[update] server ${version} ≠ client ${__APP_VERSION__} — updating`);
-      const reg = await navigator.serviceWorker?.getRegistration?.();
-      if (reg) await reg.update();      // fetch the new sw.js + precache now
-      updateSW(true);                   // activate it and reload to the new build
-    }
+    if (!version || version === __APP_VERSION__) return;
+    console.info(`[update] server ${version} ≠ client ${__APP_VERSION__} — refreshing`);
+    try { await Promise.all((await caches.keys()).map(k => caches.delete(k))); } catch {}
+    try { await Promise.all((await navigator.serviceWorker.getRegistrations()).map(r => r.unregister())); } catch {}
+    location.reload();
   } catch (e) {}
 }
 checkForNewVersion();

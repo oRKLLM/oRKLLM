@@ -90,19 +90,21 @@
       <v-card class="glass-card pa-5 mb-5">
         <div class="section-heading mb-4">
           <v-icon color="primary" size="18" class="mr-2">mdi-expansion-card-variant</v-icon>
-          Vulkan Shaders (Eagle-3 GPU draft)
+          llama.cpp Vulkan Shaders
         </div>
         <div class="d-flex align-center justify-space-between mb-3">
           <div>
             <div class="text-subtitle-2 font-weight-medium mb-1">Auto-download Vulkan SPIR-V shaders</div>
             <div class="text-caption text-grey">
-              Fetch the prebuilt Mali GPU compute kernels from
+              The Mali GPU compute kernels (SPIR-V) are built and distributed by the
+              <a href="https://github.com/ggml-org/llama.cpp" target="_blank" class="text-primary">llama.cpp project (ggml-org/llama.cpp)</a>
+              — their <code>ggml-vulkan</code> backend shaders, MIT-licensed. oRKLLM mirrors them at
               <a href="https://github.com/oRKLLM/llama.cpp" target="_blank" class="text-primary">oRKLLM/llama.cpp</a>
-              (harvested from llama.cpp's <code>ggml-vulkan</code> backend). Required to enable the Eagle-3
-              <strong>Vulkan</strong> draft strategy — until installed, that option is disabled. ARM64 (board) only.
+              and fetches them on-demand; full credit to the llama.cpp / ggml authors. oRKLLM uses them for the
+              Eagle-3 <strong>Vulkan</strong> draft strategy — until installed, that option is disabled. ARM64 (board) only.
             </div>
           </div>
-          <v-switch v-model="settings.autoDownloadSpv" color="primary" hide-details density="compact" class="ml-4 flex-shrink-0"></v-switch>
+          <v-switch :model-value="settings.autoDownloadSpv" @update:model-value="onToggleAutoSpv" color="primary" hide-details density="compact" class="ml-4 flex-shrink-0"></v-switch>
         </div>
         <v-divider class="my-3"></v-divider>
         <div class="d-flex align-center gap-3 flex-wrap">
@@ -125,6 +127,28 @@
           </v-btn>
         </div>
       </v-card>
+
+      <!-- llama.cpp license acceptance (gates shader download / auto-download) -->
+      <v-dialog v-model="spvLicense.open" max-width="660" persistent scrollable>
+        <v-card class="glass-card">
+          <v-card-title class="pa-5 pb-2 text-h6 font-weight-bold d-flex align-center">
+            <v-icon start color="primary">mdi-license</v-icon>
+            llama.cpp License
+          </v-card-title>
+          <v-card-text class="pa-5 pt-2">
+            <div class="text-caption text-grey mb-3">
+              These Vulkan shaders are produced and licensed by the
+              <a href="https://github.com/ggml-org/llama.cpp" target="_blank" class="text-primary">llama.cpp project (ggml-org/llama.cpp)</a>{{ spvLicense.source ? `, mirrored at ${spvLicense.source}` : '' }}.
+              Please read and accept their license to continue. Scroll to the bottom to enable <strong>Accept</strong>.
+            </div>
+            <pre ref="spvLicenseBox" class="spv-license-box" @scroll="onLicenseScroll">{{ spvLicense.text || 'Loading license…' }}</pre>
+          </v-card-text>
+          <v-card-actions class="pa-5 pt-0 justify-end gap-2">
+            <v-btn variant="text" color="grey" @click="declineLicense">Decline</v-btn>
+            <v-btn variant="flat" color="primary" :disabled="!spvLicense.scrolledToBottom" @click="acceptLicense">Accept</v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
 
       <!-- Authentication -->
       <v-card class="glass-card pa-5 mb-5">
@@ -610,10 +634,11 @@ export default {
       autoDownloadSpv: false,
       mcpInferenceEnabled: false,
     },
-    spv: { available: false, tag: null, files: [] },
+    spv: { available: false, tag: null, files: [], licenseAccepted: false },
     spvReleases: [],
     spvSelectedTag: null,
     spvSyncing: false,
+    spvLicense: { open: false, text: '', source: null, scrolledToBottom: false },
     cacheStats: null,
     clearingCache: false,
     passwordForm: { current: '', next: '', confirm: '' },
@@ -696,7 +721,7 @@ export default {
         const res = await fetch('/api/admin/spv');
         if (res.ok) {
           const d = await res.json();
-          this.spv = { available: d.available, tag: d.tag, files: d.files || [] };
+          this.spv = { available: d.available, tag: d.tag, files: d.files || [], licenseAccepted: !!d.licenseAccepted };
           if (!this.spvSelectedTag && d.tag) this.spvSelectedTag = d.tag;
         }
       } catch (e) {}
@@ -707,7 +732,48 @@ export default {
         if (res.ok) this.spvReleases = (await res.json()).releases || [];
       } catch (e) {}
     },
+    // Show the upstream license; resolves true only once the admin scrolls + accepts.
+    async ensureSpvLicense() {
+      if (this.spv.licenseAccepted) return true;
+      this.spvLicense.text = '';
+      this.spvLicense.scrolledToBottom = false;
+      this.spvLicense.open = true;
+      try {
+        const d = await (await fetch('/api/admin/spv/license')).json();
+        this.spvLicense.text = d.text || 'License unavailable.';
+        this.spvLicense.source = d.source || null;
+      } catch (e) { this.spvLicense.text = 'License unavailable.'; }
+      // If the text fits without scrolling, enable Accept immediately.
+      this.$nextTick(() => {
+        const b = this.$refs.spvLicenseBox;
+        if (b && b.scrollHeight <= b.clientHeight + 4) this.spvLicense.scrolledToBottom = true;
+      });
+      return new Promise(resolve => { this._licenseResolve = resolve; });
+    },
+    onLicenseScroll(e) {
+      const el = e.target;
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 8) this.spvLicense.scrolledToBottom = true;
+    },
+    async acceptLicense() {
+      try { await fetch('/api/admin/spv/accept-license', { method: 'POST' }); } catch (e) {}
+      this.spv.licenseAccepted = true;
+      this.spvLicense.open = false;
+      if (this._licenseResolve) { this._licenseResolve(true); this._licenseResolve = null; }
+    },
+    declineLicense() {
+      this.spvLicense.open = false;
+      if (this._licenseResolve) { this._licenseResolve(false); this._licenseResolve = null; }
+    },
+    async onToggleAutoSpv(val) {
+      if (val) {
+        const ok = await this.ensureSpvLicense();
+        this.settings.autoDownloadSpv = ok; // declined → stays off
+      } else {
+        this.settings.autoDownloadSpv = false;
+      }
+    },
     async downloadSpv() {
+      if (!(await this.ensureSpvLicense())) return; // must accept the license first
       this.spvSyncing = true;
       try {
         const body = JSON.stringify({ tag: this.spvSelectedTag || undefined });
@@ -1084,6 +1150,20 @@ export default {
 }
 
 .gap-3 { gap: 12px; }
+
+.spv-license-box {
+  max-height: 340px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'Fira Code', 'Courier New', monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(139, 92, 246, 0.15);
+  border-radius: 8px;
+  padding: 12px;
+}
 
 .mcp-tool-list {
   max-height: 220px;
