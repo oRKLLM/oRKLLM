@@ -1,3 +1,11 @@
+# [0.8.0-alpha.41](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.40...v0.8.0-alpha.41) (2026-06-11)
+
+
+### Features
+
+* **mcp:** auth-type selector + structured auth headers + failure logging ([301e15e](https://github.com/oRKLLM/oRKLLM/commit/301e15ecf708501eda495cc4697cfba3b41f4b97))
+* **mcp:** inject available-tools instructions into system prompt from Chat ([c8994d0](https://github.com/oRKLLM/oRKLLM/commit/c8994d0be7d9e7f3bdcb75f8c175c6c0752b2f73))
+
 # [0.8.0-alpha.40](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0-alpha.39...v0.8.0-alpha.40) (2026-06-11)
 
 
