@@ -382,14 +382,14 @@
 
                 <v-row no-gutters class="align-center mb-3">
                   <v-col cols="5" class="text-caption">Max New Tokens</v-col>
-                  <v-col cols="5"><v-slider v-model="settingsForm.max_new_tokens" min="128" max="32768" step="128" density="compact" color="primary" hide-details></v-slider></v-col>
-                  <v-col cols="2" class="pl-2"><v-text-field v-model.number="settingsForm.max_new_tokens" type="number" density="compact" variant="outlined" hide-details min="128" max="32768" style="width:56px"></v-text-field></v-col>
+                  <v-col cols="4"><v-slider v-model="settingsForm.max_new_tokens" :min="128" :max="32768" :step="128" density="compact" color="primary" thumb-label hide-details></v-slider></v-col>
+                  <v-col cols="3" class="pl-2"><v-text-field v-model.number="settingsForm.max_new_tokens" type="number" density="compact" variant="outlined" hide-details :min="128" :max="32768"></v-text-field></v-col>
                 </v-row>
 
                 <v-row no-gutters class="align-center mb-3">
-                  <v-col cols="5" class="text-caption">Ctx Window <span class="text-grey">(0=default)</span></v-col>
-                  <v-col cols="5"><v-slider v-model="settingsForm.ctx_window" min="0" max="32768" step="512" density="compact" color="primary" hide-details></v-slider></v-col>
-                  <v-col cols="2" class="pl-2"><v-text-field v-model.number="settingsForm.ctx_window" type="number" density="compact" variant="outlined" hide-details min="0" max="32768" style="width:56px"></v-text-field></v-col>
+                  <v-col cols="5" class="text-caption">Ctx Window <span class="text-grey">(tokens; 0=default 4096)</span></v-col>
+                  <v-col cols="4"><v-slider v-model="settingsForm.ctx_window" :min="0" :max="32768" :step="512" density="compact" color="primary" thumb-label hide-details></v-slider></v-col>
+                  <v-col cols="3" class="pl-2"><v-text-field v-model.number="settingsForm.ctx_window" type="number" density="compact" variant="outlined" hide-details :min="0" :max="32768"></v-text-field></v-col>
                 </v-row>
 
                 <!-- TTL -->
