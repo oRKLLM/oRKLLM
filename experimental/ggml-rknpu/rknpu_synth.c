@@ -48,13 +48,14 @@ static void act(uint32_t f, uint32_t v){ struct rknpu_action a={.flags=f,.value=
 
 /* set the register entry (block,reg) in the regcmd to `value` (M1.3 encoding) */
 static void set_reg(uint32_t *rc, int n, uint32_t block, uint32_t off, uint32_t value) {
+    int found=0;
     for (int k=0;k+1<n;k+=2)
         if ((rc[k]&0xffff)==off && (rc[k+1]>>16)==block) {
             rc[k]   = (off) | ((value & 0xffff) << 16);
             rc[k+1] = (block << 16) | ((value >> 16) & 0xffff);
-            return;
+            found=1;   /* set ALL occurrences (e.g. 0x1040 appears twice) */
         }
-    fprintf(stderr, "  WARN: reg %x:%x not in template\n", block, off);
+    if (!found) fprintf(stderr, "  WARN: reg %x:%x not in template\n", block, off);
 }
 
 /* Build the regcmd for (M,K,N) from the template + M1.3 closed-form dim fields. */
@@ -72,6 +73,7 @@ static void synth_regcmd(uint32_t *rc, int M, int K, int N, uint32_t aA, uint32_
     set_reg(rc,REGCMD_N,0x0201,0x1084, 0x10000|M);
     set_reg(rc,REGCMD_N,0x0201,0x102c, M);
     set_reg(rc,REGCMD_N,0x0201,0x1010, (16*(M+1) > 0x800) ? 0x800 : 16*(M+1));  /* saturates at M>=127 (M-tile=64) */
+    { int mt=(M+63)/64; set_reg(rc,REGCMD_N,0x0201,0x1040, 0xb1 - 15*(mt-1)); }  /* M-tile-count packed field */
     set_reg(rc,REGCMD_N,0x1001,0x4034, M-1);
     set_reg(rc,REGCMD_N,0x1001,0x405c, (M-1)<<16);
     set_reg(rc,REGCMD_N,0x0801,0x3014, (M-1)<<16);
