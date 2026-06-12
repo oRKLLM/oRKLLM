@@ -21,18 +21,51 @@
 #include <cstdlib>
 #include <vector>
 #include <mutex>
+#include <algorithm>
 #include <unordered_map>
 
 struct ggml_backend_rknpu_context {
     int dummy = 0;
 };
 
-// Per-weight prepared-B cache, stored on the tensor itself (tensor->extra).
-// Correct across ggml's buffer reuse: a recycled tensor struct is zeroed by
-// ggml_new_tensor (extra==NULL) -> cache miss -> recompute, so no stale hits
-// (the earlier global data-pointer map had no such reset and returned stale B).
-// Only cached for leaf weights (op==NONE, constant) and single-plane tensors.
-struct rk_weight_extra { int64_t Kp = 0, Np = 0; std::vector<ggml_fp16_t> B; };
+// Persistent rknn state for one (weight, M, Kp, Np): the matmul ctx + device
+// A/B/C buffers, with the weight B dequantized + uploaded into NPU memory ONCE
+// (and set_io_mem(B) bound once). Cached on the weight's tensor->extra so the
+// per-call cost drops to: refill A (activations) -> run -> copy C — no
+// rknn_matmul_create, no dequant, no 8MB weight upload per call.
+//
+// Correct across ggml buffer reuse: ggml zeroes a recycled tensor struct
+// (extra==NULL) -> miss -> rebuild, so no stale state. Gated to leaf weights
+// (op==NONE, single-plane). NOTE: states are not freed (no buffer hook in this
+// CPU-assist backend) — fine for a model's finite weight set; a real
+// buffer-owning backend would free them in free_buffer.
+struct rk_weight_extra;
+struct rk_mm_state {
+    int64_t M = 0, Kp = 0, Np = 0;
+    rknn_matmul_ctx ctx = 0;
+    rknn_matmul_io_attr io{};
+    rknn_tensor_mem *A = nullptr, *B = nullptr, *C = nullptr;
+    rk_weight_extra * owner = nullptr;
+};
+struct rk_weight_extra { std::vector<rk_mm_state *> states; };
+
+// Global LRU bound on persistent states: the NPU can't hold a ctx+weight-mem for
+// every weight (it exhausts after ~150). Cap the live set; evicting destroys the
+// rknn ctx/mems. NOTE: a full model has more matmul weights than fits, so decode
+// (which cycles through all weights every token) thrashes this cache — persistent
+// reuse only pays off when a small set of weights is hot (benchmarks, repeated
+// shapes). See the wiki: a single shared ctx + weight swap would scale better.
+static const size_t RK_MAX_STATES = 32;
+static std::vector<rk_mm_state *> g_lru;   // front = oldest
+static std::mutex g_lru_mtx;
+
+static void rk_destroy_state(rk_mm_state * s) {
+    if (s->A) rknn_destroy_mem(s->ctx, s->A);
+    if (s->B) rknn_destroy_mem(s->ctx, s->B);
+    if (s->C) rknn_destroy_mem(s->ctx, s->C);
+    if (s->ctx) rknn_matmul_destroy(s->ctx);
+    delete s;
+}
 
 // Dequantize + transpose + zero-pad a weight plane [K,N] -> fp16 [Kp x Np] into
 // scratch. (No cross-call cache: keying by data pointer is unsafe because ggml
@@ -64,6 +97,46 @@ static inline float rk_get_f32(const char * row, int64_t i, int64_t nb0, enum gg
                               : ggml_fp16_to_fp32(*((const ggml_fp16_t *) p));
 }
 
+// Get (or build) the persistent rknn state for this weight at shape (M,Kp,Np):
+// ctx + A/B/C device mems, with the weight B dequantized + uploaded + bound once.
+static rk_mm_state * rk_get_state(const struct ggml_tensor * src0, const char * s0,
+                                  int64_t K, int64_t N, int64_t M, int64_t Kp, int64_t Np) {
+    rk_weight_extra * w = (rk_weight_extra *) src0->extra;
+    if (!w) { w = new rk_weight_extra; const_cast<struct ggml_tensor *>(src0)->extra = w; }
+    for (rk_mm_state * s : w->states) if (s->M == M && s->Kp == Kp && s->Np == Np) return s;
+
+    rk_mm_state * st = new rk_mm_state;
+    st->M = M; st->Kp = Kp; st->Np = Np;
+    rknn_matmul_info info; memset(&info, 0, sizeof info);
+    info.M = (int32_t) M; info.K = (int32_t) Kp; info.N = (int32_t) Np;
+    info.type = RKNN_FLOAT16_MM_FLOAT16_TO_FLOAT32;
+    if (rknn_matmul_create(&st->ctx, &info, &st->io) != 0)
+        GGML_ABORT("ggml-rknpu: rknn_matmul_create failed (M=%lld Kp=%lld Np=%lld)", (long long)M,(long long)Kp,(long long)Np);
+    st->A = rknn_create_mem(st->ctx, st->io.A.size);
+    st->B = rknn_create_mem(st->ctx, st->io.B.size);
+    st->C = rknn_create_mem(st->ctx, st->io.C.size);
+    // dequant + transpose + pad the weight, upload to NPU memory ONCE, bind once.
+    std::vector<ggml_fp16_t> bh;
+    rk_prepare_B(src0, s0, K, N, Kp, Np, bh);
+    memset(st->B->virt_addr, 0, st->io.B.size);
+    memcpy(st->B->virt_addr, bh.data(), (size_t) Kp * Np * sizeof(ggml_fp16_t));
+    rknn_matmul_set_io_mem(st->ctx, st->B, &st->io.B);
+    st->owner = w;
+    w->states.push_back(st);
+
+    // LRU bound: evict oldest states (destroy their rknn ctx/mems) over the cap.
+    std::lock_guard<std::mutex> lk(g_lru_mtx);
+    g_lru.push_back(st);
+    while (g_lru.size() > RK_MAX_STATES) {
+        rk_mm_state * old = g_lru.front();
+        g_lru.erase(g_lru.begin());
+        auto & v = old->owner->states;
+        v.erase(std::remove(v.begin(), v.end(), old), v.end());
+        rk_destroy_state(old);
+    }
+    return st;
+}
+
 // ── MUL_MAT via rknn_matmul_api ───────────────────────────────────────────────
 // ggml MUL_MAT: dst[ne0=N, ne1=M, ne2, ne3] = src1 . src0^T, per (i2,i3) plane,
 // with src0 broadcast over src1 (r2=ne12/ne02, r3=ne13/ne03).
@@ -85,19 +158,51 @@ static void ggml_backend_rknpu_mul_mat(ggml_backend_rknpu_context * /*ctx*/, str
     const int64_t r2 = src1->ne[2] / src0->ne[2];
     const int64_t r3 = src1->ne[3] / src0->ne[3];
 
+    // fills A[M,Kp] fp16 (zero-padded) from a src1 plane (stride-aware)
+    auto fill_A = [&](ggml_fp16_t * a, const char * s1, size_t a_bytes) {
+        memset(a, 0, a_bytes);
+        for (int64_t m = 0; m < M; m++) {
+            const char * row = s1 + m*src1->nb[1];
+            for (int64_t k = 0; k < K; k++) a[m*Kp + k] = ggml_fp32_to_fp16(rk_get_f32(row, k, src1->nb[0], src1->type));
+        }
+    };
+    auto copy_C = [&](const float * c, char * d) {
+        for (int64_t m = 0; m < M; m++) memcpy(d + m*dst->nb[1], c + m*Np, (size_t) N * sizeof(float));
+    };
+
+    const bool cacheable = src0->op == GGML_OP_NONE && src0->ne[2] == 1 && src0->ne[3] == 1;
+
+    if (cacheable) {
+        // Persistent path: ctx + weight-mem cached on the tensor; only A is
+        // refilled per call. src0 is single-plane so its plane is src0->data.
+        rk_mm_state * st = rk_get_state(src0, (const char *) src0->data, K, N, M, Kp, Np);
+        for (int64_t i3 = 0; i3 < dst->ne[3]; i3++) {
+            for (int64_t i2 = 0; i2 < dst->ne[2]; i2++) {
+                const char * s1 = (const char *) src1->data + i2*src1->nb[2] + i3*src1->nb[3];
+                char       * d  = (char *)       dst->data  + i2*dst->nb[2]  + i3*dst->nb[3];
+                fill_A((ggml_fp16_t *) st->A->virt_addr, s1, st->io.A.size);
+                rknn_matmul_set_io_mem(st->ctx, st->A, &st->io.A);
+                rknn_matmul_set_io_mem(st->ctx, st->C, &st->io.C);  // B bound once in rk_get_state
+                if (rknn_matmul_run(st->ctx) != 0) GGML_ABORT("ggml-rknpu: rknn_matmul_run failed");
+                copy_C((const float *) st->C->virt_addr, d);
+            }
+        }
+        return;
+    }
+
+    // Per-call path (non-cacheable: computed/multi-plane src0): create + destroy.
     rknn_matmul_ctx mctx = 0;
     rknn_matmul_info info; memset(&info, 0, sizeof info);
     info.M = (int32_t) M; info.K = (int32_t) Kp; info.N = (int32_t) Np;
     info.type = RKNN_FLOAT16_MM_FLOAT16_TO_FLOAT32;
     info.B_layout = 0; info.AC_layout = 0;
     rknn_matmul_io_attr io; memset(&io, 0, sizeof io);
-    if (rknn_matmul_create(&mctx, &info, &io) != 0) {
+    if (rknn_matmul_create(&mctx, &info, &io) != 0)
         GGML_ABORT("ggml-rknpu: rknn_matmul_create failed (M=%lld Kp=%lld Np=%lld)", (long long)M,(long long)Kp,(long long)Np);
-    }
     rknn_tensor_mem * A = rknn_create_mem(mctx, io.A.size);
     rknn_tensor_mem * B = rknn_create_mem(mctx, io.B.size);
     rknn_tensor_mem * C = rknn_create_mem(mctx, io.C.size);
-    std::vector<ggml_fp16_t> b_scratch;  // used when the weight isn't cacheable
+    std::vector<ggml_fp16_t> b_scratch;
 
     for (int64_t i3 = 0; i3 < dst->ne[3]; i3++) {
         for (int64_t i2 = 0; i2 < dst->ne[2]; i2++) {
@@ -105,31 +210,8 @@ static void ggml_backend_rknpu_mul_mat(ggml_backend_rknpu_context * /*ctx*/, str
             const char * s0 = (const char *) src0->data + (i2/r2)*src0->nb[2] + (i3/r3)*src0->nb[3];
             char       * d  = (char *)       dst->data  + i2*dst->nb[2]  + i3*dst->nb[3];
 
-            // A[M,Kp] fp16  <- src1 plane [K,M] (zero-padded over Kp)
-            ggml_fp16_t * a = (ggml_fp16_t *) A->virt_addr;
-            memset(a, 0, io.A.size);
-            for (int64_t m = 0; m < M; m++) {
-                const char * row = s1 + m*src1->nb[1];
-                for (int64_t k = 0; k < K; k++) a[m*Kp + k] = ggml_fp32_to_fp16(rk_get_f32(row, k, src1->nb[0], src1->type));
-            }
-            // B[Kp,Np] fp16  <- src0 plane [K,N] transposed (zero-padded). For a
-            // leaf weight (op==NONE, single-plane, stable contents) cache the
-            // prepared B on src0->extra so dequant+transpose happens once, not
-            // per call. Otherwise prepare into scratch each time.
-            const ggml_fp16_t * bsrc;
-            const bool cacheable = src0->op == GGML_OP_NONE && src0->ne[2] == 1 && src0->ne[3] == 1;
-            if (cacheable) {
-                rk_weight_extra * w = (rk_weight_extra *) src0->extra;
-                if (!w || w->Kp != Kp || w->Np != Np) {
-                    if (!w) { w = new rk_weight_extra; const_cast<struct ggml_tensor *>(src0)->extra = w; }
-                    w->Kp = Kp; w->Np = Np;
-                    w->B.clear();
-                    rk_prepare_B(src0, s0, K, N, Kp, Np, w->B);  // fills w->B
-                }
-                bsrc = w->B.data();
-            } else {
-                bsrc = rk_prepare_B(src0, s0, K, N, Kp, Np, b_scratch);
-            }
+            fill_A((ggml_fp16_t *) A->virt_addr, s1, io.A.size);
+            const ggml_fp16_t * bsrc = rk_prepare_B(src0, s0, K, N, Kp, Np, b_scratch);
             ggml_fp16_t * b = (ggml_fp16_t *) B->virt_addr;
             memset(b, 0, io.B.size);
             memcpy(b, bsrc, (size_t) Kp * Np * sizeof(ggml_fp16_t));
@@ -138,15 +220,9 @@ static void ggml_backend_rknpu_mul_mat(ggml_backend_rknpu_context * /*ctx*/, str
             rknn_matmul_set_io_mem(mctx, B, &io.B);
             rknn_matmul_set_io_mem(mctx, C, &io.C);
             if (rknn_matmul_run(mctx) != 0) GGML_ABORT("ggml-rknpu: rknn_matmul_run failed");
-
-            // C[M,Np] f32 -> dst plane (row m = N contiguous f32 at d + m*nb1)
-            const float * c = (const float *) C->virt_addr;
-            for (int64_t m = 0; m < M; m++) {
-                memcpy(d + m*dst->nb[1], c + m*Np, (size_t) N * sizeof(float));
-            }
+            copy_C((const float *) C->virt_addr, d);
         }
     }
-
     rknn_destroy_mem(mctx, A);
     rknn_destroy_mem(mctx, B);
     rknn_destroy_mem(mctx, C);
