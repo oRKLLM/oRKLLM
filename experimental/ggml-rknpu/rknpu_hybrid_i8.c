@@ -65,6 +65,12 @@ int main(int argc,char**argv){
     memcpy(task.cpu,&t,sizeof t); bsync(&task,RKNPU_MEM_SYNC_TO_DEVICE|RKNPU_MEM_SYNC_FROM_DEVICE);
     int32_t*cres=calloc((size_t)M*N,sizeof(int32_t)); int both=RKNPU_MEM_SYNC_TO_DEVICE|RKNPU_MEM_SYNC_FROM_DEVICE; int nsub=0;
     int KS=1024;   /* int8 scheduler-fast slice (R=65536/K clean up to 1024) */
+    /* BUFFER POOL: one feature+output buffer pair, allocated once and reused (no
+     * per-tile mmap churn). Single stable buffer is required — the NPU caches feature
+     * state by address across sequential submits, so rotating buffers corrupts. */
+    size_t maxFeat=(size_t)4*65536, maxOut=0;
+    for(int k0=0;k0<K;k0+=KS){int Kp=(K-k0<KS)?(K-k0):KS;int R=65536/Kp;if(R<1)R=1;size_t o=(size_t)4*R*N*4;if(o>maxOut)maxOut=o;}
+    struct buf Ac=bcreate(maxFeat,0x403),Cc=bcreate(maxOut,0x403);
     for(int k0=0;k0<K;k0+=KS){
         int Kp=(K-k0<KS)?(K-k0):KS, KT=Kp/32,NN=N/32;
         struct buf B=bcreate((size_t)Kp*N,0x403); int8_t*bbuf=B.cpu;
@@ -76,9 +82,8 @@ int main(int argc,char**argv){
         int sched=(Kp==1024||Kp==512), R=65536/Kp; if(R<1)R=1; int chunk=sched?4*R:(32768/Kp); if(chunk<1)chunk=1;
         for(int pass=(k0?0:-1),nt2=(M+chunk-1)/chunk; pass<nt2; pass++){
             int m0=(pass<0)?0:pass*chunk, mc=(pass<0)?((M<chunk)?M:chunk):((M-m0<chunk)?(M-m0):chunk); if(mc<=0)continue;
-            struct buf Ac=bcreate((size_t)mc*Kp,0x403),Cc=bcreate((size_t)mc*N*4,0x403);
             int8_t*ad=Ac.cpu; for(int r=0;r<mc;r++)for(int j=0;j<Kp;j++) ad[(size_t)r*Kp+j]=alog[(size_t)(m0+r)*K+k0+j];
-            bsync(&Ac,both);bsync(&Cc,both);bsync(&Ac,RKNPU_MEM_SYNC_TO_DEVICE);
+            bsync(&Ac,RKNPU_MEM_SYNC_TO_DEVICE);
             uint32_t rc[REGCMD_I8_N]; synth(rc,mc,Kp,N,(uint32_t)Ac.dma,(uint32_t)B.dma,(uint32_t)Cc.dma,sched);
             memcpy(regcmd.cpu,rc,sizeof rc); bsync(&regcmd,RKNPU_MEM_SYNC_TO_DEVICE);
             struct rknpu_submit sub;memset(&sub,0,sizeof sub);sub.flags=0x5;sub.timeout=6000;sub.task_number=1;sub.task_obj_addr=task.obj;sub.core_mask=RKNPU_CORE0_MASK;sub.fence_fd=-1;sub.subcore_task[0]=(struct rknpu_subcore_task){0,1};
