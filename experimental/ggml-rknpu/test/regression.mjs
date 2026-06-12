@@ -48,6 +48,8 @@ const SUITE = {
   rknpu_pcchain:   { src:'rknpu_pcchain.c',   shapes:[[128,4096,16],[512,4096,128],[256,8192,16],[512,2048,128],[64,1024,64],[512,512,64],[256,8192,512]] },
   // M4.1 reusable matmul library — one handle, resident weights reused across many runs
   test_mm:         { src:'test_mm.c rknpu_mm.c', shapes:[[]] },   // self-contained matrix, no args
+  // M4.3 full transformer decoder layer (NPU matmul + CPU ops) vs pure-CPU reference
+  rknpu_layer:     { src:'rknpu_layer.c rknpu_mm.c', shapes:[[]] },
 };
 
 const kernels = Object.entries(SUITE).filter(([k]) => !filter || k.includes(filter));
@@ -64,7 +66,7 @@ execFileSync('bash', ['-c',
 // 2. compile every kernel under test
 console.log('→ compiling');
 for (const [bin, { src }] of kernels) {
-  try { ssh(`cd ${DIR} && gcc -O2 -I. -o ${bin} ${src}`); }
+  try { ssh(`cd ${DIR} && gcc -O2 -I. -o ${bin} ${src} -lm`); }
   catch (e) { console.error(`✗ COMPILE FAILED: ${bin}\n${e.stderr || e.message}`); process.exit(1); }
 }
 
