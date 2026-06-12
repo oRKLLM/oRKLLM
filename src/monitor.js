@@ -106,15 +106,19 @@ export async function getSystemMetrics() {
     temperature = baseTemp + Math.random() * 2;
   }
 
-  // 4. NPU Load
+  // 4. NPU Load — /sys/kernel/debug/rknpu/load is per-core ("Core0: X%, Core1: Y%, Core2: Z%").
+  // npu = mean across cores (so 100% = every core saturated); npuCores = the per-core array.
+  // A single-core workload therefore reads ~load/coreCount, which correctly shows the NPU is
+  // mostly idle — earlier code matched only the FIRST "N%" (Core0), hiding the other cores.
   let npuLoad = 0;
+  let npuCores = [];
   if (isLinux) {
     try {
       if (fs.existsSync('/sys/kernel/debug/rknpu/load')) {
         const rawLoad = fs.readFileSync('/sys/kernel/debug/rknpu/load', 'utf-8');
-        const match = rawLoad.match(/(\d+)%/);
-        if (match) {
-          npuLoad = parseInt(match[1]);
+        npuCores = [...rawLoad.matchAll(/(\d+)\s*%/g)].map(m => parseInt(m[1]));
+        if (npuCores.length) {
+          npuLoad = Math.round(npuCores.reduce((a, b) => a + b, 0) / npuCores.length);
         } else {
           npuLoad = parseInt(rawLoad.trim()) || 0;
         }
@@ -212,6 +216,7 @@ export async function getSystemMetrics() {
     },
     temperature: Math.round(temperature * 10) / 10,
     npu: npuLoad,
+    npuCores,
     gpu: Math.round(gpuLoad),
     disk: {
       total: diskTotal,
