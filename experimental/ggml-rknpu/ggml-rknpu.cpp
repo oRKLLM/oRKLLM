@@ -328,6 +328,11 @@ static bool ggml_backend_rknpu_device_supports_op(ggml_backend_dev_t, const stru
             const bool t0_ok = src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_F32 ||
                                ggml_get_type_traits(src0->type)->to_float != NULL;
             const bool t1_ok = src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_F32;
+            // Min-M gate (ORKLLM_RKNPU_MIN_M): only claim large-M (prefill) matmuls;
+            // leave M≈1 decode GEMV on the CPU per the benchmark verdict. Default 0
+            // = claim all. Set huge to disable the backend entirely (CPU baseline).
+            static const int64_t min_m = getenv("ORKLLM_RKNPU_MIN_M") ? atoll(getenv("ORKLLM_RKNPU_MIN_M")) : 0;
+            if (src1->ne[1] < min_m) return false;
             // src0 (weights) must be contiguous (dequant/transpose reads full rows);
             // src1 (activations) may be strided/permuted — A-fill is stride-aware.
             return t0_ok && t1_ok && op->type == GGML_TYPE_F32 &&
