@@ -46,6 +46,8 @@ const SUITE = {
   rknpu_hybrid_i8: { src:'rknpu_hybrid_i8.c', shapes:[[512,8192,128],[256,11008,32],[256,14336,32],[512,4096,512],[128,1280,64]] },
   // single-submit general-M large-K via M-tile PC-chaining (calibrated power-of-2 K)
   rknpu_pcchain:   { src:'rknpu_pcchain.c',   shapes:[[128,4096,16],[512,4096,128],[256,8192,16],[512,2048,128],[64,1024,64],[512,512,64],[256,8192,512]] },
+  // M4.1 reusable matmul library — one handle, resident weights reused across many runs
+  test_mm:         { src:'test_mm.c rknpu_mm.c', shapes:[[]] },   // self-contained matrix, no args
 };
 
 const kernels = Object.entries(SUITE).filter(([k]) => !filter || k.includes(filter));
