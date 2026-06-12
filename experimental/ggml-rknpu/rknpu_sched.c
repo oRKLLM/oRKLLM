@@ -58,8 +58,8 @@ int main(int argc,char**argv){
      * calibration (CBUF heuristic) — pass explicit hex args. */
     if(!r1010){ int R=32768/K; if(R<1)R=1; int rows=(M+1<R)?(M+1):R; r1010=16*rows; }
     if(!r1040){ int kk=K/256, lg=0; while(kk>1){kk>>=1;lg++;}        /* log2(K/256) */
-                int base=0xb1-15*lg, slope=15*(K/256), mg=M/64; if(mg<1)mg=1;
-                int v=base-slope*(mg-1); if(v<0x1b)v=0x1b; r1040=v; }  /* floors at 0x1b */
+                int base=0xb1-15*((1<<lg)-1), slope=15*(1<<lg), mg=M/64; if(mg<1)mg=1;
+                int v=base-slope*(mg-1); if(v<0x1b)v=0x1b; r1040=v; }  /* universal base/slope, floor 0x1b */
     setr(rc,REGCMD_N,0x201,0x1010,r1010);
     setr(rc,REGCMD_N,0x201,0x1040,r1040);
     setr(rc,REGCMD_N,0x201,0x1070,(uint32_t)A.dma);setr(rc,REGCMD_N,0x201,0x1110,(uint32_t)B.dma);setr(rc,REGCMD_N,0x1001,0x4020,(uint32_t)C.dma);
