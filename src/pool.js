@@ -312,6 +312,26 @@ class EnginePool {
       // turns them into plain objects (length lost), breaking the GPU draft.
       slot.worker = fork(workerPath, { serialization: 'advanced' });
 
+      // Persistent guards so a worker that dies mid-inference can never crash the
+      // whole server. Without an 'error' listener, an IPC failure (e.g.
+      // ERR_IPC_CHANNEL_CLOSED from sending to a dead worker) is emitted as an
+      // unhandled 'error' event and takes the process down. The 'exit' guard
+      // marks the slot unloaded so the next request reloads instead of sending
+      // into a closed channel. (The load handshake below uses its own one-shot
+      // listeners; these stay attached for the worker's whole lifetime.)
+      const deadWorker = slot.worker;
+      deadWorker.on('error', (err) => {
+        console.error(`[EnginePool] Slot ${slot.id}: worker IPC error: ${err.message}`);
+      });
+      deadWorker.on('exit', (code, signal) => {
+        if (slot.worker === deadWorker) {
+          if (slot.isLoaded) console.error(`[EnginePool] Slot ${slot.id}: worker exited unexpectedly (${signal ?? code}) — marking slot unloaded`);
+          slot.isLoaded = false;
+          slot.activeModel = null;
+          slot.worker = null;
+        }
+      });
+
       const loadTimeout = setTimeout(() => {
         console.error(`[EnginePool] Slot ${slot.id}: load timeout (60s) with ${libPath}`);
         resolve({ success: false, error: 'Timeout (60s)' });
@@ -442,6 +462,10 @@ class EnginePool {
     const workerPath = path.join(__dirname, 'worker.js');
     if (slot === 'draft') {
       this.draftWorker = fork(workerPath, { serialization: 'advanced' });
+      // Guard against unhandled 'error' (IPC failure) crashing the server.
+      this.draftWorker.on('error', (err) => {
+        console.error(`[EnginePool] Draft worker IPC error: ${err.message}`);
+      });
     }
     const worker = slot === 'draft' ? this.draftWorker : this.worker;
 

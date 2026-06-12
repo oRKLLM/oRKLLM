@@ -210,7 +210,12 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
     return new Promise((resolve, reject) => {
       const tokenTexts = [];
       let settled = false;
-      const finish = (fn) => { if (settled) return; settled = true; worker.removeListener('message', onMsg); fn(); };
+      const finish = (fn) => {
+        if (settled) return; settled = true;
+        worker.removeListener('message', onMsg);
+        worker.removeListener('exit', onExit);
+        fn();
+      };
       const onMsg = (msg) => {
         if (msg.type !== 'token') return;
         if (msg.state === 0 || msg.state === 1) {
@@ -230,8 +235,18 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
           finish(() => reject(new Error('NPU error during Eagle-3')));
         }
       };
+      // Reject (don't hang/crash) if the worker dies mid-operation — the rkllm
+      // GET_LOGITS verify path can segfault the worker on some models/runtimes.
+      const onExit = (code, signal) =>
+        finish(() => reject(new Error(`NPU worker exited (${signal ?? code}) during Eagle-3`)));
       worker.on('message', onMsg);
-      worker.send({ type: 'run', prompt: promptStr, infer_mode: inferMode, keep_history: keepHistory });
+      worker.on('exit', onExit);
+      if (!worker.connected) { finish(() => reject(new Error('NPU worker not connected'))); return; }
+      try {
+        worker.send({ type: 'run', prompt: promptStr, infer_mode: inferMode, keep_history: keepHistory });
+      } catch (e) {
+        finish(() => reject(new Error(`NPU worker send failed: ${e.message}`)));
+      }
     });
   }
 
@@ -241,7 +256,12 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
     return new Promise((resolve, reject) => {
       const tokenTexts = [];
       let settled = false;
-      const finish = (fn) => { if (settled) return; settled = true; worker.removeListener('message', onMsg); fn(); };
+      const finish = (fn) => {
+        if (settled) return; settled = true;
+        worker.removeListener('message', onMsg);
+        worker.removeListener('exit', onExit);
+        fn();
+      };
       const onMsg = (msg) => {
         if (msg.type !== 'token') return;
         if (msg.state === 0 || msg.state === 1) {
@@ -258,8 +278,18 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
           finish(() => reject(new Error('NPU error during Eagle-3 token verification')));
         }
       };
+      // GET_LOGITS token-input verify can segfault the rkllm worker on some
+      // models/runtimes — reject cleanly on worker death instead of hanging.
+      const onExit = (code, signal) =>
+        finish(() => reject(new Error(`NPU worker exited (${signal ?? code}) during Eagle-3 verification`)));
       worker.on('message', onMsg);
-      worker.send({ type: 'run', token_ids: Array.from(tokenIdArray), infer_mode: inferMode, keep_history: keepHistory });
+      worker.on('exit', onExit);
+      if (!worker.connected) { finish(() => reject(new Error('NPU worker not connected'))); return; }
+      try {
+        worker.send({ type: 'run', token_ids: Array.from(tokenIdArray), infer_mode: inferMode, keep_history: keepHistory });
+      } catch (e) {
+        finish(() => reject(new Error(`NPU worker send failed: ${e.message}`)));
+      }
     });
   }
 
@@ -391,7 +421,15 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
     if (!done && partialRejection) {
       clearKV();
       const tRe = Date.now();
-      const reHiddenMsg = await runNPUPrompt(currentPrompt, INFER_GET_HIDDEN_LAYER, false);
+      let reHiddenMsg;
+      try {
+        reHiddenMsg = await runNPUPrompt(currentPrompt, INFER_GET_HIDDEN_LAYER, false);
+      } catch (e) {
+        // Worker died during the rollback re-prefill — stop generation with the
+        // tokens emitted so far rather than propagating an error.
+        console.warn('[Eagle-3] KV rollback failed:', e.message, '— ending generation');
+        break;
+      }
       stats.npu_hidden_ms += Date.now() - tRe;
       if (reHiddenMsg?.hidden_states) {
         lastHiddenStates  = reHiddenMsg.hidden_states;
