@@ -445,6 +445,10 @@ Current investigation pages:
 
 **Recording new findings:** when an experiment, benchmark, or debugging session produces a non-obvious conclusion, add it to the wiki (see **[Recording Investigation Notes](https://github.com/oRKLLM/oRKLLM/wiki/Recording-Investigation-Notes)**) and link it from the wiki Home — do not grow this file with research notes.
 
+### Open NPU driver — separate repo
+
+The from-scratch **regcmd userspace NPU driver** (drives the Rockchip NPU directly via raw DRM, no `librknnrt`, no kernel module) has spun out into its own repository: **[oRKLLM/ork-driver](https://github.com/oRKLLM/ork-driver)**. It is a standalone fp16 matmul library (`ork_npu_init/pack/run`) that already runs a real model end-to-end, with multi-SoC support via runtime device-tree detection (RK3588 validated; one file per chip, no branches). The reverse-engineering record moved there (`docs/REVERSE-ENGINEERING.md`). oRKLLM itself still ships on Rockchip's `librkllmrt`; ork-driver is the open alternative being built to eventually replace it. The old `experimental/ggml-rknpu/` scratch tree was removed from this repo when the driver graduated — see ork-driver and its git history.
+
 ---
 
 ## 11. Verification Plan
