@@ -208,6 +208,8 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
   function runNPUPrompt(promptStr, inferMode, keepHistory = false) {
     return new Promise((resolve, reject) => {
       const tokenTexts = [];
+      let settled = false;
+      const finish = (fn) => { if (settled) return; settled = true; worker.removeListener('message', onMsg); fn(); };
       const onMsg = (msg) => {
         if (msg.type !== 'token') return;
         if (msg.state === 0 || msg.state === 1) {
@@ -215,16 +217,16 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
             tokenTexts.push({ text: msg.text || '', token_id: msg.token_id });
           }
         }
-        if (msg.hidden_states || msg.logits) {
-          // final metadata message — don't push to tokenTexts
-        }
-        if (msg.state === 2) {
-          worker.removeListener('message', onMsg);
-          resolve({ ...msg, _tokenTexts: tokenTexts });
+        // GET_LAST_HIDDEN_LAYER / GET_LOGITS deliver their result in a single
+        // NORMAL (state 0) callback and this runtime never fires FINISH (state 2)
+        // for those modes — so resolve as soon as the payload arrives rather than
+        // waiting for a FINISH that never comes (which hung the whole Eagle loop).
+        if (msg.hidden_states || msg.logits || msg.state === 2) {
+          finish(() => resolve({ ...msg, _tokenTexts: tokenTexts }));
+          return;
         }
         if (msg.state === 3) {
-          worker.removeListener('message', onMsg);
-          reject(new Error('NPU error during Eagle-3'));
+          finish(() => reject(new Error('NPU error during Eagle-3')));
         }
       };
       worker.on('message', onMsg);
@@ -237,18 +239,22 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
   function runNPUTokens(tokenIdArray, inferMode, keepHistory = false) {
     return new Promise((resolve, reject) => {
       const tokenTexts = [];
+      let settled = false;
+      const finish = (fn) => { if (settled) return; settled = true; worker.removeListener('message', onMsg); fn(); };
       const onMsg = (msg) => {
         if (msg.type !== 'token') return;
         if (msg.state === 0 || msg.state === 1) {
           tokenTexts.push({ text: msg.text || '', token_id: msg.token_id });
         }
-        if (msg.state === 2) {
-          worker.removeListener('message', onMsg);
-          resolve({ ...msg, _tokenTexts: tokenTexts });
+        // GET_LOGITS returns the logits in a single NORMAL callback with no
+        // trailing FINISH on this runtime — resolve when the logits land (or on
+        // a real FINISH if one does arrive) instead of blocking on state 2.
+        if (msg.logits || msg.state === 2) {
+          finish(() => resolve({ ...msg, _tokenTexts: tokenTexts }));
+          return;
         }
         if (msg.state === 3) {
-          worker.removeListener('message', onMsg);
-          reject(new Error('NPU error during Eagle-3 token verification'));
+          finish(() => reject(new Error('NPU error during Eagle-3 token verification')));
         }
       };
       worker.on('message', onMsg);
