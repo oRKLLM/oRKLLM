@@ -50,10 +50,11 @@ static const ggml_fp16_t * rk_prepare_B(const struct ggml_tensor * src0, const c
 
 static inline int64_t rk_align(int64_t x, int64_t a) { return (x + a - 1) / a * a; }
 
-// fetch element (row-major plane, type-aware) as fp32
-static inline float rk_get_f32(const char * row, int64_t i, enum ggml_type t) {
-    return t == GGML_TYPE_F32 ? ((const float *) row)[i]
-                              : ggml_fp16_to_fp32(((const ggml_fp16_t *) row)[i]);
+// fetch element i along a dim with byte stride nb0 (handles non-contiguous/permuted)
+static inline float rk_get_f32(const char * row, int64_t i, int64_t nb0, enum ggml_type t) {
+    const char * p = row + i*nb0;
+    return t == GGML_TYPE_F32 ? *((const float *) p)
+                              : ggml_fp16_to_fp32(*((const ggml_fp16_t *) p));
 }
 
 // ── MUL_MAT via rknn_matmul_api ───────────────────────────────────────────────
@@ -102,7 +103,7 @@ static void ggml_backend_rknpu_mul_mat(ggml_backend_rknpu_context * /*ctx*/, str
             memset(a, 0, io.A.size);
             for (int64_t m = 0; m < M; m++) {
                 const char * row = s1 + m*src1->nb[1];
-                for (int64_t k = 0; k < K; k++) a[m*Kp + k] = ggml_fp32_to_fp16(rk_get_f32(row, k, src1->type));
+                for (int64_t k = 0; k < K; k++) a[m*Kp + k] = ggml_fp32_to_fp16(rk_get_f32(row, k, src1->nb[0], src1->type));
             }
             // B[Kp,Np] fp16  <- src0 plane [K,N] transposed (zero-padded), cached
             // per weight when possible (F16/F32 or any block-quant via to_float).
@@ -229,8 +230,10 @@ static bool ggml_backend_rknpu_device_supports_op(ggml_backend_dev_t, const stru
             const bool t0_ok = src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_F32 ||
                                ggml_get_type_traits(src0->type)->to_float != NULL;
             const bool t1_ok = src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_F32;
+            // src0 (weights) must be contiguous (dequant/transpose reads full rows);
+            // src1 (activations) may be strided/permuted — A-fill is stride-aware.
             return t0_ok && t1_ok && op->type == GGML_TYPE_F32 &&
-                   ggml_is_contiguous(src0) && ggml_is_contiguous(src1) &&
+                   ggml_is_contiguous(src0) &&
                    (src1->ne[2] % src0->ne[2] == 0) &&   // broadcastable
                    (src1->ne[3] % src0->ne[3] == 0);
         }
