@@ -54,6 +54,8 @@ const SUITE = {
   rknpu_decode:    { src:'rknpu_decode.c rknpu_mm.c', shapes:[[]] },
   // M5.1 multi-layer transformer body (N stacked decoder layers) vs pure-CPU reference
   rknpu_model:     { src:'rknpu_model.c rknpu_mm.c', shapes:[[1],[12]] },
+  // M5.2/M5.3 real model (llama2.c stories15M) end-to-end; skipped if the model isn't present
+  rknpu_llama2:    { src:'rknpu_llama2.c rknpu_mm.c', shapes:[['stories15M.bin','6']], model:'stories15M.bin' },
 };
 
 const kernels = Object.entries(SUITE).filter(([k]) => !filter || k.includes(filter));
@@ -75,8 +77,13 @@ for (const [bin, { src }] of kernels) {
 }
 
 // 3. run the matrix serially, one ssh per test (clean per-test timeout + isolation)
-let pass = 0, fail = 0; const failures = [];
-for (const [bin, { shapes }] of kernels) {
+let pass = 0, fail = 0, skip = 0; const failures = [];
+for (const [bin, { shapes, model }] of kernels) {
+  // optional external model dependency: copy from the board's working dir, else skip
+  if (model) {
+    try { ssh(`test -f ${DIR}/${model} || cp /tmp/rknpu/${model} ${DIR}/${model}`); }
+    catch { console.log(`  ⊘ ${bin.padEnd(16)} SKIPPED (model ${model} not on board)`); skip++; continue; }
+  }
   for (const shape of shapes) {
     const args = shape.join(' ');
     let code;
@@ -90,5 +97,5 @@ for (const [bin, { shapes }] of kernels) {
   }
 }
 
-console.log(`\n${fail ? '✗' : '✓'} ${pass}/${pass + fail} passed`);
+console.log(`\n${fail ? '✗' : '✓'} ${pass}/${pass + fail} passed${skip ? `, ${skip} skipped` : ''}`);
 if (fail) { console.log('\nfailures:'); failures.forEach(f => console.log('  ' + f)); process.exit(1); }
