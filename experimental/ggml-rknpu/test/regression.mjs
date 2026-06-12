@@ -52,6 +52,8 @@ const SUITE = {
   rknpu_layer:     { src:'rknpu_layer.c rknpu_mm.c', shapes:[[]] },
   // M4.4 incremental decode with KV cache (M=1 projections) vs pure-CPU reference
   rknpu_decode:    { src:'rknpu_decode.c rknpu_mm.c', shapes:[[]] },
+  // M5.1 multi-layer transformer body (N stacked decoder layers) vs pure-CPU reference
+  rknpu_model:     { src:'rknpu_model.c rknpu_mm.c', shapes:[[1],[12]] },
 };
 
 const kernels = Object.entries(SUITE).filter(([k]) => !filter || k.includes(filter));
