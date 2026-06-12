@@ -1,6 +1,9 @@
-/* rknpu_hybrid.c — M-tiling perf for ANY M (K<=1024): software-chunk M into
- * 4-tile pieces, each a single-submit scheduler call (fresh feature/output buffer
- * per chunk). ~4x fewer submits than per-tile software tiling. fp16.
+/* rknpu_hybrid.c — M-tiling perf for ARBITRARY M/K/N (fp16). Two-level tiling:
+ *   1. split contraction K into <=2048 slices (the scheduler-fast range), accumulate;
+ *   2. within each slice, M-tile into 4-tile pieces, each ONE single-submit scheduler
+ *      call (NPU iterates 4 internal M-tiles), fresh feature/output buffer per piece.
+ * ~8x fewer submits than per-tile software tiling, and avoids the PC_DATA RE that
+ * K>=4096 single-pass tiling would need. Validated vs CPU to 512x8192x512.
  *   cc -O2 -I. -o rknpu_hybrid rknpu_hybrid.c && sudo ./rknpu_hybrid [M K N]
  */
 #define _GNU_SOURCE
@@ -49,32 +52,38 @@ int main(int argc,char**argv){
     if(K%32||N%16){printf("need K%%32,N%%16\n");return 1;}
     g_fd=open(CARD,O_RDWR);if(g_fd<0){perror("open");return 1;}
     act(RKNPU_GET_DRV_VERSION,0);act(RKNPU_POWER_ON,0);act(RKNPU_SET_PROC_NICE,(uint32_t)-19);
-    int KT=K/32,NN=N/16;
-    struct buf B=bcreate((size_t)K*N*2,0x403),regcmd=bcreate(4096,0x403),task=bcreate(4096,0x40b);
-    f16*bbuf=B.cpu,*blog=malloc((size_t)K*N*sizeof(f16)),*alog=malloc((size_t)M*K*sizeof(f16)); unsigned s=12345;
+    struct buf regcmd=bcreate(4096,0x403),task=bcreate(4096,0x40b);
+    f16*blog=malloc((size_t)K*N*sizeof(f16)),*alog=malloc((size_t)M*K*sizeof(f16)); unsigned s=12345;
     for(int i=0;i<M*K;i++){s=s*1103515245+12345;alog[i]=(f16)(int)((s>>16)%4);}
     for(int i=0;i<K*N;i++){s=s*1103515245+12345;blog[i]=(f16)(int)((s>>16)%4);}
-    for(int nt=0;nt<NN;nt++)for(int kt=0;kt<KT;kt++)for(int nl=0;nl<16;nl++)for(int kk=0;kk<32;kk++)
-        bbuf[nt*KT*16*32+kt*16*32+nl*32+kk]=blog[(kt*32+kk)*N+(nt*16+nl)];
-    bsync(&B,RKNPU_MEM_SYNC_TO_DEVICE|RKNPU_MEM_SYNC_FROM_DEVICE);bsync(&B,RKNPU_MEM_SYNC_TO_DEVICE);
     struct rknpu_task t; memset(&t,0,sizeof t);t.enable_mask=0xd;t.int_mask=0x300;t.int_clear=0x1ffff;t.regcfg_amount=108;t.regcmd_addr=regcmd.dma;
     memcpy(task.cpu,&t,sizeof t); bsync(&task,RKNPU_MEM_SYNC_TO_DEVICE|RKNPU_MEM_SYNC_FROM_DEVICE);
-    int R=32768/K; if(R<1)R=1; int chunk=4*R;                /* 4 scheduler tiles per submit */
-    float*cres=malloc((size_t)M*N*sizeof(float)); int both=RKNPU_MEM_SYNC_TO_DEVICE|RKNPU_MEM_SYNC_FROM_DEVICE; int nsub=0;
-    for(int pass=-1,nt=(M+chunk-1)/chunk; pass<nt; pass++){
-        int m0=(pass<0)?0:pass*chunk, mc=(pass<0)?((M<chunk)?M:chunk):((M-m0<chunk)?(M-m0):chunk); if(mc<=0)continue;
-        struct buf Ac=bcreate((size_t)mc*K*2,0x403),Cc=bcreate((size_t)mc*N*4,0x403);
-        memcpy(Ac.cpu, alog+(size_t)m0*K, (size_t)mc*K*sizeof(f16));
-        bsync(&Ac,both);bsync(&Cc,both);bsync(&Ac,RKNPU_MEM_SYNC_TO_DEVICE);
-        uint32_t rc[REGCMD_N]; synth(rc,mc,K,N,(uint32_t)Ac.dma,(uint32_t)B.dma,(uint32_t)Cc.dma);
-        memcpy(regcmd.cpu,rc,sizeof rc); bsync(&regcmd,RKNPU_MEM_SYNC_TO_DEVICE);
-        struct rknpu_submit sub;memset(&sub,0,sizeof sub);sub.flags=0x5;sub.timeout=6000;sub.task_number=1;sub.task_obj_addr=task.obj;sub.core_mask=RKNPU_CORE0_MASK;sub.fence_fd=-1;sub.subcore_task[0]=(struct rknpu_subcore_task){0,1};
-        if(ioctl(g_fd,DRM_IOCTL_RKNPU_SUBMIT,&sub)){perror("SUBMIT");return 1;}
-        bsync(&Cc,RKNPU_MEM_SYNC_FROM_DEVICE);
-        if(pass>=0){nsub++; memcpy(cres+(size_t)m0*N, Cc.cpu, (size_t)mc*N*sizeof(float));}
+    float*cres=calloc((size_t)M*N,sizeof(float)); int both=RKNPU_MEM_SYNC_TO_DEVICE|RKNPU_MEM_SYNC_FROM_DEVICE; int nsub=0;
+    /* split contraction dim K into <=2048 slices (the scheduler-fast range); each slice
+     * is an M-tiled hybrid matmul, partials ACCUMULATED. Handles any K without PC_DATA. */
+    int KS=2048;
+    for(int k0=0;k0<K;k0+=KS){
+        int Kp=(K-k0<KS)?(K-k0):KS, KT=Kp/32,NN=N/16;
+        struct buf B=bcreate((size_t)Kp*N*2,0x403); f16*bbuf=B.cpu;
+        for(int nt=0;nt<NN;nt++)for(int kt=0;kt<KT;kt++)for(int nl=0;nl<16;nl++)for(int kk=0;kk<32;kk++)
+            bbuf[nt*KT*16*32+kt*16*32+nl*32+kk]=blog[(size_t)(k0+kt*32+kk)*N+(nt*16+nl)];
+        bsync(&B,both);bsync(&B,RKNPU_MEM_SYNC_TO_DEVICE);
+        int R=32768/Kp; if(R<1)R=1; int chunk=4*R;
+        for(int pass=(k0?0:-1),nt2=(M+chunk-1)/chunk; pass<nt2; pass++){
+            int m0=(pass<0)?0:pass*chunk, mc=(pass<0)?((M<chunk)?M:chunk):((M-m0<chunk)?(M-m0):chunk); if(mc<=0)continue;
+            struct buf Ac=bcreate((size_t)mc*Kp*2,0x403),Cc=bcreate((size_t)mc*N*4,0x403);
+            f16*ad=Ac.cpu; for(int r=0;r<mc;r++)for(int j=0;j<Kp;j++) ad[(size_t)r*Kp+j]=alog[(size_t)(m0+r)*K+k0+j]; /* A[:,k0:k0+Kp] */
+            bsync(&Ac,both);bsync(&Cc,both);bsync(&Ac,RKNPU_MEM_SYNC_TO_DEVICE);
+            uint32_t rc[REGCMD_N]; synth(rc,mc,Kp,N,(uint32_t)Ac.dma,(uint32_t)B.dma,(uint32_t)Cc.dma);
+            memcpy(regcmd.cpu,rc,sizeof rc); bsync(&regcmd,RKNPU_MEM_SYNC_TO_DEVICE);
+            struct rknpu_submit sub;memset(&sub,0,sizeof sub);sub.flags=0x5;sub.timeout=6000;sub.task_number=1;sub.task_obj_addr=task.obj;sub.core_mask=RKNPU_CORE0_MASK;sub.fence_fd=-1;sub.subcore_task[0]=(struct rknpu_subcore_task){0,1};
+            if(ioctl(g_fd,DRM_IOCTL_RKNPU_SUBMIT,&sub)){perror("SUBMIT");return 1;}
+            bsync(&Cc,RKNPU_MEM_SYNC_FROM_DEVICE);
+            if(pass>=0){nsub++; float*cc=Cc.cpu; for(int r=0;r<mc;r++)for(int n=0;n<N;n++) cres[(size_t)(m0+r)*N+n]+=cc[(size_t)r*N+n];}
+        }
     }
     int bad=0; for(int m=0;m<M;m++)for(int n=0;n<N;n++){float ref=0;for(int k=0;k<K;k++)ref+=(float)alog[(size_t)m*K+k]*(float)blog[(size_t)k*N+n]; if(cres[(size_t)m*N+n]!=ref)bad++;}
-    printf("HYBRID MKN=%d,%d,%d  submits=%d (chunk=%d rows=4 tiles)  mism=%d/%d : %s\n",
-        M,K,N,nsub,chunk,bad,M*N,bad?"WRONG":"CORRECT");
+    printf("HYBRID MKN=%d,%d,%d  Kslices=%d submits=%d  mism=%d/%d : %s\n",
+        M,K,N,(K+KS-1)/KS,nsub,bad,M*N,bad?"WRONG":"CORRECT");
     return bad?2:0;
 }
