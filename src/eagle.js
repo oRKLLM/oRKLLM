@@ -136,6 +136,7 @@ async function vulkanDraft(hiddenStates, embdSize, numTokens, k, vocabSize, draf
       // Hyperparameters from the head's config.json (0 → addon default).
       rope_theta: cfg.rope_theta ?? 0,
       rms_norm_eps: cfg.rms_norm_eps ?? 0,
+      head_dim: cfg.head_dim ?? 0,
     });
     return Array.from(ids);
   } catch (e) {

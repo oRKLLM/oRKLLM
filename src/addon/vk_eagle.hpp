@@ -10,10 +10,13 @@
 // are remapped from the compressed draft vocab (32000) to the full target vocab
 // (151936) via the d2t offset table before being returned for NPU verification.
 //
-// Architecture (Qwen3-VL-4B-Instruct_eagle3, confirmed from safetensors):
-//   embd = 2560, draft_vocab = 32000, target_vocab = 151936
-//   attn: 32 q-heads / 8 kv-heads (GQA 4:1), head_dim = 128, input 5120 = 2*2560
-//   mlp:  SwiGLU, intermediate 9728
+// Architecture: an AngelSlim-style EAGLE-3 head — fc (3*embd -> embd), one
+// decoder layer (GQA attn, head_dim from config.json, input 2*embd), SwiGLU MLP,
+// and an LM head over a compressed draft vocab remapped via d2t. All dimensions
+// (embd, draft_vocab, q/kv dims, intermediate) are derived at load time from the
+// head's safetensors tensor shapes, so any EAGLE-3 head loads — not just the
+// Qwen3-VL-4B reference (embd 2560, 32/8 heads, head_dim 128, inter 9728).
+// Weights upload as BF16; F16 heads (e.g. AngelSlim Qwen3-1.7B) are converted.
 //
 // Known v1 approximation: GET_LAST_HIDDEN_LAYER exposes only the target's last
 // layer, but fc was trained on concat(low, mid, high). v1 replicates the last
@@ -67,6 +70,9 @@ public:
     // suit Qwen3-VL-4B_eagle3 but other heads may differ).
     void set_rope_theta(float t) { rope_theta_ = t; }
     void set_rms_eps(float e)     { rms_eps_ = e; }
+    // Per-head attention head_dim (0 → keep the derived/default). Set from the
+    // head's config.json before load_weights; used to split Q/KV into heads.
+    void set_head_dim(uint32_t hd) { if (hd) cfg_head_dim_ = hd; }
 
     // Parse the draft-head safetensors into UMA GPU buffers and open the
     // embeddings file for per-row reads. Cached: a second call with the same
@@ -110,17 +116,19 @@ public:
 private:
     VkEagleDraftHead() = default;
 
-    // ── Model dimensions (fixed for Qwen3-VL-4B-Instruct_eagle3) ─────────────
-    static constexpr uint32_t EMBD        = 2560;
-    static constexpr uint32_t DRAFT_VOCAB = 32000;
-    static constexpr uint32_t ATTN_IN     = 5120;   // 2 * EMBD
-    static constexpr uint32_t Q_DIM       = 4096;   // 32 * 128
-    static constexpr uint32_t KV_DIM      = 1024;   // 8  * 128
-    static constexpr uint32_t HEAD_DIM    = 128;
-    static constexpr uint32_t N_Q_HEADS   = 32;
-    static constexpr uint32_t N_KV_HEADS  = 8;
-    static constexpr uint32_t GQA_GROUP   = N_Q_HEADS / N_KV_HEADS;  // 4
-    static constexpr uint32_t INTER       = 9728;
+    // ── Model dimensions ─────────────────────────────────────────────────────
+    // Defaults suit Qwen3-VL-4B-Instruct_eagle3 but are overwritten in load_head()
+    // from the head's actual safetensors tensor shapes, so any EAGLE-3 head loads.
+    uint32_t EMBD        = 2560;
+    uint32_t DRAFT_VOCAB = 32000;
+    uint32_t ATTN_IN     = 5120;   // 2 * EMBD
+    uint32_t Q_DIM       = 4096;   // N_Q_HEADS * HEAD_DIM
+    uint32_t KV_DIM      = 1024;   // N_KV_HEADS * HEAD_DIM
+    uint32_t HEAD_DIM    = 128;
+    uint32_t N_Q_HEADS   = 32;
+    uint32_t N_KV_HEADS  = 8;
+    uint32_t GQA_GROUP   = 4;      // N_Q_HEADS / N_KV_HEADS
+    uint32_t INTER       = 9728;
     // Hyperparameter defaults (Qwen3-VL-4B_eagle3 config.json). Overridable at
     // run time via set_rope_theta / set_rms_eps from the head's config.json.
     // Note: Qwen3-VL uses interleaved M-RoPE, but for text-only draft positions
@@ -151,6 +159,7 @@ private:
     // Runtime-overridable hyperparameters (default to the constants above).
     float rope_theta_ = ROPE_THETA;
     float rms_eps_    = RMS_EPS;
+    uint32_t cfg_head_dim_ = 0;   // from config.json (0 → derive/default 128)
 
     struct PushC { uint32_t u0; uint32_t u1; float f0; };
 
@@ -172,6 +181,7 @@ private:
     std::vector<int64_t> d2t_;          // draft → target offset table
     bool                 d2t_is_offset_ = true;
     int                  embed_fd_ = -1;
+    bool                 embed_is_f16_ = false; // embed_tokens dtype: F16 vs BF16
     size_t               embed_data_off_ = 0;   // byte offset of embed tensor data
     uint32_t             embed_rows_ = 0;
     std::string          loaded_head_path_, loaded_embed_path_;
@@ -570,16 +580,42 @@ private:
         return out;
     }
 
-    // Upload a BF16 tensor from file into a fresh UMA buffer.
-    GpuBuf upload_bf16(std::ifstream& f, size_t data_start, const TensorInfo& ti,
-                       size_t expect_elems) {
-        if (ti.dtype != "BF16") throw std::runtime_error("expected BF16 tensor");
+    static float f16_to_f32(uint16_t h) {
+        uint32_t s = (h >> 15) & 1, e = (h >> 10) & 0x1f, m = h & 0x3ff, out;
+        if (e == 0)      { if (m == 0) out = s << 31;                       // ±0
+                           else { e = 127 - 15 + 1; while (!(m & 0x400)) { m <<= 1; e--; } m &= 0x3ff;
+                                  out = (s << 31) | (e << 23) | (m << 13); } } // subnormal
+        else if (e == 0x1f) out = (s << 31) | 0x7f800000 | (m << 13);       // inf/nan
+        else out = (s << 31) | ((e - 15 + 127) << 23) | (m << 13);
+        float f; std::memcpy(&f, &out, 4); return f;
+    }
+    static uint16_t f32_to_bf16(float f) {
+        uint32_t u; std::memcpy(&u, &f, 4);
+        // round-to-nearest-even truncation to the high 16 bits
+        return (uint16_t)((u + 0x7fff + ((u >> 16) & 1)) >> 16);
+    }
+
+    // Upload a weight tensor into a fresh UMA buffer as BF16 (the GEMV shader's
+    // weight format). Accepts BF16 (verbatim copy) or F16 (converted to BF16 —
+    // some EAGLE-3 heads, e.g. AngelSlim Qwen3-1.7B, ship F16; the 3-bit mantissa
+    // loss is acceptable for a draft head whose output is verified on the NPU).
+    GpuBuf upload_weight(std::ifstream& f, size_t data_start, const TensorInfo& ti,
+                         size_t expect_elems) {
+        const bool isBf16 = (ti.dtype == "BF16");
+        const bool isF16  = (ti.dtype == "F16");
+        if (!isBf16 && !isF16) throw std::runtime_error("weight dtype " + ti.dtype + " not supported (need BF16/F16)");
         size_t bytes = ti.end - ti.begin;
-        if (bytes != expect_elems * 2)
-            throw std::runtime_error("tensor size mismatch");
+        if (bytes != expect_elems * 2) throw std::runtime_error("tensor size mismatch");
         GpuBuf gb = uma_buf(bytes);
         f.seekg(data_start + ti.begin);
-        f.read(reinterpret_cast<char*>(gb.ptr), bytes);
+        if (isBf16) {
+            f.read(reinterpret_cast<char*>(gb.ptr), bytes);
+        } else {
+            std::vector<uint16_t> tmp(expect_elems);
+            f.read(reinterpret_cast<char*>(tmp.data()), bytes);
+            uint16_t* dst = reinterpret_cast<uint16_t*>(gb.ptr);
+            for (size_t i = 0; i < expect_elems; i++) dst[i] = f32_to_bf16(f16_to_f32(tmp[i]));
+        }
         if (!f) throw std::runtime_error("tensor read failed");
         return gb;
     }
@@ -596,22 +632,46 @@ private:
             return it->second;
         };
 
+        // ── Derive model dimensions from the head's tensor shapes ──────────────
+        // (no hard-coding to one head; safetensors weights are [out, in]).
+        auto dim = [&](const char* k, int axis) -> uint32_t {
+            TensorInfo& ti = need(k);
+            if ((int)ti.shape.size() <= axis) throw std::runtime_error(std::string(k) + ": unexpected rank");
+            return (uint32_t)ti.shape[axis];
+        };
+        EMBD        = dim("fc.weight", 0);                              // fc: [EMBD, 3*EMBD]
+        ATTN_IN     = dim("midlayer.self_attn.q_proj.weight", 1);      // [Q_DIM, 2*EMBD]
+        Q_DIM       = dim("midlayer.self_attn.q_proj.weight", 0);
+        KV_DIM      = dim("midlayer.self_attn.k_proj.weight", 0);
+        INTER       = dim("midlayer.mlp.gate_proj.weight", 0);          // [INTER, EMBD]
+        DRAFT_VOCAB = dim("lm_head.weight", 0);                         // [DRAFT_VOCAB, EMBD]
+        HEAD_DIM    = cfg_head_dim_ ? cfg_head_dim_ : 128;
+        if (Q_DIM % HEAD_DIM || KV_DIM % HEAD_DIM)
+            throw std::runtime_error("Q/KV dim not a multiple of head_dim");
+        N_Q_HEADS   = Q_DIM / HEAD_DIM;
+        N_KV_HEADS  = KV_DIM / HEAD_DIM;
+        if (!N_KV_HEADS || N_Q_HEADS % N_KV_HEADS) throw std::runtime_error("bad GQA head ratio");
+        GQA_GROUP   = N_Q_HEADS / N_KV_HEADS;
+        if (ATTN_IN != 2 * EMBD) throw std::runtime_error("attn input != 2*EMBD");
+        std::fprintf(stderr, "[Eagle-3] head dims: embd=%u attn_in=%u q=%u kv=%u heads=%u/%u hd=%u inter=%u vocab=%u\n",
+                     EMBD, ATTN_IN, Q_DIM, KV_DIM, N_Q_HEADS, N_KV_HEADS, HEAD_DIM, INTER, DRAFT_VOCAB);
+
         // Free any previously-loaded weights (model swap)
         free_weights();
 
-        w_fc_   = upload_bf16(f, data_start, need("fc.weight"),   (size_t)2560 * 7680);
-        w_q_    = upload_bf16(f, data_start, need("midlayer.self_attn.q_proj.weight"), (size_t)4096 * 5120);
-        w_k_    = upload_bf16(f, data_start, need("midlayer.self_attn.k_proj.weight"), (size_t)1024 * 5120);
-        w_v_    = upload_bf16(f, data_start, need("midlayer.self_attn.v_proj.weight"), (size_t)1024 * 5120);
-        w_o_    = upload_bf16(f, data_start, need("midlayer.self_attn.o_proj.weight"), (size_t)2560 * 4096);
-        w_gate_ = upload_bf16(f, data_start, need("midlayer.mlp.gate_proj.weight"),    (size_t)9728 * 2560);
-        w_up_   = upload_bf16(f, data_start, need("midlayer.mlp.up_proj.weight"),      (size_t)9728 * 2560);
-        w_down_ = upload_bf16(f, data_start, need("midlayer.mlp.down_proj.weight"),    (size_t)2560 * 9728);
-        w_lm_   = upload_bf16(f, data_start, need("lm_head.weight"),                   (size_t)32000 * 2560);
-        n_input_    = upload_bf16(f, data_start, need("midlayer.input_layernorm.weight"),         2560);
-        n_hidden_   = upload_bf16(f, data_start, need("midlayer.hidden_norm.weight"),             2560);
-        n_postattn_ = upload_bf16(f, data_start, need("midlayer.post_attention_layernorm.weight"),2560);
-        n_final_    = upload_bf16(f, data_start, need("norm.weight"),                             2560);
+        w_fc_   = upload_weight(f, data_start, need("fc.weight"),   (size_t)EMBD * (3 * EMBD));
+        w_q_    = upload_weight(f, data_start, need("midlayer.self_attn.q_proj.weight"), (size_t)Q_DIM * ATTN_IN);
+        w_k_    = upload_weight(f, data_start, need("midlayer.self_attn.k_proj.weight"), (size_t)KV_DIM * ATTN_IN);
+        w_v_    = upload_weight(f, data_start, need("midlayer.self_attn.v_proj.weight"), (size_t)KV_DIM * ATTN_IN);
+        w_o_    = upload_weight(f, data_start, need("midlayer.self_attn.o_proj.weight"), (size_t)EMBD * Q_DIM);
+        w_gate_ = upload_weight(f, data_start, need("midlayer.mlp.gate_proj.weight"),    (size_t)INTER * EMBD);
+        w_up_   = upload_weight(f, data_start, need("midlayer.mlp.up_proj.weight"),      (size_t)INTER * EMBD);
+        w_down_ = upload_weight(f, data_start, need("midlayer.mlp.down_proj.weight"),    (size_t)EMBD * INTER);
+        w_lm_   = upload_weight(f, data_start, need("lm_head.weight"),                   (size_t)DRAFT_VOCAB * EMBD);
+        n_input_    = upload_weight(f, data_start, need("midlayer.input_layernorm.weight"),         EMBD);
+        n_hidden_   = upload_weight(f, data_start, need("midlayer.hidden_norm.weight"),             EMBD);
+        n_postattn_ = upload_weight(f, data_start, need("midlayer.post_attention_layernorm.weight"),EMBD);
+        n_final_    = upload_weight(f, data_start, need("norm.weight"),                             EMBD);
 
         // d2t: I64 [32000]
         {
@@ -648,7 +708,9 @@ private:
             }
         }
         if (!ti) throw std::runtime_error("embeddings file has no embed_tokens.weight");
-        if (ti->dtype != "BF16") throw std::runtime_error("embeddings not BF16");
+        if (ti->dtype != "BF16" && ti->dtype != "F16")
+            throw std::runtime_error("embeddings dtype " + ti->dtype + " not supported (need BF16/F16)");
+        embed_is_f16_ = (ti->dtype == "F16");
         if (ti->shape.size() != 2 || ti->shape[1] != (int64_t)EMBD)
             throw std::runtime_error("embeddings shape mismatch");
         embed_rows_     = (uint32_t)ti->shape[0];
@@ -659,7 +721,12 @@ private:
 
     void alloc_scratch() {
         free_scratch();
-        s_in_     = uma_buf(8192 * 4);   // up to 7680 floats (fc input)
+        // s_in_ is reused as the input vector for fc (3*EMBD), attn (2*EMBD) and
+        // o_proj (Q_DIM) GEMVs — size it to the largest of those.
+        uint32_t in_max = 3 * EMBD;
+        if (ATTN_IN > in_max) in_max = ATTN_IN;
+        if (Q_DIM   > in_max) in_max = Q_DIM;
+        s_in_     = uma_buf((size_t)in_max * 4);
         s_fc_     = uma_buf(EMBD * 4);
         s_enorm_  = uma_buf(EMBD * 4);
         s_hnorm_  = uma_buf(EMBD * 4);
@@ -686,7 +753,8 @@ private:
         off_t off = (off_t)embed_data_off_ + (off_t)token_id * EMBD * 2;
         ssize_t got = ::pread(embed_fd_, raw.data(), EMBD * 2, off);
         if (got != (ssize_t)(EMBD * 2)) { std::memset(out, 0, EMBD * sizeof(float)); return; }
-        for (uint32_t i = 0; i < EMBD; i++) out[i] = bf16_to_f32(raw[i]);
+        if (embed_is_f16_) for (uint32_t i = 0; i < EMBD; i++) out[i] = f16_to_f32(raw[i]);
+        else               for (uint32_t i = 0; i < EMBD; i++) out[i] = bf16_to_f32(raw[i]);
     }
 
     static float bf16_to_f32(uint16_t b) {

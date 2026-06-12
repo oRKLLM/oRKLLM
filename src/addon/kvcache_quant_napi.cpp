@@ -587,18 +587,20 @@ public:
                      std::vector<float> hidden, uint32_t embd, uint32_t num_tokens,
                      uint32_t k, int32_t last_token_id, uint32_t ctx_len,
                      std::string head_path, std::string embed_path,
-                     double rope_theta, double rms_norm_eps)
+                     double rope_theta, double rms_norm_eps, uint32_t head_dim)
         : Napi::AsyncWorker(env), def_(def), hidden_(std::move(hidden)),
           embd_(embd), num_tokens_(num_tokens), k_(k),
           last_token_id_(last_token_id), ctx_len_(ctx_len),
           head_path_(std::move(head_path)), embed_path_(std::move(embed_path)),
-          rope_theta_(rope_theta), rms_norm_eps_(rms_norm_eps) {}
+          rope_theta_(rope_theta), rms_norm_eps_(rms_norm_eps), head_dim_(head_dim) {}
 
     void Execute() override {
 #ifdef HAS_VULKAN
         auto& head = VkEagleDraftHead::get();
         if (!head.ok())
             return SetError("Eagle-3 Vulkan GPU not available");
+        // head_dim is consumed during dimension derivation, so set it BEFORE load.
+        if (head_dim_ > 0) head.set_head_dim(head_dim_);
         if (!head.load_weights(head_path_, embed_path_))
             return SetError("Eagle-3 draft head weights failed to load");
         // 0 → keep the harness's built-in default for that hyperparameter.
@@ -626,6 +628,7 @@ private:
     uint32_t ctx_len_;
     std::string head_path_, embed_path_;
     double rope_theta_, rms_norm_eps_;
+    uint32_t head_dim_;
     std::vector<int32_t> result_;
 };
 
@@ -645,9 +648,10 @@ static Napi::Value JsEagleDraftTokens(const Napi::CallbackInfo& info) {
     std::string embed = opts.Get("embeddings_path").As<Napi::String>().Utf8Value();
     double theta = opts.Has("rope_theta")   ? opts.Get("rope_theta").As<Napi::Number>().DoubleValue()   : 0.0;
     double eps   = opts.Has("rms_norm_eps") ? opts.Get("rms_norm_eps").As<Napi::Number>().DoubleValue() : 0.0;
+    uint32_t headDim = opts.Has("head_dim") ? opts.Get("head_dim").As<Napi::Number>().Uint32Value()     : 0;
 
     (new EagleDraftWorker(env, def, std::move(hidden), embd, ntok, k, last, ctx,
-                          std::move(head), std::move(embed), theta, eps))->Queue();
+                          std::move(head), std::move(embed), theta, eps, headDim))->Queue();
     return def.Promise();
 }
 
