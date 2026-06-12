@@ -50,6 +50,8 @@ const SUITE = {
   test_mm:         { src:'test_mm.c rknpu_mm.c', shapes:[[]] },   // self-contained matrix, no args
   // M4.3 full transformer decoder layer (NPU matmul + CPU ops) vs pure-CPU reference
   rknpu_layer:     { src:'rknpu_layer.c rknpu_mm.c', shapes:[[]] },
+  // M4.4 incremental decode with KV cache (M=1 projections) vs pure-CPU reference
+  rknpu_decode:    { src:'rknpu_decode.c rknpu_mm.c', shapes:[[]] },
 };
 
 const kernels = Object.entries(SUITE).filter(([k]) => !filter || k.includes(filter));
