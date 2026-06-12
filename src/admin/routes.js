@@ -1017,13 +1017,21 @@ export default async function adminRoutes(fastify, options) {
       if (!res.ok) return reply.status(res.status).send({ error: `HF API error: ${res.status}` });
       const data = await res.json();
       // Downloadable: weight files (.rkllm NPU models/heads, .safetensors Eagle-3
-      // heads + base models, .gguf alt heads) plus the .json metadata that base
-      // models and Eagle-3 heads need (config.json carries the head's
-      // hyperparameters; model.safetensors.index.json maps a base model's shards).
-      const files = (data.siblings ?? [])
+      // heads + base models, .gguf alt heads, .bin/.pt/.pth PyTorch heads — some
+      // AngelSlim Eagle-3 heads ship only as pytorch_model.bin and need a local
+      // convert to safetensors before the Vulkan loader can read them) plus the
+      // .json metadata that base models and Eagle-3 heads need (config.json
+      // carries the head's hyperparameters; model.safetensors.index.json maps a
+      // base model's shards).
+      const siblings = data.siblings ?? [];
+      const hasSafetensors = siblings.some(f => /\.safetensors$/.test(f.rfilename || ''));
+      const files = siblings
         .filter(f => {
           const n = f.rfilename || '';
-          return /\.(rkllm|gguf|safetensors)$/.test(n) || /\.json$/.test(n);
+          if (/\.(rkllm|gguf|safetensors)$/.test(n) || /\.json$/.test(n)) return true;
+          // PyTorch weights only when the repo ships no safetensors — avoids
+          // double-downloading base models that publish both formats.
+          return /\.(bin|pt|pth)$/.test(n) && !hasSafetensors;
         })
         .map(f => ({ name: f.rfilename, size: f.size ?? null }));
       return { repoId, files };
