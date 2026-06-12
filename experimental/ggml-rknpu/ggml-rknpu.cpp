@@ -21,10 +21,32 @@
 #include <cstdlib>
 #include <vector>
 #include <mutex>
+#include <unordered_map>
 
 struct ggml_backend_rknpu_context {
     int dummy = 0;
 };
+
+// Dequantize + transpose + zero-pad a weight plane [K,N] -> fp16 [Kp x Np] into
+// scratch. (No cross-call cache: keying by data pointer is unsafe because ggml
+// reuses leaf/compute buffers across tensors. A safe per-weight cache belongs in
+// a buffer/extra hook — see the wiki worklist. The benchmark measures steady-state
+// NPU matmul cost directly, with the weight pre-loaded, to avoid this overhead.)
+static const ggml_fp16_t * rk_prepare_B(const struct ggml_tensor * src0, const char * plane,
+                                        int64_t K, int64_t N, int64_t Kp, int64_t Np,
+                                        std::vector<ggml_fp16_t> & scratch) {
+    scratch.assign((size_t) Kp * Np, ggml_fp32_to_fp16(0.0f));  // zero-pad
+    const ggml_type_traits * tt = ggml_get_type_traits(src0->type);
+    std::vector<float> wf(K);
+    for (int64_t n = 0; n < N; n++) {
+        const char * wrow = plane + n*src0->nb[1];
+        if (src0->type == GGML_TYPE_F32)      for (int64_t k = 0; k < K; k++) wf[k] = ((const float *) wrow)[k];
+        else if (src0->type == GGML_TYPE_F16) for (int64_t k = 0; k < K; k++) wf[k] = ggml_fp16_to_fp32(((const ggml_fp16_t *) wrow)[k]);
+        else                                  tt->to_float(wrow, wf.data(), K);
+        for (int64_t k = 0; k < K; k++) scratch[k*Np + n] = ggml_fp32_to_fp16(wf[k]);
+    }
+    return scratch.data();
+}
 
 static inline int64_t rk_align(int64_t x, int64_t a) { return (x + a - 1) / a * a; }
 
@@ -67,6 +89,7 @@ static void ggml_backend_rknpu_mul_mat(ggml_backend_rknpu_context * /*ctx*/, str
     rknn_tensor_mem * A = rknn_create_mem(mctx, io.A.size);
     rknn_tensor_mem * B = rknn_create_mem(mctx, io.B.size);
     rknn_tensor_mem * C = rknn_create_mem(mctx, io.C.size);
+    std::vector<ggml_fp16_t> b_scratch;  // used when the weight isn't cacheable
 
     for (int64_t i3 = 0; i3 < dst->ne[3]; i3++) {
         for (int64_t i2 = 0; i2 < dst->ne[2]; i2++) {
@@ -81,24 +104,12 @@ static void ggml_backend_rknpu_mul_mat(ggml_backend_rknpu_context * /*ctx*/, str
                 const char * row = s1 + m*src1->nb[1];
                 for (int64_t k = 0; k < K; k++) a[m*Kp + k] = ggml_fp32_to_fp16(rk_get_f32(row, k, src1->type));
             }
-            // B[Kp,Np] fp16  <- src0 plane [K,N] transposed (zero-padded).
-            // src0 may be F16/F32 or block-quantized (q4_0/q8_0/...) — dequantize
-            // each weight row to fp32 via the type's to_float, then to fp16.
+            // B[Kp,Np] fp16  <- src0 plane [K,N] transposed (zero-padded), cached
+            // per weight when possible (F16/F32 or any block-quant via to_float).
+            const ggml_fp16_t * bsrc = rk_prepare_B(src0, s0, K, N, Kp, Np, b_scratch);
             ggml_fp16_t * b = (ggml_fp16_t *) B->virt_addr;
             memset(b, 0, io.B.size);
-            const ggml_type_traits * tt = ggml_get_type_traits(src0->type);
-            std::vector<float> wrowf(K);
-            for (int64_t n = 0; n < N; n++) {
-                const char * wrow = s0 + n*src0->nb[1];
-                if (src0->type == GGML_TYPE_F32) {
-                    for (int64_t k = 0; k < K; k++) wrowf[k] = ((const float *) wrow)[k];
-                } else if (src0->type == GGML_TYPE_F16) {
-                    for (int64_t k = 0; k < K; k++) wrowf[k] = ggml_fp16_to_fp32(((const ggml_fp16_t *) wrow)[k]);
-                } else {
-                    tt->to_float(wrow, wrowf.data(), K);   // block-quantized weight row
-                }
-                for (int64_t k = 0; k < K; k++) b[k*Np + n] = ggml_fp32_to_fp16(wrowf[k]);
-            }
+            memcpy(b, bsrc, (size_t) Kp * Np * sizeof(ggml_fp16_t));
 
             rknn_matmul_set_io_mem(mctx, A, &io.A);
             rknn_matmul_set_io_mem(mctx, B, &io.B);
