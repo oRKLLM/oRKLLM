@@ -16,14 +16,13 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include "rknpu_ioctl.h"
-#include "regcmd_array.h"   /* static const uint32_t REGCMD[216]; */
+#include "regcmd_array_4x32x16.h"   /* static const uint32_t REGCMD[216]; */
 
-#define RENDER "/dev/dri/renderD129"
+/* NB: the NPU job only runs via the PRIMARY (card) node — the render node
+ * (renderD129) accepts the buffers/submit but the job never executes (0 tasks,
+ * timeout). The card node is the one that works for raw RKNPU_SUBMIT. */
+#define RENDER "/dev/dri/card1"
 #define PAGE 4096
-
-/* generic DRM PRIME export (dmabuf) — librknnrt does this per buffer */
-struct drm_prime_handle { uint32_t handle; uint32_t flags; int32_t fd; };
-#define DRM_IOCTL_PRIME_HANDLE_TO_FD _IOWR('d', 0x2d, struct drm_prime_handle)
 
 typedef _Float16 f16;
 
@@ -40,12 +39,7 @@ static struct buf bcreate(uint32_t flags) {
     void *p = mmap(NULL, PAGE, PROT_READ|PROT_WRITE, MAP_SHARED, g_fd, m.offset);
     if (p == MAP_FAILED) { perror("mmap"); _exit(1); }
     struct buf b = { c.handle, c.dma_addr, c.obj_addr, p };
-    /* PRIME-export the buffer (dmabuf), as librknnrt does — may set up DMA mapping */
-    struct drm_prime_handle ph; memset(&ph,0,sizeof ph); ph.handle = c.handle; ph.flags = O_RDWR|O_CLOEXEC;
-    if (ioctl(g_fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &ph)==0)
-        printf("  alloc handle=%u dma=0x%llx prime_fd=%d\n", b.handle, (unsigned long long)b.dma, ph.fd);
-    else
-        printf("  alloc handle=%u dma=0x%llx (prime export failed)\n", b.handle, (unsigned long long)b.dma);
+    printf("  alloc handle=%u dma=0x%llx flags=0x%x\n", b.handle, (unsigned long long)b.dma, flags);
     return b;
 }
 
@@ -87,25 +81,27 @@ int main(void) {
     do_action(RKNPU_SET_PROC_NICE, (uint32_t)-19);
     do_action(RKNPU_GET_IOMMU_EN, 0);
 
-    /* same alloc order as librknnrt: regcmd, task, B, A, scratch, C */
+    /* librknnrt-style cacheable buffers + explicit sync; task adds KERNEL_MAPPING */
     printf("allocating buffers...\n");
-    struct buf regcmd = bcreate(0x403);
-    struct buf task   = bcreate(0x40b);
-    struct buf B      = bcreate(0x403);
-    struct buf A      = bcreate(0x403);
-    struct buf scratch= bcreate(0x403); (void)scratch;
-    struct buf C      = bcreate(0x403);
+    uint32_t DF = 0x403;   /* NON_CONTIGUOUS|CACHEABLE|IOMMU_LIMIT_IOVA_ALIGNMENT */
+    uint32_t TF = 0x40b;   /* + KERNEL_MAPPING */
+    struct buf regcmd = bcreate(DF);
+    struct buf task   = bcreate(TF);
+    struct buf B      = bcreate(DF);
+    struct buf A      = bcreate(DF);
+    struct buf scratch= bcreate(DF); (void)scratch;
+    struct buf C      = bcreate(DF);
 
     /* regcmd: copy + patch A/B/C addresses to actual IOVAs */
-    uint32_t rc[216]; memcpy(rc, REGCMD, sizeof rc);
-    patch_addr(rc, 216, 0x0201, 0x1070, (uint32_t)A.dma);
-    patch_addr(rc, 216, 0x0201, 0x1110, (uint32_t)B.dma);
-    patch_addr(rc, 216, 0x1001, 0x4020, (uint32_t)C.dma);
+    uint32_t rc[REGCMD_N]; memcpy(rc, REGCMD, sizeof rc);
+    patch_addr(rc, REGCMD_N, 0x0201, 0x1070, (uint32_t)A.dma);
+    patch_addr(rc, REGCMD_N, 0x0201, 0x1110, (uint32_t)B.dma);
+    patch_addr(rc, REGCMD_N, 0x1001, 0x4020, (uint32_t)C.dma);
     memcpy(regcmd.cpu, rc, sizeof rc);
 
     /* task descriptor: one rknpu_task pointing at regcmd */
     struct rknpu_task t; memset(&t,0,sizeof t);
-    t.enable_mask = 0x0d; t.int_mask = 0x300; t.int_clear = 0x1ffff; t.int_status = 0x100;
+    t.enable_mask = 0x0d; t.int_mask = 0x300; t.int_clear = 0x1ffff; t.int_status = 0x0;
     t.regcfg_amount = 108; t.regcfg_offset = 0; t.regcmd_addr = regcmd.dma;
     memcpy(task.cpu, &t, sizeof t);
 
@@ -126,12 +122,12 @@ int main(void) {
 
     /* submit (mirrors the captured rknpu_submit) */
     struct rknpu_submit s; memset(&s,0,sizeof s);
-    s.flags = 0x5; s.timeout = 6000; s.task_start = 0; s.task_number = 3; s.task_counter = 3;
+    /* single-task submit, per mtx512's proven raw-regcmd reference: task_number=1,
+     * only subcore[0] populated (cores 1,2 zeroed), counter=0. */
+    s.flags = 0x5; s.timeout = 6000; s.task_start = 0; s.task_number = 1; s.task_counter = 0;
     s.priority = 0; s.task_obj_addr = task.obj; s.iommu_domain_id = 0; s.core_mask = RKNPU_CORE0_MASK;
     s.fence_fd = -1;
     s.subcore_task[0] = (struct rknpu_subcore_task){0,1};
-    s.subcore_task[1] = (struct rknpu_subcore_task){0,1};
-    s.subcore_task[2] = (struct rknpu_subcore_task){0,1};
     printf("submitting...\n");
     if (ioctl(g_fd, DRM_IOCTL_RKNPU_SUBMIT, &s)) { perror("SUBMIT"); return 1; }
     printf("submit OK, hw_elapse=%lld us\n", (long long)s.hw_elapse_time);
