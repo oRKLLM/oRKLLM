@@ -323,6 +323,36 @@ function readMemBandwidth() {
   return null;
 }
 
+// ── DRAM DVFS governor / throttle check ──────────────────────────────────────
+// LLM *decode* is memory-bandwidth-bound. On many RK3576/RK3588 boards the
+// default DMC devfreq governor (e.g. dmc_ondemand) does NOT ramp the DDR clock
+// for NPU memory traffic, leaving it parked at the lowest step — which roughly
+// HALVES decode throughput (measured: 528 MHz → 5.5 tok/s vs 2112 MHz →
+// 11.2 tok/s for Qwen3-1.7B on RK3588). Pinning the governor to `performance`
+// fixes it. We surface a soft warning so operators don't lose ~2× silently.
+// Returns { governor, curFreqMhz, maxFreqMhz, throttled } or null (no dmc node /
+// non-Linux). `throttled` = not pinned to performance AND currently below max.
+export function getDramStatus() {
+  if (os.platform() !== 'linux') return null;
+  const governor = readFile('/sys/class/devfreq/dmc/governor');
+  if (governor == null) return null;
+  const gov = governor.trim();
+  const cur = readIntFile('/sys/class/devfreq/dmc/cur_freq');
+  let max = readIntFile('/sys/class/devfreq/dmc/max_freq');
+  if (max == null) {
+    const avail = readFile('/sys/class/devfreq/dmc/available_frequencies');
+    if (avail) {
+      const freqs = avail.trim().split(/\s+/).map((n) => parseInt(n, 10)).filter(Number.isFinite);
+      if (freqs.length) max = Math.max(...freqs);
+    }
+  }
+  const curFreqMhz = cur != null ? Math.round(cur / 1e6) : null;
+  const maxFreqMhz = max != null ? Math.round(max / 1e6) : null;
+  const throttled =
+    gov !== 'performance' && curFreqMhz != null && maxFreqMhz != null && curFreqMhz < maxFreqMhz;
+  return { governor: gov, curFreqMhz, maxFreqMhz, throttled };
+}
+
 function mockFan(temperature) {
   // Fan ramps with SoC temperature — idle ~30%, full near 80°C.
   const pct = clampPct(((temperature - 35) / 45) * 100);

@@ -10,6 +10,27 @@
   <v-main class="bg-slate-page fill-height">
     <v-container fluid class="pt-6 px-6 fill-height align-start">
 
+      <!-- DRAM throttle warning: decode is bandwidth-bound; a parked DDR clock ~halves it -->
+      <v-alert
+        v-if="status.dram && status.dram.throttled"
+        type="warning"
+        variant="tonal"
+        density="comfortable"
+        class="mb-6 w-100"
+        icon="mdi-memory"
+      >
+        <div class="font-weight-bold">DRAM is running below its maximum clock ({{ status.dram.curFreqMhz }} / {{ status.dram.maxFreqMhz }} MHz)</div>
+        <div class="text-body-2 mt-1">
+          <template v-if="status.dram.management && status.dram.management.failed">
+            oRKLLM tried to pin the memory controller to <code>performance</code> but couldn't: <strong>{{ status.dram.management.reason }}</strong>. Decode is memory-bandwidth-bound, so a parked DDR clock can roughly <strong>halve token-generation speed</strong>. Run oRKLLM with privileges to let it manage governors automatically, or apply it manually:
+          </template>
+          <template v-else>
+            The DDR DVFS governor is <code>{{ status.dram.governor }}</code> and auto-management is off. On many RK3576/RK3588 boards this doesn't ramp DRAM for NPU traffic, which can roughly <strong>halve token-generation speed</strong> (decode is memory-bandwidth-bound). Enable <em>Auto performance governor</em> in Settings, or pin it manually:
+          </template>
+          <pre class="mt-2 pa-2 rounded text-caption" style="background: rgba(0,0,0,0.25); overflow-x:auto;">echo performance | sudo tee /sys/class/devfreq/dmc/governor</pre>
+        </div>
+      </v-alert>
+
       <!-- Serving Stats Cards Row -->
       <v-card class="glass-card pa-4 mb-6 w-100">
         <div class="d-flex align-center justify-space-between mb-4 flex-wrap gap-2">

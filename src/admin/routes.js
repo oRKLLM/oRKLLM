@@ -16,6 +16,8 @@ import {
 } from '../db.js';
 import { v4 as uuidv4 } from 'uuid';
 import { isSpvAvailable } from '../spv_sync.js';
+import { getDramStatus } from '../monitor.js';
+import { getState as getPerfState } from '../perf_governor.js';
 import { fetchBaseEmbeddings, extractLocalEmbeddings, localBaseHasEmbeddings } from '../hf_embeddings.js';
 import { convertPtToSafetensors } from '../pt_to_safetensors.js';
 
@@ -241,6 +243,8 @@ export default async function adminRoutes(fastify, options) {
     status.platform = getPlatform();
     status.npuCores = getNpuCoreCount();
     status.spvAvailable = isSpvAvailable(); // Eagle-3 'vulkan' draft gated on this
+    const dram = getDramStatus(); // null off-board; { governor, curFreqMhz, maxFreqMhz, throttled }
+    status.dram = dram ? { ...dram, management: getPerfState() } : null;
     return status;
   });
 
@@ -433,6 +437,7 @@ export default async function adminRoutes(fastify, options) {
         langfusePublicKey:  dbGetSetting('langfuse_public_key') ?? '',
         langfuseSecretKey:  dbGetSetting('langfuse_secret_key') ?? '',
         mcpInferenceEnabled: dbGetSetting('mcp_inference_enabled') === '1',
+        managePerformance: (dbGetSetting('manage_performance') ?? '1') === '1',
       },
       cacheStats: getCacheStats()
     };
@@ -445,7 +450,7 @@ export default async function adminRoutes(fastify, options) {
             kvCacheQuant,
             localAuthDisabled, trustedProxy, autoDownloadRuntimes, autoDownloadSpv, npuPoolSize,
             langfuseEnabled, langfuseBaseUrl, langfusePublicKey, langfuseSecretKey,
-            mcpInferenceEnabled,
+            mcpInferenceEnabled, managePerformance,
           } = request.body || {};
     if (typeof idleTimeoutMinutes === 'number') {
       pool.setIdleTimeout(idleTimeoutMinutes);
@@ -476,6 +481,13 @@ export default async function adminRoutes(fastify, options) {
     if (typeof langfuseSecretKey === 'string' && langfuseSecretKey)
       dbSetSetting('langfuse_secret_key', langfuseSecretKey);
     if (typeof mcpInferenceEnabled === 'boolean') dbSetSetting('mcp_inference_enabled', mcpInferenceEnabled ? '1' : '0');
+    if (typeof managePerformance === 'boolean') {
+      dbSetSetting('manage_performance', managePerformance ? '1' : '0');
+      // Apply immediately if turning on while a model is loaded; restore if turning off.
+      const { applyPerformance, restoreGovernor } = await import('../perf_governor.js');
+      if (managePerformance) { if (pool.getStatus().isLoaded) applyPerformance(); }
+      else restoreGovernor();
+    }
     logAudit(request, 'settings_change', null);
     return { success: true };
   });

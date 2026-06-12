@@ -4,6 +4,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { MODELS_DIR, LIBRKLLMRT_PATH, RUNTIMES_DIR, parseRuntimeVersion, getNpuCoreCount } from './config.js';
 import { dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings } from './db.js';
+import { applyPerformance, restoreGovernor } from './perf_governor.js';
 import { syncRuntimes, hasRuntime } from './runtime_sync.js';
 import { eagle3Generate } from './eagle.js';
 
@@ -253,6 +254,7 @@ class EnginePool {
             dbSetModelSettings(modelName, { ...settings, workingLibPath: libPath });
           }
           s.isLoaded = true;
+          applyPerformance(); // pin CPU + DDR to performance while a model is resident
           s.activeModel = { name: modelName, path: modelPath, options, isMock: result.isMock, libPath };
           console.log(`[EnginePool] Slot ${s.id}: loaded ${modelName} using ${libPath} (isMock: ${result.isMock})`);
           this.resetIdleTimer(s);
@@ -275,6 +277,7 @@ class EnginePool {
             const settings = dbGetModelSettings(modelName) || {};
             dbSetModelSettings(modelName, { ...settings, workingLibPath: libPath });
             s.isLoaded = true;
+          applyPerformance(); // pin CPU + DDR to performance while a model is resident
             s.activeModel = { name: modelName, path: modelPath, options, isMock: result2.isMock, libPath };
             console.log(`[EnginePool] Slot ${s.id}: loaded after runtime sync: ${modelName} using ${libPath}`);
             this.resetIdleTimer(s);
@@ -372,6 +375,8 @@ class EnginePool {
     }
     slot.activeModel = null;
     slot.isLoaded    = false;
+    // When the last model unloads, drop the performance pin back to the board defaults.
+    if (!this._slots.some((sl) => sl.isLoaded)) restoreGovernor();
   }
 
   // Public unload — unloads slot 0 (primary), preserves additional slots

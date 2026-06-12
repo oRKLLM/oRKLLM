@@ -88,6 +88,19 @@
           </div>
           <v-switch v-model="settings.autoDownloadRuntimes" color="primary" hide-details density="compact" class="ml-4 flex-shrink-0"></v-switch>
         </div>
+        <v-divider class="my-3"></v-divider>
+        <div class="d-flex align-center justify-space-between">
+          <div>
+            <div class="text-subtitle-2 font-weight-medium mb-1">Auto performance governor</div>
+            <div class="text-caption text-grey">
+              While a model is loaded, pin the CPU cores and the DDR memory controller (<code>dmc</code>) to
+              <code>performance</code>, restoring the board defaults when idle. Decode is memory-bandwidth-bound, so a
+              DDR clock parked low by the stock governor can roughly <strong>halve token-generation speed</strong>.
+              Requires privileges to write the governor sysfs nodes (RK3576/RK3588 only; no effect elsewhere).
+            </div>
+          </div>
+          <v-switch v-model="settings.managePerformance" color="primary" hide-details density="compact" class="ml-4 flex-shrink-0"></v-switch>
+        </div>
       </v-card>
 
       <!-- Vulkan Shaders (Eagle-3) -->
@@ -639,6 +652,7 @@ export default {
       savedAutoDownloadRuntimes: true,
       autoDownloadSpv: false,
       mcpInferenceEnabled: false,
+      managePerformance: true,
     },
     spv: { available: false, tag: null, files: [], licenseAccepted: false },
     spvReleases: [],
@@ -717,6 +731,7 @@ export default {
         this.savedAutoDownloadRuntimes       = this.settings.autoDownloadRuntimes;
         this.settings.autoDownloadSpv       = s.autoDownloadSpv ?? false;
         this.settings.mcpInferenceEnabled   = s.mcpInferenceEnabled ?? false;
+        this.settings.managePerformance     = s.managePerformance ?? true;
         this.cacheStats = data.cacheStats || null;
       } catch (e) {}
     },
