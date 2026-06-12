@@ -71,7 +71,7 @@ static void synth_regcmd(uint32_t *rc, int M, int K, int N, uint32_t aA, uint32_
     set_reg(rc,REGCMD_N,0x0201,0x1020, 0x10000|M);
     set_reg(rc,REGCMD_N,0x0201,0x1084, 0x10000|M);
     set_reg(rc,REGCMD_N,0x0201,0x102c, M);
-    set_reg(rc,REGCMD_N,0x0201,0x1010, 16*(M+1));
+    set_reg(rc,REGCMD_N,0x0201,0x1010, (16*(M+1) > 0x800) ? 0x800 : 16*(M+1));  /* saturates at M>=127 (M-tile=64) */
     set_reg(rc,REGCMD_N,0x1001,0x4034, M-1);
     set_reg(rc,REGCMD_N,0x1001,0x405c, (M-1)<<16);
     set_reg(rc,REGCMD_N,0x0801,0x3014, (M-1)<<16);
