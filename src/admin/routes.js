@@ -16,7 +16,7 @@ import {
 } from '../db.js';
 import { v4 as uuidv4 } from 'uuid';
 import { isSpvAvailable } from '../spv_sync.js';
-import { getDramStatus } from '../monitor.js';
+import { getDramStatus, getCpuStatus } from '../monitor.js';
 import { getState as getPerfState } from '../perf_governor.js';
 import { fetchBaseEmbeddings, extractLocalEmbeddings, localBaseHasEmbeddings } from '../hf_embeddings.js';
 import { convertPtToSafetensors } from '../pt_to_safetensors.js';
@@ -245,6 +245,8 @@ export default async function adminRoutes(fastify, options) {
     status.spvAvailable = isSpvAvailable(); // Eagle-3 'vulkan' draft gated on this
     const dram = getDramStatus(); // null off-board; { governor, curFreqMhz, maxFreqMhz, throttled }
     status.dram = dram ? { ...dram, management: getPerfState() } : null;
+    const cpuFreq = getCpuStatus(); // perf-cluster CPU governor/clock (prefill is CPU-op bound)
+    status.cpuFreq = cpuFreq ? { ...cpuFreq, management: getPerfState() } : null;
     return status;
   });
 

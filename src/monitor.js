@@ -358,6 +358,35 @@ export function getDramStatus() {
   return { governor: gov, curFreqMhz, maxFreqMhz, throttled };
 }
 
+// ── CPU DVFS governor / throttle check (mirrors getDramStatus) ────────────────
+// Prefill is CPU-op bound (attention/softmax/norm), so a non-performance CPU governor that leaves
+// the cores below their max clock throttles it — same failure mode as the DMC governor for decode.
+// Reports the PERFORMANCE cluster (highest cpuinfo_max_freq — the A76s on big.LITTLE). cpufreq
+// sysfs is in kHz (not Hz like devfreq). Returns { governor, curFreqMhz, maxFreqMhz, throttled }.
+export function getCpuStatus() {
+  if (os.platform() !== 'linux') return null;
+  const dir = '/sys/devices/system/cpu/cpufreq';
+  let policies;
+  try { policies = fs.readdirSync(dir).filter((p) => p.startsWith('policy')); } catch (e) { return null; }
+  if (!policies.length) return null;
+  let best = null; // the perf cluster = highest cpuinfo_max_freq
+  for (const p of policies) {
+    const base = `${dir}/${p}`;
+    const max = readIntFile(`${base}/cpuinfo_max_freq`);
+    if (max == null) continue;
+    if (!best || max > best.max) {
+      const gov = readFile(`${base}/scaling_governor`);
+      best = { gov: gov ? gov.trim() : null, cur: readIntFile(`${base}/scaling_cur_freq`), max };
+    }
+  }
+  if (!best) return null;
+  const curFreqMhz = best.cur != null ? Math.round(best.cur / 1000) : null; // kHz → MHz
+  const maxFreqMhz = Math.round(best.max / 1000);
+  const throttled =
+    best.gov !== 'performance' && curFreqMhz != null && curFreqMhz < maxFreqMhz;
+  return { governor: best.gov, curFreqMhz, maxFreqMhz, throttled };
+}
+
 function mockFan(temperature) {
   // Fan ramps with SoC temperature — idle ~30%, full near 80°C.
   const pct = clampPct(((temperature - 35) / 45) * 100);

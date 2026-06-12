@@ -31,6 +31,27 @@
         </div>
       </v-alert>
 
+      <!-- CPU throttle warning: prefill is CPU-op bound; a non-performance governor below max clock slows it -->
+      <v-alert
+        v-if="status.cpuFreq && status.cpuFreq.throttled"
+        type="warning"
+        variant="tonal"
+        density="comfortable"
+        class="mb-6 w-100"
+        icon="mdi-cpu-64-bit"
+      >
+        <div class="font-weight-bold">CPU running below its maximum clock ({{ status.cpuFreq.curFreqMhz }} / {{ status.cpuFreq.maxFreqMhz }} MHz)</div>
+        <div class="text-body-2 mt-1">
+          <template v-if="status.cpuFreq.management && status.cpuFreq.management.failed">
+            oRKLLM tried to pin the CPU to <code>performance</code> but couldn't: <strong>{{ status.cpuFreq.management.reason }}</strong>. Prefill runs attention/softmax/norm on the CPU, so a throttled governor slows prompt processing. Run oRKLLM with privileges, or apply it manually:
+          </template>
+          <template v-else>
+            The CPU governor is <code>{{ status.cpuFreq.governor }}</code> and auto-management is off. Prefill is CPU-op-bound (attention/softmax/norm), so a governor that doesn't ramp the cores slows prompt processing. Enable <em>Auto performance governor</em> in Settings, or pin it manually:
+          </template>
+          <pre class="mt-2 pa-2 rounded text-caption" style="background: rgba(0,0,0,0.25); overflow-x:auto;">for c in /sys/devices/system/cpu/cpufreq/policy*/scaling_governor; do echo performance | sudo tee $c; done</pre>
+        </div>
+      </v-alert>
+
       <!-- Serving Stats Cards Row -->
       <v-card class="glass-card pa-4 mb-6 w-100">
         <div class="d-flex align-center justify-space-between mb-4 flex-wrap gap-2">
