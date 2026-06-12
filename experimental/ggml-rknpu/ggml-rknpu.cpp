@@ -27,6 +27,13 @@ struct ggml_backend_rknpu_context {
     int dummy = 0;
 };
 
+// Per-weight prepared-B cache, stored on the tensor itself (tensor->extra).
+// Correct across ggml's buffer reuse: a recycled tensor struct is zeroed by
+// ggml_new_tensor (extra==NULL) -> cache miss -> recompute, so no stale hits
+// (the earlier global data-pointer map had no such reset and returned stale B).
+// Only cached for leaf weights (op==NONE, constant) and single-plane tensors.
+struct rk_weight_extra { int64_t Kp = 0, Np = 0; std::vector<ggml_fp16_t> B; };
+
 // Dequantize + transpose + zero-pad a weight plane [K,N] -> fp16 [Kp x Np] into
 // scratch. (No cross-call cache: keying by data pointer is unsafe because ggml
 // reuses leaf/compute buffers across tensors. A safe per-weight cache belongs in
@@ -105,9 +112,24 @@ static void ggml_backend_rknpu_mul_mat(ggml_backend_rknpu_context * /*ctx*/, str
                 const char * row = s1 + m*src1->nb[1];
                 for (int64_t k = 0; k < K; k++) a[m*Kp + k] = ggml_fp32_to_fp16(rk_get_f32(row, k, src1->nb[0], src1->type));
             }
-            // B[Kp,Np] fp16  <- src0 plane [K,N] transposed (zero-padded), cached
-            // per weight when possible (F16/F32 or any block-quant via to_float).
-            const ggml_fp16_t * bsrc = rk_prepare_B(src0, s0, K, N, Kp, Np, b_scratch);
+            // B[Kp,Np] fp16  <- src0 plane [K,N] transposed (zero-padded). For a
+            // leaf weight (op==NONE, single-plane, stable contents) cache the
+            // prepared B on src0->extra so dequant+transpose happens once, not
+            // per call. Otherwise prepare into scratch each time.
+            const ggml_fp16_t * bsrc;
+            const bool cacheable = src0->op == GGML_OP_NONE && src0->ne[2] == 1 && src0->ne[3] == 1;
+            if (cacheable) {
+                rk_weight_extra * w = (rk_weight_extra *) src0->extra;
+                if (!w || w->Kp != Kp || w->Np != Np) {
+                    if (!w) { w = new rk_weight_extra; const_cast<struct ggml_tensor *>(src0)->extra = w; }
+                    w->Kp = Kp; w->Np = Np;
+                    w->B.clear();
+                    rk_prepare_B(src0, s0, K, N, Kp, Np, w->B);  // fills w->B
+                }
+                bsrc = w->B.data();
+            } else {
+                bsrc = rk_prepare_B(src0, s0, K, N, Kp, Np, b_scratch);
+            }
             ggml_fp16_t * b = (ggml_fp16_t *) B->virt_addr;
             memset(b, 0, io.B.size);
             memcpy(b, bsrc, (size_t) Kp * Np * sizeof(ggml_fp16_t));
