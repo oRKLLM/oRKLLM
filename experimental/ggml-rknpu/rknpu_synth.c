@@ -107,9 +107,11 @@ int main(int argc, char **argv) {
     for(int i=0;i<M*K;i++){seed=seed*1103515245+12345; alog[i]=(f16)(int)((seed>>16)%4);}
     for(int i=0;i<K*N;i++){seed=seed*1103515245+12345; blog[i]=(f16)(int)((seed>>16)%4);}
     /* K-tiled layouts (32-channel tiles), tile-major. Reduces to row-major/transpose at K=32. */
-    int KT = K/32;
-    for(int m=0;m<M;m++)for(int k=0;k<K;k++) a[m*K+k]=alog[m*K+k];                                             /* feature flat [M][K] */
-    for(int t=0;t<KT;t++)for(int n=0;n<N;n++)for(int kk=0;kk<32;kk++) bbuf[t*N*32+n*32+kk]=blog[(t*32+kk)*N+n]; /* weights [KT][N][32] */
+    int KT = K/32, NT = N/16;
+    for(int m=0;m<M;m++)for(int k=0;k<K;k++) a[m*K+k]=alog[m*K+k];   /* feature flat [M][K] */
+    /* weights [Ntile][Ktile][16][32]: N tiles by 16, K tiles by 32 (transposed within) */
+    for(int nt=0;nt<NT;nt++)for(int kt=0;kt<KT;kt++)for(int nl=0;nl<16;nl++)for(int kk=0;kk<32;kk++)
+        bbuf[nt*KT*16*32 + kt*16*32 + nl*32 + kk] = blog[(kt*32+kk)*N + (nt*16+nl)];
     for(int m=0;m<M;m++)for(int n=0;n<N;n++){float s=0;for(int k=0;k<K;k++)s+=(float)alog[m*K+k]*(float)blog[k*N+n];href[m*N+n]=s;}
 
     uint32_t rc[REGCMD_N];

@@ -129,7 +129,7 @@ int ioctl(int fd, unsigned long request, ...) {
         for (int i=0;i<nent;i++) {
             if (!tab[i].cpu) continue;
             char tag[64]; snprintf(tag, sizeof tag, "handle %u (dma=0x%llx size=%llu)", tab[i].handle, (unsigned long long)tab[i].dma, (unsigned long long)tab[i].size);
-            int words = (int)(tab[i].size/4); if (words > 128) words = 128;
+            int words = (int)(tab[i].size/4); if (words > 1024) words = 1024;
             hexwords(tag, (uint32_t *)tab[i].cpu, words);
         }
     }
