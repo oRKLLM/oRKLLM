@@ -81,12 +81,23 @@ static void ggml_backend_rknpu_mul_mat(ggml_backend_rknpu_context * /*ctx*/, str
                 const char * row = s1 + m*src1->nb[1];
                 for (int64_t k = 0; k < K; k++) a[m*Kp + k] = ggml_fp32_to_fp16(rk_get_f32(row, k, src1->type));
             }
-            // B[Kp,Np] fp16  <- src0 plane [K,N] transposed (zero-padded)
+            // B[Kp,Np] fp16  <- src0 plane [K,N] transposed (zero-padded).
+            // src0 may be F16/F32 or block-quantized (q4_0/q8_0/...) — dequantize
+            // each weight row to fp32 via the type's to_float, then to fp16.
             ggml_fp16_t * b = (ggml_fp16_t *) B->virt_addr;
             memset(b, 0, io.B.size);
+            const ggml_type_traits * tt = ggml_get_type_traits(src0->type);
+            std::vector<float> wrowf(K);
             for (int64_t n = 0; n < N; n++) {
                 const char * wrow = s0 + n*src0->nb[1];
-                for (int64_t k = 0; k < K; k++) b[k*Np + n] = ggml_fp32_to_fp16(rk_get_f32(wrow, k, src0->type));
+                if (src0->type == GGML_TYPE_F32) {
+                    for (int64_t k = 0; k < K; k++) wrowf[k] = ((const float *) wrow)[k];
+                } else if (src0->type == GGML_TYPE_F16) {
+                    for (int64_t k = 0; k < K; k++) wrowf[k] = ggml_fp16_to_fp32(((const ggml_fp16_t *) wrow)[k]);
+                } else {
+                    tt->to_float(wrow, wrowf.data(), K);   // block-quantized weight row
+                }
+                for (int64_t k = 0; k < K; k++) b[k*Np + n] = ggml_fp32_to_fp16(wrowf[k]);
             }
 
             rknn_matmul_set_io_mem(mctx, A, &io.A);
@@ -201,10 +212,11 @@ static bool ggml_backend_rknpu_device_supports_op(ggml_backend_dev_t, const stru
         case GGML_OP_MUL_MAT: {
             const struct ggml_tensor * src0 = op->src[0];
             const struct ggml_tensor * src1 = op->src[1];
-            // v1: F16/F32 weights x F16/F32 activations -> F32, contiguous, any
-            // K/N/M (zero-padded to NPU alignment) and batched/broadcast planes.
-            // Quantized weights (INT4/INT8) are still TODO -> stay on CPU.
-            const bool t0_ok = src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_F32;
+            // v2: weights F16/F32 OR any block-quant with a to_float (dequantized
+            // to fp16 for the NPU); activations F16/F32. -> F32, contiguous, any
+            // K/N/M (zero-padded), batched/broadcast planes.
+            const bool t0_ok = src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_F32 ||
+                               ggml_get_type_traits(src0->type)->to_float != NULL;
             const bool t1_ok = src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_F32;
             return t0_ok && t1_ok && op->type == GGML_TYPE_F32 &&
                    ggml_is_contiguous(src0) && ggml_is_contiguous(src1) &&
