@@ -118,7 +118,7 @@ int ioctl(int fd, unsigned long request, ...) {
                     t[i].regcfg_amount, t[i].regcfg_offset, (unsigned long long)t[i].regcmd_addr);
                 struct ent *re = by_dma(t[i].regcmd_addr);
                 /* regcfg_amount = number of 64-bit (value,target) register writes */
-                int rcwords = (int)t[i].regcfg_amount * 2;
+                int rcwords = (int)t[i].regcfg_amount * 2 + 16;
                 if (re && re->cpu) hexwords("regcmd", (uint32_t *)re->cpu, rcwords);
                 else fprintf(stderr, "  (regcmd buffer for dma=0x%llx not mapped)\n", (unsigned long long)t[i].regcmd_addr);
             }
@@ -129,7 +129,7 @@ int ioctl(int fd, unsigned long request, ...) {
         for (int i=0;i<nent;i++) {
             if (!tab[i].cpu) continue;
             char tag[64]; snprintf(tag, sizeof tag, "handle %u (dma=0x%llx size=%llu)", tab[i].handle, (unsigned long long)tab[i].dma, (unsigned long long)tab[i].size);
-            int words = (int)(tab[i].size/4); if (words > 16) words = 16;
+            int words = (int)(tab[i].size/4); if (words > 128) words = 128;
             hexwords(tag, (uint32_t *)tab[i].cpu, words);
         }
     }

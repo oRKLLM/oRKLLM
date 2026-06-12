@@ -102,12 +102,15 @@ int main(int argc, char **argv) {
      * must be TRANSPOSED to [N][K] in the NPU buffer — the NPU expects weights
      * output-channel-major (derived from librknnrt's set_io_mem reorder). */
     f16 *a=A.cpu,*bbuf=B.cpu; float *href=malloc(M*N*sizeof(float));
-    f16 *blog=malloc(K*N*sizeof(f16));   /* logical B[k][n] for the CPU reference */
+    f16 *alog=malloc(M*K*sizeof(f16)), *blog=malloc(K*N*sizeof(f16));
     unsigned seed=12345;
-    for(int i=0;i<M*K;i++){seed=seed*1103515245+12345; a[i]=(f16)(int)((seed>>16)%4);}
+    for(int i=0;i<M*K;i++){seed=seed*1103515245+12345; alog[i]=(f16)(int)((seed>>16)%4);}
     for(int i=0;i<K*N;i++){seed=seed*1103515245+12345; blog[i]=(f16)(int)((seed>>16)%4);}
-    for(int n=0;n<N;n++)for(int k=0;k<K;k++) bbuf[n*K+k]=blog[k*N+n];   /* [K][N] -> [N][K] */
-    for(int m=0;m<M;m++)for(int n=0;n<N;n++){float s=0;for(int k=0;k<K;k++)s+=(float)a[m*K+k]*(float)blog[k*N+n];href[m*N+n]=s;}
+    /* K-tiled layouts (32-channel tiles), tile-major. Reduces to row-major/transpose at K=32. */
+    int KT = K/32;
+    for(int m=0;m<M;m++)for(int k=0;k<K;k++) a[m*K+k]=alog[m*K+k];                                             /* feature flat [M][K] */
+    for(int t=0;t<KT;t++)for(int n=0;n<N;n++)for(int kk=0;kk<32;kk++) bbuf[t*N*32+n*32+kk]=blog[(t*32+kk)*N+n]; /* weights [KT][N][32] */
+    for(int m=0;m<M;m++)for(int n=0;n<N;n++){float s=0;for(int k=0;k<K;k++)s+=(float)alog[m*K+k]*(float)blog[k*N+n];href[m*N+n]=s;}
 
     uint32_t rc[REGCMD_N];
     synth_regcmd(rc, M,K,N, (uint32_t)A.dma,(uint32_t)B.dma,(uint32_t)C.dma);
