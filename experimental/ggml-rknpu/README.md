@@ -21,6 +21,20 @@ cc -O2 -o rknpu_probe rknpu_probe.c
 ./rknpu_probe          # run as a user in the 'render' group, or via sudo
 ```
 
+## Regression tests
+`test/regression.mjs` compiles every matmul kernel and runs it across a validated shape
+matrix (fp16 + int8 GEMM, resident weights, single-submit decode, K-split hybrid),
+asserting each self-validates against its CPU reference. Needs NPU hardware
+(`/dev/dri/card1`) but not `librknnrt` — the synthesized kernels use raw DRM submission.
+```sh
+BOARD=user@host node test/regression.mjs        # full suite (33 cases)
+BOARD=user@host node test/regression.mjs hybrid  # filter by kernel name
+make regress BOARD=user@host                      # same, via Makefile
+```
+Runs serially with a settle delay (the NPU is single-stream) and a per-test wall timeout.
+Shapes stay inside each kernel's proven regime: `sched*` cover decode (M=1) /
+single-M-tile / K≤512 multi-tile; the hybrids cover arbitrary K incl. non-power-of-2.
+
 ## Why this is hard
 The RK3588 NPU is a fixed-function NVDLA-derived INT8/FP16 **convolution**
 accelerator. Matmul must be lowered to conv, and LLM *decode* is batch-1 GEMV
