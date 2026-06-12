@@ -54,12 +54,16 @@ int main(int argc,char**argv){
     setr(rc,REGCMD_N,0x1001,0x4034,M-1);setr(rc,REGCMD_N,0x1001,0x405c,(M-1)<<16);setr(rc,REGCMD_N,0x801,0x3014,(M-1)<<16);
     setr(rc,REGCMD_N,0x1001,0x403c,((N-1)<<16)|(N-1));setr(rc,REGCMD_N,0x1001,0x4058,N-1);setr(rc,REGCMD_N,0x1001,0x4038,(((N/4)-1)<<16)|((N/4)-1));
     setr(rc,REGCMD_N,0x201,0x1038,0x1010000|N);setr(rc,REGCMD_N,0x801,0x3018,N-1);
-    /* M-scheduler regs. K<=512: closed-form (validated). K>512: needs per-K
-     * calibration (CBUF heuristic) — pass explicit hex args. */
-    if(!r1010){ int R=32768/K; if(R<1)R=1; int rows=(M+1<R)?(M+1):R; r1010=16*rows; }
-    if(!r1040){ int kk=K/256, lg=0; while(kk>1){kk>>=1;lg++;}        /* log2(K/256) */
+    /* M-scheduler regs. SINGLE M-tile (M<R, incl. decode M=1): full K in ONE submit,
+     * 0x1040=0xb1 (librknnrt's value — validated for arbitrary K incl 4096/8192).
+     * MULTI M-tile, K<=2048: base/slope closed-form (validated). MULTI-tile K>2048:
+     * needs per-K CBUF calibration (nonlinear) — pass explicit hex args. */
+    int R=32768/K; if(R<1)R=1;
+    if(!r1010){ int rows=(M+1<R)?(M+1):R; r1010=16*rows; }
+    if(!r1040){ if(M<R){ r1040=0xb1; }                       /* single M-tile: any K */
+                else { int kk=K/256, lg=0; while(kk>1){kk>>=1;lg++;}
                 int base=0xb1-15*((1<<lg)-1), slope=15*(1<<lg), mg=M/64; if(mg<1)mg=1;
-                int v=base-slope*(mg-1); if(v<0x1b)v=0x1b; r1040=v; }  /* universal base/slope, floor 0x1b */
+                int v=base-slope*(mg-1); if(v<0x1b)v=0x1b; r1040=v; } }
     setr(rc,REGCMD_N,0x201,0x1010,r1010);
     setr(rc,REGCMD_N,0x201,0x1040,r1040);
     setr(rc,REGCMD_N,0x201,0x1070,(uint32_t)A.dma);setr(rc,REGCMD_N,0x201,0x1110,(uint32_t)B.dma);setr(rc,REGCMD_N,0x1001,0x4020,(uint32_t)C.dma);
