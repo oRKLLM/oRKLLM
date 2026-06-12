@@ -307,7 +307,10 @@ class EnginePool {
   _tryLoadSlot(slot, modelName, modelPath, options, libPath) {
     return new Promise((resolve) => {
       const workerPath = path.join(__dirname, 'worker.js');
-      slot.worker = fork(workerPath);
+      // 'advanced' (v8) IPC serialization preserves TypedArrays — Eagle-3's
+      // hidden_states/logits are Float32Arrays and the default 'json' codec
+      // turns them into plain objects (length lost), breaking the GPU draft.
+      slot.worker = fork(workerPath, { serialization: 'advanced' });
 
       const loadTimeout = setTimeout(() => {
         console.error(`[EnginePool] Slot ${slot.id}: load timeout (60s) with ${libPath}`);
@@ -438,7 +441,7 @@ class EnginePool {
   _tryLoadWorker(slot, modelName, modelPath, options, libPath) {
     const workerPath = path.join(__dirname, 'worker.js');
     if (slot === 'draft') {
-      this.draftWorker = fork(workerPath);
+      this.draftWorker = fork(workerPath, { serialization: 'advanced' });
     }
     const worker = slot === 'draft' ? this.draftWorker : this.worker;
 
