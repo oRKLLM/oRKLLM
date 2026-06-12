@@ -30,8 +30,23 @@ static struct buf bcreate(size_t size,uint32_t flags){
 static void bsync(struct buf*b,uint32_t f){struct rknpu_mem_sync s;memset(&s,0,sizeof s);s.obj_addr=b->obj;s.size=b->size;s.flags=f;ioctl(g_fd,DRM_IOCTL_RKNPU_MEM_SYNC,&s);}
 static void act(uint32_t f,uint32_t v){struct rknpu_action a={.flags=f,.value=v};ioctl(g_fd,DRM_IOCTL_RKNPU_ACTION,&a);}
 static void setr(uint32_t*rc,int n,uint32_t b,uint32_t o,uint32_t v){
-    for(int k=0;k+1<n;k+=2)if((rc[k]&0xffff)==o&&(rc[k+1]>>16)==b){rc[k]=(o)|((v&0xffff)<<16);rc[k+1]=(b<<16)|((v>>16)&0xffff);return;}
-    fprintf(stderr,"WARN reg %x:%x absent\n",b,o);
+    int found=0;
+    for(int k=0;k+1<n;k+=2)if((rc[k]&0xffff)==o&&(rc[k+1]>>16)==b){rc[k]=(o)|((v&0xffff)<<16);rc[k+1]=(b<<16)|((v>>16)&0xffff);found=1;}
+    if(!found) fprintf(stderr,"WARN reg %x:%x absent\n",b,o);
+}
+static void bdestroy(struct buf*b){munmap(b->cpu,b->size);struct rknpu_mem_destroy d;memset(&d,0,sizeof d);d.handle=b->handle;d.obj_addr=b->obj;ioctl(g_fd,DRM_IOCTL_RKNPU_MEM_DESTROY,&d);}
+/* build int8 regcmd for (M,K,N) — element-size-1 strides, ceil(K/64) K-passes */
+static void synth_i8_regcmd(uint32_t*rc,int M,int K,int N,uint32_t aA,uint32_t aB,uint32_t aC){
+    memcpy(rc,REGCMD_I8,REGCMD_I8_N*4);
+    setr(rc,REGCMD_I8_N,0x201,0x1024,((K-1)<<16)|K);
+    setr(rc,REGCMD_I8_N,0x201,0x1030,K*N); setr(rc,REGCMD_I8_N,0x201,0x1034,K);
+    setr(rc,REGCMD_I8_N,0x201,0x1044,(K+63)/64); setr(rc,REGCMD_I8_N,0x201,0x1088,K); setr(rc,REGCMD_I8_N,0x201,0x107c,K/16);
+    setr(rc,REGCMD_I8_N,0x201,0x1020,0x10000|M); setr(rc,REGCMD_I8_N,0x201,0x1084,0x10000|M);
+    setr(rc,REGCMD_I8_N,0x201,0x102c,M); setr(rc,REGCMD_I8_N,0x201,0x1010,16*(M+1));
+    setr(rc,REGCMD_I8_N,0x1001,0x4034,M-1); setr(rc,REGCMD_I8_N,0x1001,0x405c,(M-1)<<16); setr(rc,REGCMD_I8_N,0x801,0x3014,(M-1)<<16);
+    setr(rc,REGCMD_I8_N,0x1001,0x403c,((N-1)<<16)|(N-1)); setr(rc,REGCMD_I8_N,0x1001,0x4058,N-1);
+    setr(rc,REGCMD_I8_N,0x1001,0x4038,(((N/4)-1)<<16)|((N/4)-1)); setr(rc,REGCMD_I8_N,0x201,0x1038,0x1010000|N); setr(rc,REGCMD_I8_N,0x801,0x3018,N-1);
+    setr(rc,REGCMD_I8_N,0x201,0x1070,aA); setr(rc,REGCMD_I8_N,0x201,0x1110,aB); setr(rc,REGCMD_I8_N,0x1001,0x4020,aC);
 }
 int main(int argc,char**argv){
     int M=argc>1?atoi(argv[1]):4,K=argc>2?atoi(argv[2]):32,N=argc>3?atoi(argv[3]):32;
@@ -52,30 +67,30 @@ int main(int argc,char**argv){
     for(int nt=0;nt<NT;nt++)for(int kt=0;kt<KT;kt++)for(int nl=0;nl<32;nl++)for(int kk=0;kk<32;kk++)
         bbuf[nt*KT*32*32 + kt*32*32 + nl*32 + kk]=blog[(kt*32+kk)*N + (nt*32+nl)];
     for(int m=0;m<M;m++)for(int n=0;n<N;n++){int32_t acc=0;for(int k=0;k<K;k++)acc+=(int)alog[m*K+k]*(int)blog[k*N+n];href[m*N+n]=acc;}
-    /* synth regcmd: int8 template + dim fields (element-size 1 for strides) */
-    uint32_t rc[REGCMD_I8_N]; memcpy(rc,REGCMD_I8,sizeof rc);
-    setr(rc,REGCMD_I8_N,0x201,0x1024,((K-1)<<16)|K);
-    setr(rc,REGCMD_I8_N,0x201,0x1030,K*N);      /* int8: *1 */
-    setr(rc,REGCMD_I8_N,0x201,0x1034,K);        /* int8: *1 */
-    setr(rc,REGCMD_I8_N,0x201,0x1044,(K+63)/64);  /* int8: 64 K-channels/pass → ceil(K/64) */
-    setr(rc,REGCMD_I8_N,0x201,0x1088,K);
-    setr(rc,REGCMD_I8_N,0x201,0x107c,K/16);     /* int8: /16 */
-    setr(rc,REGCMD_I8_N,0x201,0x1020,0x10000|M);setr(rc,REGCMD_I8_N,0x201,0x1084,0x10000|M);
-    setr(rc,REGCMD_I8_N,0x201,0x102c,M);setr(rc,REGCMD_I8_N,0x201,0x1010,16*(M+1));
-    setr(rc,REGCMD_I8_N,0x1001,0x4034,M-1);setr(rc,REGCMD_I8_N,0x1001,0x405c,(M-1)<<16);setr(rc,REGCMD_I8_N,0x801,0x3014,(M-1)<<16);
-    setr(rc,REGCMD_I8_N,0x1001,0x403c,((N-1)<<16)|(N-1));setr(rc,REGCMD_I8_N,0x1001,0x4058,N-1);
-    setr(rc,REGCMD_I8_N,0x1001,0x4038,(((N/4)-1)<<16)|((N/4)-1));setr(rc,REGCMD_I8_N,0x201,0x1038,0x1010000|N);setr(rc,REGCMD_I8_N,0x801,0x3018,N-1);
-    setr(rc,REGCMD_I8_N,0x201,0x1070,(uint32_t)A.dma);setr(rc,REGCMD_I8_N,0x201,0x1110,(uint32_t)B.dma);setr(rc,REGCMD_I8_N,0x1001,0x4020,(uint32_t)C.dma);
-    memcpy(regcmd.cpu,rc,sizeof rc);
     struct rknpu_task t; memset(&t,0,sizeof t); t.enable_mask=0xd;t.int_mask=0x300;t.int_clear=0x1ffff;t.regcfg_amount=108;t.regcmd_addr=regcmd.dma;
     memcpy(task.cpu,&t,sizeof t);
     int both=RKNPU_MEM_SYNC_TO_DEVICE|RKNPU_MEM_SYNC_FROM_DEVICE;
-    bsync(&regcmd,both);bsync(&task,both);bsync(&A,both);bsync(&B,both);bsync(&C,both);
-    bsync(&B,RKNPU_MEM_SYNC_TO_DEVICE);bsync(&regcmd,RKNPU_MEM_SYNC_TO_DEVICE);bsync(&A,RKNPU_MEM_SYNC_TO_DEVICE);
-    struct rknpu_submit sub; memset(&sub,0,sizeof sub); sub.flags=0x5;sub.timeout=6000;sub.task_number=1;sub.task_obj_addr=task.obj;sub.core_mask=RKNPU_CORE0_MASK;sub.fence_fd=-1;sub.subcore_task[0]=(struct rknpu_subcore_task){0,1};
-    if(ioctl(g_fd,DRM_IOCTL_RKNPU_SUBMIT,&sub)){perror("SUBMIT");return 1;}
-    bsync(&C,RKNPU_MEM_SYNC_FROM_DEVICE);
-    int32_t *c=C.cpu; int bad=0,maxe=0;
+    bsync(&regcmd,both);bsync(&task,both);bsync(&B,both);bsync(&B,RKNPU_MEM_SYNC_TO_DEVICE);
+    (void)A; (void)a;
+    /* software M-tiling: fresh int8 feature+output buffer per tile (unique live IOVA);
+     * int8 single-M-tile cap = 32768/K (2x fp16 — int8 packs 2x rows in CBUF). */
+    int cap=32768/K; if(cap<1)cap=1;
+    int32_t *cres=malloc((size_t)M*N*4);
+    for(int pass=-1,ntiles=(M+cap-1)/cap; pass<ntiles; pass++){
+        int m0=(pass<0)?0:pass*cap, mc=(pass<0)?((M<cap)?M:cap):((M-m0<cap)?(M-m0):cap);
+        struct buf Ac=bcreate((size_t)mc*K,0x403), Cc=bcreate((size_t)mc*N*4,0x403);
+        memcpy(Ac.cpu, alog+(size_t)m0*K, (size_t)mc*K);
+        bsync(&Ac,both);bsync(&Cc,both);bsync(&Ac,RKNPU_MEM_SYNC_TO_DEVICE);
+        uint32_t rc[REGCMD_I8_N];
+        synth_i8_regcmd(rc, mc,K,N, (uint32_t)Ac.dma,(uint32_t)B.dma,(uint32_t)Cc.dma);
+        memcpy(regcmd.cpu,rc,sizeof rc); bsync(&regcmd,RKNPU_MEM_SYNC_TO_DEVICE);
+        struct rknpu_submit sub; memset(&sub,0,sizeof sub); sub.flags=0x5;sub.timeout=6000;sub.task_number=1;sub.task_obj_addr=task.obj;sub.core_mask=RKNPU_CORE0_MASK;sub.fence_fd=-1;sub.subcore_task[0]=(struct rknpu_subcore_task){0,1};
+        if(ioctl(g_fd,DRM_IOCTL_RKNPU_SUBMIT,&sub)){perror("SUBMIT");return 1;}
+        bsync(&Cc,RKNPU_MEM_SYNC_FROM_DEVICE);
+        if(pass>=0) memcpy(cres+(size_t)m0*N, Cc.cpu, (size_t)mc*N*4);
+    }
+    (void)bdestroy;
+    int32_t *c=cres; int bad=0,maxe=0;
     for(int i=0;i<M*N;i++){int e=c[i]-href[i];if(e<0)e=-e;if(e>maxe)maxe=e;if(e)bad++;}
     printf("INT8 MKN=%d,%d,%d C[0]=%d ref[0]=%d maxerr=%d mism=%d/%d : %s\n",M,K,N,c[0],href[0],maxe,bad,M*N,bad?"WRONG":"CORRECT");
     return bad?2:0;
