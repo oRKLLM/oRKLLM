@@ -17,6 +17,7 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import { isSpvAvailable } from '../spv_sync.js';
 import { fetchBaseEmbeddings, extractLocalEmbeddings, localBaseHasEmbeddings } from '../hf_embeddings.js';
+import { convertPtToSafetensors } from '../pt_to_safetensors.js';
 
 function getNetworkAddresses() {
   const interfaces = os.networkInterfaces();
@@ -1044,8 +1045,8 @@ export default async function adminRoutes(fastify, options) {
   fastify.post('/download', async (request, reply) => {
     const { repoId, filename, hfToken: tokenOverride } = request.body || {};
     if (!repoId || !filename) return reply.status(400).send({ error: 'repoId and filename required' });
-    if (!/\.(rkllm|gguf|safetensors)$/.test(filename) && !/\.json$/.test(filename))
-      return reply.status(400).send({ error: 'Only .rkllm, .gguf, .safetensors or .json files allowed' });
+    if (!/\.(rkllm|gguf|safetensors|bin|pt|pth)$/.test(filename) && !/\.json$/.test(filename))
+      return reply.status(400).send({ error: 'Only .rkllm, .gguf, .safetensors, .bin, .pt, .pth or .json files allowed' });
 
     const id = uuidv4();
     // Save as {MODELS_DIR}/{repoName}/{filename} to avoid collisions across repos
@@ -1100,10 +1101,29 @@ export default async function adminRoutes(fastify, options) {
 
         await new Promise((res, rej) => fileStream.end(err => err ? rej(err) : res()));
         fs.renameSync(tmpPath, destPath);
+        console.log(`[Download] Completed: ${filename}`);
+
+        // Auto-convert a PyTorch-format Eagle-3 head to safetensors so the Vulkan
+        // draft loader can read it (pure-Node, in-process, no torch). Only when the
+        // repo has no safetensors yet. Failure doesn't fail the download — the
+        // .bin stays in place for manual conversion via scripts/.
+        if (/\.(bin|pt|pth)$/.test(destPath)) {
+          const outPath = path.join(repoDir, 'model.safetensors');
+          const hasSt = fs.readdirSync(repoDir).some(n => /\.safetensors$/.test(n));
+          if (!hasSt) {
+            try {
+              job.speedBps = 0;
+              const r = await convertPtToSafetensors(destPath, outPath, { log: () => {} });
+              console.log(`[Download] Converted ${path.basename(destPath)} → model.safetensors (${r.tensors} tensors, ${r.bytes} bytes)`);
+            } catch (e) {
+              console.error(`[Download] PT→safetensors conversion failed for ${path.basename(destPath)}: ${e.message}`);
+            }
+          }
+        }
+
         job.status = 'done';
         job.speedBps = 0;
         job.finishedAt = Date.now();
-        console.log(`[Download] Completed: ${filename}`);
       } catch (e) {
         job.status = 'error';
         job.error = e.message;
