@@ -486,6 +486,27 @@ private:
             while (i < hdr.size() && hdr[i] != '"') { s += hdr[i]; i++; }
             i++; return s;
         };
+        // Skip any JSON value (string / number / bool / null / array / object),
+        // tracking quotes and brace depth. Used to step over the safetensors
+        // `__metadata__` block (whose string values like "format":"pt" are not
+        // tensor descriptors) and any forward-compat fields we don't recognise.
+        auto skip_value = [&]() {
+            skip_ws();
+            if (i >= hdr.size()) return;
+            if (hdr[i] == '"') { read_string(); return; }
+            if (hdr[i] == '{' || hdr[i] == '[') {
+                int depth = 0;
+                while (i < hdr.size()) {
+                    char c = hdr[i];
+                    if (c == '"') { read_string(); continue; }
+                    if (c == '{' || c == '[') { depth++; i++; }
+                    else if (c == '}' || c == ']') { depth--; i++; if (depth == 0) return; }
+                    else i++;
+                }
+                return;
+            }
+            while (i < hdr.size() && hdr[i] != ',' && hdr[i] != '}' && hdr[i] != ']') i++;
+        };
         skip_ws();
         if (hdr[i] != '{') throw std::runtime_error("bad header");
         i++;
@@ -496,6 +517,15 @@ private:
             skip_ws();
             if (hdr[i] != ':') throw std::runtime_error("expected :");
             i++; skip_ws();
+            // `__metadata__` is not a tensor — its value is a string→string map
+            // ({"format":"pt", ...}); skip it wholesale rather than parsing it as
+            // a tensor descriptor (which threw "unexpected field: format").
+            if (key == "__metadata__") {
+                skip_value();
+                skip_ws();
+                if (i < hdr.size() && hdr[i] == ',') i++;
+                continue;
+            }
             if (hdr[i] != '{') throw std::runtime_error("expected tensor object");
             // parse the inner object
             TensorInfo ti{};
@@ -528,7 +558,7 @@ private:
                     ti.end = std::stoull(hdr.substr(i, j - i));
                     i = j + 1;
                 } else {
-                    throw std::runtime_error("unexpected field: " + fld);
+                    skip_value();   // forward-compat: ignore unknown tensor fields
                 }
                 skip_ws();
                 if (hdr[i] == ',') i++;
