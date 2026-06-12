@@ -26,13 +26,22 @@ struct ggml_backend_rknpu_context {
     int dummy = 0;
 };
 
+static inline int64_t rk_align(int64_t x, int64_t a) { return (x + a - 1) / a * a; }
+
+// fetch element (row-major plane, type-aware) as fp32
+static inline float rk_get_f32(const char * row, int64_t i, enum ggml_type t) {
+    return t == GGML_TYPE_F32 ? ((const float *) row)[i]
+                              : ggml_fp16_to_fp32(((const ggml_fp16_t *) row)[i]);
+}
+
 // ── MUL_MAT via rknn_matmul_api ───────────────────────────────────────────────
-// ggml MUL_MAT: dst[ne0=N, ne1=M] where dst = src1 . src0^T
-//   src0 (weights) : [ne00=K, ne01=N]  (row n is the K-vector for output col n)
-//   src1 (activs)  : [ne10=K, ne11=M]
-// rknn computes C[M,N] = A[M,K] . B[K,N]; dst is stored M-rows x N-cols (row
-// major, ne0=N contiguous) == C[M,N]. So A = src1 (M,K), B = src0 transposed to
-// (K,N), C -> dst.
+// ggml MUL_MAT: dst[ne0=N, ne1=M, ne2, ne3] = src1 . src0^T, per (i2,i3) plane,
+// with src0 broadcast over src1 (r2=ne12/ne02, r3=ne13/ne03).
+//   src0 (weights)   : [ne00=K, ne01=N]   plane
+//   src1 (activs)    : [ne10=K, ne11=M]   plane
+// rknn: C[M,N] = A[M,K] . B[K,N]  with A=src1 plane, B=src0 plane transposed.
+// Generalised v1: arbitrary K/N (zero-padded to RK3588 fp16 alignment K%32/N%16),
+// batched/broadcast planes, and F16 *or* F32 inputs (converted to fp16 for the NPU).
 static void ggml_backend_rknpu_mul_mat(ggml_backend_rknpu_context * /*ctx*/, struct ggml_tensor * dst) {
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
@@ -40,46 +49,58 @@ static void ggml_backend_rknpu_mul_mat(ggml_backend_rknpu_context * /*ctx*/, str
     const int64_t K = src0->ne[0];
     const int64_t N = src0->ne[1];
     const int64_t M = src1->ne[1];
+    const int64_t Kp = rk_align(K, 32);
+    const int64_t Np = rk_align(N, 16);
+
+    const int64_t r2 = src1->ne[2] / src0->ne[2];
+    const int64_t r3 = src1->ne[3] / src0->ne[3];
 
     rknn_matmul_ctx mctx = 0;
     rknn_matmul_info info; memset(&info, 0, sizeof info);
-    info.M = (int32_t) M; info.K = (int32_t) K; info.N = (int32_t) N;
+    info.M = (int32_t) M; info.K = (int32_t) Kp; info.N = (int32_t) Np;
     info.type = RKNN_FLOAT16_MM_FLOAT16_TO_FLOAT32;
     info.B_layout = 0; info.AC_layout = 0;
     rknn_matmul_io_attr io; memset(&io, 0, sizeof io);
     if (rknn_matmul_create(&mctx, &info, &io) != 0) {
-        GGML_ABORT("ggml-rknpu: rknn_matmul_create failed (M=%lld K=%lld N=%lld)", (long long)M,(long long)K,(long long)N);
+        GGML_ABORT("ggml-rknpu: rknn_matmul_create failed (M=%lld Kp=%lld Np=%lld)", (long long)M,(long long)Kp,(long long)Np);
     }
-
     rknn_tensor_mem * A = rknn_create_mem(mctx, io.A.size);
     rknn_tensor_mem * B = rknn_create_mem(mctx, io.B.size);
     rknn_tensor_mem * C = rknn_create_mem(mctx, io.C.size);
 
-    // A[M,K] fp16  <- src1 F32  (row major, contiguous)
-    {
-        const float * s = (const float *) src1->data;
-        ggml_fp16_t * a = (ggml_fp16_t *) A->virt_addr;
-        for (int64_t i = 0; i < M*K; i++) a[i] = ggml_fp32_to_fp16(s[i]);
-    }
-    // B[K,N] fp16  <- src0 [N,K] fp16, transposed
-    {
-        const ggml_fp16_t * w = (const ggml_fp16_t *) src0->data; // [N,K]
-        ggml_fp16_t * b = (ggml_fp16_t *) B->virt_addr;           // [K,N]
-        for (int64_t n = 0; n < N; n++)
-            for (int64_t k = 0; k < K; k++)
-                b[k*N + n] = w[n*K + k];
-    }
+    for (int64_t i3 = 0; i3 < dst->ne[3]; i3++) {
+        for (int64_t i2 = 0; i2 < dst->ne[2]; i2++) {
+            const char * s1 = (const char *) src1->data + i2*src1->nb[2] + i3*src1->nb[3];
+            const char * s0 = (const char *) src0->data + (i2/r2)*src0->nb[2] + (i3/r3)*src0->nb[3];
+            char       * d  = (char *)       dst->data  + i2*dst->nb[2]  + i3*dst->nb[3];
 
-    rknn_matmul_set_io_mem(mctx, A, &io.A);
-    rknn_matmul_set_io_mem(mctx, B, &io.B);
-    rknn_matmul_set_io_mem(mctx, C, &io.C);
+            // A[M,Kp] fp16  <- src1 plane [K,M] (zero-padded over Kp)
+            ggml_fp16_t * a = (ggml_fp16_t *) A->virt_addr;
+            memset(a, 0, io.A.size);
+            for (int64_t m = 0; m < M; m++) {
+                const char * row = s1 + m*src1->nb[1];
+                for (int64_t k = 0; k < K; k++) a[m*Kp + k] = ggml_fp32_to_fp16(rk_get_f32(row, k, src1->type));
+            }
+            // B[Kp,Np] fp16  <- src0 plane [K,N] transposed (zero-padded)
+            ggml_fp16_t * b = (ggml_fp16_t *) B->virt_addr;
+            memset(b, 0, io.B.size);
+            for (int64_t n = 0; n < N; n++) {
+                const char * wrow = s0 + n*src0->nb[1];
+                for (int64_t k = 0; k < K; k++) b[k*Np + n] = ggml_fp32_to_fp16(rk_get_f32(wrow, k, src0->type));
+            }
 
-    if (rknn_matmul_run(mctx) != 0) {
-        GGML_ABORT("ggml-rknpu: rknn_matmul_run failed");
+            rknn_matmul_set_io_mem(mctx, A, &io.A);
+            rknn_matmul_set_io_mem(mctx, B, &io.B);
+            rknn_matmul_set_io_mem(mctx, C, &io.C);
+            if (rknn_matmul_run(mctx) != 0) GGML_ABORT("ggml-rknpu: rknn_matmul_run failed");
+
+            // C[M,Np] f32 -> dst plane (row m = N contiguous f32 at d + m*nb1)
+            const float * c = (const float *) C->virt_addr;
+            for (int64_t m = 0; m < M; m++) {
+                memcpy(d + m*dst->nb[1], c + m*Np, (size_t) N * sizeof(float));
+            }
+        }
     }
-
-    // C[M,N] f32 -> dst (row major, ne0=N contiguous)
-    memcpy(dst->data, C->virt_addr, (size_t)(M*N)*sizeof(float));
 
     rknn_destroy_mem(mctx, A);
     rknn_destroy_mem(mctx, B);
@@ -180,16 +201,15 @@ static bool ggml_backend_rknpu_device_supports_op(ggml_backend_dev_t, const stru
         case GGML_OP_MUL_MAT: {
             const struct ggml_tensor * src0 = op->src[0];
             const struct ggml_tensor * src1 = op->src[1];
-            const int64_t K  = src0->ne[0];
-            const int64_t N  = src0->ne[1];
-            // v0: 2D only, fp16 weights x f32 activations, RK3588 fp16 alignment.
-            return src0->type == GGML_TYPE_F16 &&
-                   src1->type == GGML_TYPE_F32 &&
-                   op->type   == GGML_TYPE_F32 &&
+            // v1: F16/F32 weights x F16/F32 activations -> F32, contiguous, any
+            // K/N/M (zero-padded to NPU alignment) and batched/broadcast planes.
+            // Quantized weights (INT4/INT8) are still TODO -> stay on CPU.
+            const bool t0_ok = src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_F32;
+            const bool t1_ok = src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_F32;
+            return t0_ok && t1_ok && op->type == GGML_TYPE_F32 &&
                    ggml_is_contiguous(src0) && ggml_is_contiguous(src1) &&
-                   src0->ne[2] == 1 && src0->ne[3] == 1 &&
-                   src1->ne[2] == 1 && src1->ne[3] == 1 &&
-                   (K % 32 == 0) && (N % 16 == 0);
+                   (src1->ne[2] % src0->ne[2] == 0) &&   // broadcastable
+                   (src1->ne[3] % src0->ne[3] == 0);
         }
         default:
             return false;
