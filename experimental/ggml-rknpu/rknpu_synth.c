@@ -45,6 +45,7 @@ static void bsync(struct buf *b, uint32_t flags) {
     ioctl(g_fd, DRM_IOCTL_RKNPU_MEM_SYNC, &s);
 }
 static void act(uint32_t f, uint32_t v){ struct rknpu_action a={.flags=f,.value=v}; ioctl(g_fd,DRM_IOCTL_RKNPU_ACTION,&a); }
+static void bdestroy(struct buf *b){ munmap(b->cpu, b->size); struct rknpu_mem_destroy d; memset(&d,0,sizeof d); d.handle=b->handle; d.obj_addr=b->obj; ioctl(g_fd,DRM_IOCTL_RKNPU_MEM_DESTROY,&d); }
 
 /* set the register entry (block,reg) in the regcmd to `value` (M1.3 encoding) */
 static void set_reg(uint32_t *rc, int n, uint32_t block, uint32_t off, uint32_t value) {
@@ -116,29 +117,42 @@ int main(int argc, char **argv) {
         bbuf[nt*KT*16*32 + kt*16*32 + nl*32 + kk] = blog[(kt*32+kk)*N + (nt*16+nl)];
     for(int m=0;m<M;m++)for(int n=0;n<N;n++){float s=0;for(int k=0;k<K;k++)s+=(float)alog[m*K+k]*(float)blog[k*N+n];href[m*N+n]=s;}
 
-    uint32_t rc[REGCMD_N];
-    synth_regcmd(rc, M,K,N, (uint32_t)A.dma,(uint32_t)B.dma,(uint32_t)C.dma);
-    memcpy(regcmd.cpu, rc, sizeof rc);
-
     struct rknpu_task t; memset(&t,0,sizeof t);
     t.enable_mask=0xd; t.int_mask=0x300; t.int_clear=0x1ffff; t.int_status=0;
     t.regcfg_amount=108; t.regcmd_addr=regcmd.dma;
     memcpy(task.cpu,&t,sizeof t);
 
     int both=RKNPU_MEM_SYNC_TO_DEVICE|RKNPU_MEM_SYNC_FROM_DEVICE;
-    bsync(&regcmd,both);bsync(&task,both);bsync(&A,both);bsync(&B,both);bsync(&C,both);
-    bsync(&B,RKNPU_MEM_SYNC_TO_DEVICE);bsync(&regcmd,RKNPU_MEM_SYNC_TO_DEVICE);bsync(&A,RKNPU_MEM_SYNC_TO_DEVICE);
+    bsync(&regcmd,both);bsync(&task,both);bsync(&B,both);bsync(&B,RKNPU_MEM_SYNC_TO_DEVICE);
 
-    struct rknpu_submit s; memset(&s,0,sizeof s);
-    s.flags=0x5; s.timeout=6000; s.task_number=1; s.task_obj_addr=task.obj;
-    s.core_mask=RKNPU_CORE0_MASK; s.fence_fd=-1; s.subcore_task[0]=(struct rknpu_subcore_task){0,1};
-    if (ioctl(g_fd,DRM_IOCTL_RKNPU_SUBMIT,&s)){perror("SUBMIT");return 1;}
-    bsync(&C,RKNPU_MEM_SYNC_FROM_DEVICE);
+    /* M-tile in software; each tile gets a FRESH feature+output buffer (base address,
+     * no reuse) so the NPU loads its feature into CBUF cleanly per tile — avoids the
+     * stale-CBUF behaviour seen when one buffer is reused across submits. */
+    int cap = 16384/K; if (cap<1) cap=1;   /* true single-M-tile row capacity (empirical) */
+    float *cres = malloc((size_t)M*N*sizeof(float));
+    double total_us=0;
+    for (int pass=-1, ntiles=(M+cap-1)/cap; pass<ntiles; pass++) {
+        int m0 = (pass<0)?0:pass*cap, mc = (pass<0)? ((M<cap)?M:cap) : ((M-m0<cap)?(M-m0):cap);
+        struct buf Ac=bcreate((size_t)mc*K*2,0x403), Cc=bcreate((size_t)mc*N*4,0x403);
+        memcpy(Ac.cpu, alog + (size_t)m0*K, (size_t)mc*K*sizeof(f16));
+        bsync(&Ac,both); bsync(&Cc,both); bsync(&Ac,RKNPU_MEM_SYNC_TO_DEVICE);
+        uint32_t rc[REGCMD_N];
+        synth_regcmd(rc, mc,K,N, (uint32_t)Ac.dma,(uint32_t)B.dma,(uint32_t)Cc.dma);
+        memcpy(regcmd.cpu, rc, sizeof rc); bsync(&regcmd,RKNPU_MEM_SYNC_TO_DEVICE);
+        struct rknpu_submit s; memset(&s,0,sizeof s);
+        s.flags=0x5; s.timeout=6000; s.task_number=1; s.task_obj_addr=task.obj;
+        s.core_mask=RKNPU_CORE0_MASK; s.fence_fd=-1; s.subcore_task[0]=(struct rknpu_subcore_task){0,1};
+        if (ioctl(g_fd,DRM_IOCTL_RKNPU_SUBMIT,&s)){perror("SUBMIT");return 1;}
+        bsync(&Cc,RKNPU_MEM_SYNC_FROM_DEVICE);
+        if (pass>=0){ total_us += (double)s.hw_elapse_time; memcpy(cres+(size_t)m0*N, Cc.cpu, (size_t)mc*N*sizeof(float)); }
+        /* keep buffers alive so each tile has a UNIQUE live IOVA (destroy+recreate
+         * reuses freed addresses → stale CBUF). */
+    }
+    (void)bdestroy;
 
-    float *c=C.cpu; int bad=0; float maxerr=0;
+    float *c=cres; int bad=0; float maxerr=0;
     for(int i=0;i<M*N;i++){float e=c[i]-href[i]; if(e<0)e=-e; if(e>maxerr)maxerr=e; if(e>0.5f)bad++;}
-    double gflop = 2.0*M*K*N/1e9, us = (double)s.hw_elapse_time;
-    printf("MKN=%d,%d,%d  C[0]=%.1f ref[0]=%.1f  mism=%d/%d : %s  | hw=%.0fus  %.1f GFLOP/s\n",
-           M,K,N, c[0],href[0], bad, M*N, bad?"WRONG":"CORRECT", us, us>0?gflop/(us/1e6):0);
+    printf("MKN=%d,%d,%d  C[0]=%.1f ref[0]=%.1f  mism=%d/%d : %s  | M-tiles=%d hw=%.0fus\n",
+           M,K,N, c[0],href[0], bad, M*N, bad?"WRONG":"CORRECT", (M+cap-1)/cap, total_us);
     return bad?2:0;
 }
