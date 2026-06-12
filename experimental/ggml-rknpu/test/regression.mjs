@@ -44,6 +44,8 @@ const SUITE = {
   rknpu_hybrid:    { src:'rknpu_hybrid.c',    shapes:[[128,512,16],[512,4096,512],[512,8192,128],[384,11008,64],[256,5120,256],[128,1536,64]] },
   // int8 K-split hybrid (pooled, arbitrary K)
   rknpu_hybrid_i8: { src:'rknpu_hybrid_i8.c', shapes:[[512,8192,128],[256,11008,32],[256,14336,32],[512,4096,512],[128,1280,64]] },
+  // single-submit general-M large-K via M-tile PC-chaining (calibrated power-of-2 K)
+  rknpu_pcchain:   { src:'rknpu_pcchain.c',   shapes:[[128,4096,16],[512,4096,128],[256,8192,16],[512,2048,128],[64,1024,64],[512,512,64],[256,8192,512]] },
 };
 
 const kernels = Object.entries(SUITE).filter(([k]) => !filter || k.includes(filter));
