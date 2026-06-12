@@ -30,6 +30,8 @@ int main(void){
     fail|=check(ctx,512,8192,128);
     fail|=check(ctx,64,11008,64);     /* non-power-of-2 K */
     fail|=check(ctx,32,2048,256);
+    fail|=check(ctx,8,512,16384);     /* N-tiling: N>8192 (NPU output-width cap) */
+    fail|=check(ctx,1,288,32000);     /* LM-head shape: non-pow2 K + N tiled into 4 slices */
     rknpu_mm_free(ctx);
     printf("%s\n",fail?"FAIL":"ALL OK");
     return fail?1:0;

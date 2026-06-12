@@ -15,11 +15,12 @@
 #include "rknpu_mm.h"
 #define CARD "/dev/dri/card1"
 #define KS 2048
+#define NMAX 8192    /* the NPU caps matmul output width at 8192 (N=16384 fails) — tile N */
 typedef rk_f16 f16;
 
 struct buf { uint32_t handle; uint64_t dma, obj; void *cpu; size_t size; };
 struct rknpu_mm { int fd; struct buf regcmd, task, Af, Cc; size_t ccsz; float *cres; size_t cressz; int warmed; };
-struct rknpu_w  { int K, N, S; struct buf *Bb; };
+struct rknpu_w  { int K, N, Sk, Sn; struct buf *Bb; };   /* Bb[ns*Sk + ks], K-split x N-split */
 
 static size_t pgup(size_t s){return (s+4095)&~((size_t)4095);}
 static struct buf bcreate(int fd,size_t size,uint32_t flags){
@@ -72,12 +73,14 @@ void rknpu_mm_free(rknpu_mm *c){ if(!c)return; int fd=c->fd;
 
 rknpu_w *rknpu_mm_pack(rknpu_mm *c,int K,int N,const f16 *B){
     if(K%32||N%16) return NULL;
-    int S=(K+KS-1)/KS; rknpu_w *w=calloc(1,sizeof *w); w->K=K;w->N=N;w->S=S; w->Bb=calloc(S,sizeof(struct buf));
-    for(int si=0;si<S;si++){int k0=si*KS,Kp=(K-k0<KS)?(K-k0):KS,KT=Kp/32,NN=N/16;
-        w->Bb[si]=bcreate(c->fd,(size_t)Kp*N*2,0x403); f16*bb=w->Bb[si].cpu;
+    int Sk=(K+KS-1)/KS, Sn=(N+NMAX-1)/NMAX;
+    rknpu_w *w=calloc(1,sizeof *w); w->K=K;w->N=N;w->Sk=Sk;w->Sn=Sn; w->Bb=calloc((size_t)Sk*Sn,sizeof(struct buf));
+    for(int ns=0;ns<Sn;ns++){int n0=ns*NMAX,Nc=(N-n0<NMAX)?(N-n0):NMAX,NN=Nc/16;
+      for(int ks=0;ks<Sk;ks++){int k0=ks*KS,Kp=(K-k0<KS)?(K-k0):KS,KT=Kp/32;
+        struct buf*b=&w->Bb[(size_t)ns*Sk+ks]; *b=bcreate(c->fd,(size_t)Kp*Nc*2,0x403); f16*bb=b->cpu;
         for(int nt=0;nt<NN;nt++)for(int kt=0;kt<KT;kt++)for(int nl=0;nl<16;nl++)for(int kk=0;kk<32;kk++)
-            bb[nt*KT*16*32+kt*16*32+nl*32+kk]=B[(size_t)(k0+kt*32+kk)*N+(nt*16+nl)];
-        bsync(c->fd,&w->Bb[si],RKNPU_MEM_SYNC_TO_DEVICE|RKNPU_MEM_SYNC_FROM_DEVICE);bsync(c->fd,&w->Bb[si],RKNPU_MEM_SYNC_TO_DEVICE);}
+            bb[nt*KT*16*32+kt*16*32+nl*32+kk]=B[(size_t)(k0+kt*32+kk)*N+(n0+nt*16+nl)];
+        bsync(c->fd,b,RKNPU_MEM_SYNC_TO_DEVICE|RKNPU_MEM_SYNC_FROM_DEVICE);bsync(c->fd,b,RKNPU_MEM_SYNC_TO_DEVICE);}}
     return w;
 }
 void rknpu_mm_w_free(rknpu_w *w){ if(!w)return; free(w->Bb); free(w); }   /* buffers freed at ctx teardown */
@@ -87,27 +90,32 @@ int rknpu_mm_run(rknpu_mm *c,rknpu_w *w,int M,const f16 *A,float *C){
     size_t need=(size_t)M*N*4;
     if(c->cressz<need){c->cres=realloc(c->cres,need);c->cressz=need;}
     memset(c->cres,0,need);
-    /* size the reused output device buffer to the largest chunk this run needs */
-    size_t maxout=0; for(int k0=0;k0<K;k0+=KS){int Kp=(K-k0<KS)?(K-k0):KS;int R=32768/Kp;if(R<1)R=1;size_t o=(size_t)4*R*N*4;if(o>maxout)maxout=o;}
-    if(c->ccsz<maxout){bdestroy(fd,&c->Cc);c->Cc=bcreate(fd,maxout,0x403);c->ccsz=maxout; if(!c->Cc.cpu)return -1;}
-    for(int si=0;si<w->S;si++){int k0=si*KS,Kp=(K-k0<KS)?(K-k0):KS;
+    /* output device buffer holds one submit's chunk: max rows x N-slice-width (<=NMAX) */
+    size_t maxout=0; for(int k0=0;k0<K;k0+=KS){int Kp=(K-k0<KS)?(K-k0):KS;int sd=((Kp&(Kp-1))==0);int R=32768/Kp;if(R<1)R=1;
+        int chunk=sd?4*R:(16384/Kp); if(chunk<1)chunk=1; int rows=chunk<M?chunk:M; int nc=N<NMAX?N:NMAX; size_t o=(size_t)rows*nc*4; if(o>maxout)maxout=o;}
+    if(c->ccsz<maxout){bdestroy(fd,&c->Cc);c->Cc=bcreate(fd,maxout,0x403);c->ccsz=maxout;c->warmed=0; if(!c->Cc.cpu)return -1;}
+    int Sk=w->Sk;
+    for(int ns=0;ns<w->Sn;ns++){int n0=ns*NMAX,Nc=(N-n0<NMAX)?(N-n0):NMAX;       /* output-column slice */
+      for(int ks=0;ks<Sk;ks++){int k0=ks*KS,Kp=(K-k0<KS)?(K-k0):KS;              /* contraction slice (accumulate) */
         int sched=((Kp&(Kp-1))==0), R=32768/Kp; if(R<1)R=1; int chunk=sched?4*R:(16384/Kp); if(chunk<1)chunk=1;
+        struct buf*Bb=&w->Bb[(size_t)ns*Sk+ks];
         for(int m0=0;m0<M;m0+=chunk){int mc=(M-m0<chunk)?(M-m0):chunk; if(mc<=0)continue;
             f16*ad=c->Af.cpu; for(int r=0;r<mc;r++)for(int j=0;j<Kp;j++) ad[(size_t)r*Kp+j]=A[(size_t)(m0+r)*K+k0+j];
             bsync(fd,&c->Af,RKNPU_MEM_SYNC_TO_DEVICE);
-            uint32_t rc[REGCMD_N]; synth(rc,mc,Kp,N,(uint32_t)c->Af.dma,(uint32_t)w->Bb[si].dma,(uint32_t)c->Cc.dma,sched);
+            uint32_t rc[REGCMD_N]; synth(rc,mc,Kp,Nc,(uint32_t)c->Af.dma,(uint32_t)Bb->dma,(uint32_t)c->Cc.dma,sched);
             memcpy(c->regcmd.cpu,rc,sizeof rc); bsync(fd,&c->regcmd,RKNPU_MEM_SYNC_TO_DEVICE);
             struct rknpu_submit sub;memset(&sub,0,sizeof sub);sub.flags=0x5;sub.timeout=6000;sub.task_number=1;sub.task_obj_addr=c->task.obj;sub.core_mask=RKNPU_CORE0_MASK;sub.fence_fd=-1;sub.subcore_task[0]=(struct rknpu_subcore_task){0,1};
-            /* cold-start: the first submit on a fresh context yields stale results, so run
-             * it twice once (a warmup), then never again. */
+            /* cold-start: the first submit to a fresh output buffer yields stale data, so run
+             * it twice once (a warmup), then never again until the buffer is reallocated. */
             int reps=c->warmed?1:2;
             for(int rep=0;rep<reps;rep++){
                 if(ioctl(fd,DRM_IOCTL_RKNPU_SUBMIT,&sub)){perror("SUBMIT");return -1;}
                 bsync(fd,&c->Cc,RKNPU_MEM_SYNC_FROM_DEVICE);
             }
             c->warmed=1;
-            float*cc=c->Cc.cpu; for(int r=0;r<mc;r++)for(int n=0;n<N;n++) c->cres[(size_t)(m0+r)*N+n]+=cc[(size_t)r*N+n];
+            float*cc=c->Cc.cpu; for(int r=0;r<mc;r++)for(int n=0;n<Nc;n++) c->cres[(size_t)(m0+r)*N+(n0+n)]+=cc[(size_t)r*Nc+n];
         }
+      }
     }
     memcpy(C,c->cres,need); return 0;
 }
