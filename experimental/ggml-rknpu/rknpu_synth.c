@@ -135,7 +135,8 @@ int main(int argc, char **argv) {
 
     float *c=C.cpu; int bad=0; float maxerr=0;
     for(int i=0;i<M*N;i++){float e=c[i]-href[i]; if(e<0)e=-e; if(e>maxerr)maxerr=e; if(e>0.5f)bad++;}
-    printf("MKN=%d,%d,%d  C[0]=%.1f ref[0]=%.1f  maxerr=%.2f  mismatches=%d/%d : %s\n",
-           M,K,N, c[0],href[0], maxerr, bad, M*N, bad?"WRONG":"CORRECT");
+    double gflop = 2.0*M*K*N/1e9, us = (double)s.hw_elapse_time;
+    printf("MKN=%d,%d,%d  C[0]=%.1f ref[0]=%.1f  mism=%d/%d : %s  | hw=%.0fus  %.1f GFLOP/s\n",
+           M,K,N, c[0],href[0], bad, M*N, bad?"WRONG":"CORRECT", us, us>0?gflop/(us/1e6):0);
     return bad?2:0;
 }
