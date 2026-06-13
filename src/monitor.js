@@ -54,11 +54,15 @@ async function getCachedDisks() {
 export async function getSystemMetrics() {
   const isLinux = os.platform() === 'linux';
   
-  // 1. CPU Usage
+  // 1. CPU Usage — frequency-weighted across cores. On big.LITTLE SoCs (RK3588: 4×A76 +
+  // 4×A55, RK3576: 4×A72 + 4×A53) a flat mean over-reports load, since a saturated little
+  // core counts the same as a saturated big core despite far less compute. We weight each
+  // core's load by its max clock (compute capacity), so the figure is "% of total CPU
+  // throughput in use". Falls back to the flat mean when per-core data/weights are unavailable.
   let cpuLoad = 0;
   try {
     const loadData = await si.currentLoad();
-    cpuLoad = loadData.currentLoad;
+    cpuLoad = weightedCpuLoad(loadData);
   } catch (e) {
     // fallback
   }
@@ -394,6 +398,43 @@ function mockFan(temperature) {
 }
 function mockMemBw(cpuLoad) {
   return { percentage: clampPct(cpuLoad * 0.5 + Math.random() * 8), freqMhz: 2112 };
+}
+
+// Per-core max-clock weights (kHz) for the frequency-weighted CPU load, read once from
+// /sys/devices/system/cpu/cpuN/cpufreq/cpuinfo_max_freq (static, so cached). Index = core
+// number. Empty array => weighting unavailable (non-Linux, or no cpufreq), use the flat mean.
+let _cpuWeights = null;
+function getCpuCoreWeights() {
+  if (_cpuWeights !== null) return _cpuWeights;
+  _cpuWeights = [];
+  if (os.platform() !== 'linux') return _cpuWeights;
+  try {
+    const base = '/sys/devices/system/cpu';
+    const cores = fs.readdirSync(base)
+      .filter(d => /^cpu\d+$/.test(d))
+      .sort((a, b) => parseInt(a.slice(3), 10) - parseInt(b.slice(3), 10));
+    const w = cores.map(c => readIntFile(`${base}/${c}/cpufreq/cpuinfo_max_freq`) || 0);
+    if (w.some(v => v > 0)) _cpuWeights = w;
+  } catch { /* leave empty -> flat mean */ }
+  return _cpuWeights;
+}
+
+// Frequency-weighted CPU utilisation: Σ(load_i · maxFreq_i) / Σ(maxFreq_i). On big.LITTLE this
+// reflects actual compute-capacity usage instead of a flat per-core mean. Falls back to the flat
+// `currentLoad` when per-core loads are missing or the core count doesn't match the weight table.
+export function weightedCpuLoad(loadData, weights = getCpuCoreWeights()) {
+  const flat = loadData?.currentLoad ?? 0;
+  const cpus = loadData?.cpus;
+  if (!Array.isArray(cpus) || cpus.length === 0) return flat;
+  const w = weights;
+  if (!Array.isArray(w) || w.length !== cpus.length) return flat;
+  let num = 0, den = 0;
+  for (let i = 0; i < cpus.length; i++) {
+    const load = typeof cpus[i].load === 'number' ? cpus[i].load : 0;
+    num += load * w[i];
+    den += w[i];
+  }
+  return den > 0 ? num / den : flat;
 }
 
 // Small sysfs read helpers.
