@@ -392,7 +392,7 @@ class EnginePool {
 
       const onExit = (code, signal) => {
         clearTimeout(loadTimeout);
-        slot.worker.removeListener('message', onMessage);
+        if (slot.worker) slot.worker.removeListener('message', onMessage);
         slot.worker = null;
         resolve({ success: false, error: `Worker exited (${signal ?? code})` });
       };
