@@ -141,6 +141,7 @@ typedef void     (*llama_sampler_free_t)(struct llama_sampler *);
 typedef bool     (*llama_token_is_eog_t)(const struct llama_vocab *, llama_token);
 typedef int32_t  (*llama_n_ctx_t)(const struct llama_context *);
 typedef int32_t  (*llama_kv_self_used_cells_t)(const struct llama_context *);
+typedef void     (*llama_sampler_accept_t)(struct llama_sampler *, llama_token);
 typedef int32_t  (*llama_model_n_embd_t)(const struct llama_model *);
 typedef float *  (*llama_get_logits_ith_t)(struct llama_context *, int32_t);
 typedef float *  (*llama_get_embeddings_ith_t)(struct llama_context *, int32_t);
@@ -179,6 +180,7 @@ static llama_sampler_init_top_p_t        fn_s_topp         = nullptr;
 static llama_sampler_init_temp_t         fn_s_temp         = nullptr;
 static llama_sampler_init_dist_t         fn_s_dist         = nullptr;
 static llama_sampler_sample_t            fn_sample         = nullptr;
+static llama_sampler_accept_t            fn_samp_accept    = nullptr;
 static llama_sampler_free_t              fn_samp_free      = nullptr;
 static llama_token_is_eog_t              fn_is_eog         = nullptr;
 static llama_n_ctx_t                     fn_n_ctx          = nullptr;
@@ -233,6 +235,7 @@ Napi::Value LoadLibrary(const Napi::CallbackInfo& info) {
     LOAD_SYM2(s_temp,        "llama_sampler_init_temp");
     LOAD_SYM2(s_dist,        "llama_sampler_init_dist");
     LOAD_SYM2(sample,        "llama_sampler_sample");
+    LOAD_SYM2(samp_accept,   "llama_sampler_accept");
     LOAD_SYM2(samp_free,     "llama_sampler_free");
     LOAD_SYM2(is_eog,        "llama_token_is_eog");
     LOAD_SYM2(n_ctx,         "llama_n_ctx");
@@ -348,18 +351,23 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
     g_abort = false;
 
     std::thread([prompt, loadCachePath, saveCachePath, maxNewTokens, inferMode, keepHistory, tokenIds, useTokenInput, rctx]() {
+        float prefill_time = 0;
+        int prefill_tokens = 0;
+        float generate_time = 0;
+        int generated_tokens = 0;
+
         auto finish = [&](const std::string &text, int state,
                           const std::vector<float>& h_states = {}, int h_embd = 0, int h_num = 0,
                           const std::vector<float>& l_states = {}, int l_vocab = 0, int l_num = 0) {
-            rctx->tsfn.NonBlockingCall([text, state, h_states, h_embd, h_num, l_states, l_vocab, l_num](Napi::Env e, Napi::Function f) {
+            rctx->tsfn.NonBlockingCall([text, state, h_states, h_embd, h_num, l_states, l_vocab, l_num, prefill_time, prefill_tokens, generate_time, generated_tokens](Napi::Env e, Napi::Function f) {
                 Napi::Object o = Napi::Object::New(e);
                 o.Set("text",  Napi::String::New(e, text));
                 o.Set("state", Napi::Number::New(e, state));
                 Napi::Object perf = Napi::Object::New(e);
-                perf.Set("prefill_time_ms",  Napi::Number::New(e, 0));
-                perf.Set("prefill_tokens",   Napi::Number::New(e, 0));
-                perf.Set("generate_time_ms", Napi::Number::New(e, 0));
-                perf.Set("generate_tokens",  Napi::Number::New(e, 0));
+                perf.Set("prefill_time_ms",  Napi::Number::New(e, prefill_time));
+                perf.Set("prefill_tokens",   Napi::Number::New(e, prefill_tokens));
+                perf.Set("generate_time_ms", Napi::Number::New(e, generate_time));
+                perf.Set("generate_tokens",  Napi::Number::New(e, generated_tokens));
                 o.Set("perf", perf);
                 if (!h_states.empty()) {
                     auto buf = Napi::Float32Array::New(e, h_states.size());
@@ -383,14 +391,7 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
             }
         };
 
-        if (!keepHistory && fn_kv_clear) {
-            fn_kv_clear(g_ctx);
-        }
 
-        // Optional: load KV cache prefix from disk
-        if (!loadCachePath.empty() && fn_state_load) {
-            fn_state_load(g_ctx, loadCachePath.c_str(), 0, nullptr, 0, nullptr);
-        }
 
         // Tokenize
         std::vector<llama_token> toks;
@@ -411,28 +412,43 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
         int n_embd = fn_n_embd ? fn_n_embd(g_model) : 0;
         int n_vocab = fn_n_vocab(g_vocab);
 
+        int n_past = 0;
+        if (!loadCachePath.empty() && fn_state_load) {
+            size_t tokens_loaded = 0;
+            fn_state_load(g_ctx, loadCachePath.c_str(), 0, nullptr, 0, &tokens_loaded);
+            if (tokens_loaded > 0) n_past = tokens_loaded;
+            else if (fn_kv_used) n_past = fn_kv_used(g_ctx);
+        } else if (keepHistory && fn_kv_used) {
+            n_past = fn_kv_used(g_ctx);
+        } else if (fn_kv_clear) {
+            fn_kv_clear(g_ctx);
+        }
+
+        auto t0 = std::chrono::high_resolution_clock::now();
+
         // Decode the prompt (prefill)
         for (int i = 0; i < n && !g_abort; ) {
             int batch = std::min(n - i, 512);
             auto b = fn_batch_one(toks.data() + i, batch);
-            if (inferMode == 1 || inferMode == 2) {
-                for (int j = 0; j < batch; j++) b.logits[j] = 1;
+            for (int j = 0; j < batch; j++) {
+                b.pos[j] = n_past + j;
+                if (inferMode == 1 || inferMode == 2) b.logits[j] = 1;
             }
             if (fn_decode(g_ctx, b) != 0) { finish("", 3); return; }
             
             if (inferMode == 1 || inferMode == 2) {
                 for (int j = 0; j < batch; j++) {
-                    if (fn_get_embeddings_ith) {
-                        float* embd = fn_get_embeddings_ith(g_ctx, j);
-                        if (embd) all_hidden_states.insert(all_hidden_states.end(), embd, embd + n_embd);
-                    }
+                    float* hs = nullptr;
+                    if (inferMode == 1 && fn_get_embeddings_ith) hs = fn_get_embeddings_ith(g_ctx, j);
+                    if (hs) all_hidden_states.insert(all_hidden_states.end(), hs, hs + n_embd);
+                    
                     if (inferMode == 2 && fn_get_logits_ith) {
                         float* l = fn_get_logits_ith(g_ctx, j);
                         if (l) all_logits.insert(all_logits.end(), l, l + n_vocab);
                     }
                     
                     char piece[128];
-                    int plen = fn_tok2piece(g_vocab, toks[i+j], piece, sizeof(piece) - 1, 0, true);
+                    int plen = fn_tok2piece(g_vocab, toks[i + j], piece, sizeof(piece) - 1, 0, true);
                     if (plen < 0) plen = 0;
                     piece[plen] = '\0';
                     std::string s(piece, plen);
@@ -447,7 +463,11 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
                 }
             }
             i += batch;
+            n_past += batch;
+            prefill_tokens += batch;
         }
+        auto t1 = std::chrono::high_resolution_clock::now();
+        prefill_time = std::chrono::duration<float, std::milli>(t1 - t0).count();
         if (g_abort) { finish("", 3); return; }
 
         if (inferMode == 1) {
@@ -464,23 +484,26 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
         }
 
         // Generate
+        auto t2 = std::chrono::high_resolution_clock::now();
         char piece[128];
         for (int gen = 0; gen < maxNewTokens && !g_abort; gen++) {
             llama_token tok = fn_sample(g_sampler, g_ctx, -1);
+            if (fn_samp_accept) fn_samp_accept(g_sampler, tok);
             if (fn_is_eog(g_vocab, tok)) break;
 
             int plen = fn_tok2piece(g_vocab, tok, piece, sizeof(piece) - 1, 0, true);
             if (plen < 0) plen = 0;
             piece[plen] = '\0';
             std::string s(piece, plen);
+            generated_tokens++;
 
-            rctx->tsfn.NonBlockingCall([s](Napi::Env e, Napi::Function f) {
+            rctx->tsfn.NonBlockingCall([s, prefill_time, prefill_tokens](Napi::Env e, Napi::Function f) {
                 Napi::Object o = Napi::Object::New(e);
                 o.Set("text",  Napi::String::New(e, s));
-                o.Set("state", Napi::Number::New(e, 0 /*RKLLM_RUN_NORMAL*/));
+                o.Set("state", Napi::Number::New(e, 0));
                 Napi::Object perf = Napi::Object::New(e);
-                perf.Set("prefill_time_ms",  Napi::Number::New(e, 0));
-                perf.Set("prefill_tokens",   Napi::Number::New(e, 0));
+                perf.Set("prefill_time_ms",  Napi::Number::New(e, prefill_time));
+                perf.Set("prefill_tokens",   Napi::Number::New(e, prefill_tokens));
                 perf.Set("generate_time_ms", Napi::Number::New(e, 0));
                 perf.Set("generate_tokens",  Napi::Number::New(e, 0));
                 o.Set("perf", perf);
@@ -490,8 +513,12 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
             // Decode the sampled token
             std::vector<llama_token> next = {tok};
             auto b = fn_batch_one(next.data(), 1);
+            b.pos[0] = n_past;
             if (fn_decode(g_ctx, b) != 0) break;
+            n_past++;
         }
+        auto t3 = std::chrono::high_resolution_clock::now();
+        generate_time = std::chrono::duration<float, std::milli>(t3 - t2).count();
 
         finish("", 2 /*RKLLM_RUN_FINISH*/);
     }).detach();
