@@ -60,6 +60,7 @@ Inspired by [jundot/oMLX](https://github.com/jundot/omlx) (which does the same f
 * **Process-Isolated Execution**: Inference engine runs in a dedicated child process. Model unload/swap terminates the process, guaranteeing full NPU driver memory cleanup.
 * **Smart Resource Management**: Single active model lock, auto-swap, configurable idle timeout, pin-to-keep-loaded.
 * **Runtime Version Auto-Matching & Auto-Download**: oRKLLM reads the embedded version from each `librkllmrt.so` (via `strings`), matches it against the version in the model filename, and retries all candidates until one succeeds — caching the winner per model. On first setup, opt in to automatically download all versioned runtimes from [oRKLLM/rkllm-runtimes](https://github.com/oRKLLM/rkllm-runtimes) (Apache 2.0). Opted-out users are prompted with a disclaimer dialog in the UI; API callers receive HTTP 422 `RUNTIME_MISSING` with the required version. Toggle in Settings after setup.
+* **Dual-Runtime Support (GGUF + RKLLM)**: Serve both `.rkllm` models (Rockchip RKLLM closed runtime) and `.gguf` models (open llama.cpp-rockchip NPU runtime via `ggml-ork` backend) from the same server. The backend is selected automatically by file extension. The llama runtime bundle (`libllama.so` + ggml-ork libs) downloads on demand from `oRKLLM/llama-rk-runtimes`. Models, library, and Dashboard all show a runtime chip (`rkllm` / `llama`).
 * **APT Distribution Channels**: Three channels — `stable` (main), `beta`, `alpha` — with separate `dists/<channel>/` directories on gh-pages. Users pin to their preferred channel.
 * **Trusted Proxy**: Supports `true`, single IP/CIDR, or comma-separated list (SAN-style) passed directly to Fastify's `trustProxy`.
 * **Database Migrations**: PRAGMA user_version migration runner — schema changes (v1–v5) apply automatically on startup, safe across upgrades from any previous version.
@@ -206,6 +207,8 @@ npm run dev:server
 | `ORKLLM_RUNTIME_MIRRORS` | `oRKLLM/rkllm-runtimes,mafischer/rkllm-runtimes` | Comma-separated list of GitHub repo slugs tried in order when downloading runtime `.so` files — first mirror that has the version wins |
 | `ORKLLM_SPV_DIR` | `~/.config/orkllm/spv` | Directory for the extracted Vulkan SPIR-V shaders (Eagle-3 GPU draft); exposed to the native Vulkan loader |
 | `ORKLLM_SPV_MIRRORS` | `oRKLLM/llama.cpp` | Comma-separated GitHub repo slugs for the prebuilt `ggml-vulkan-spirv-<tag>.tar.gz` shader releases |
+| `ORKLLM_LLAMA_RUNTIME_DIR` | `~/.config/orkllm/llama-runtime` | Directory for the `libllama.so` + ggml-ork bundle (llama/GGUF backend) |
+| `ORKLLM_LLAMA_RUNTIME_MIRRORS` | `oRKLLM/llama-rk-runtimes` | Comma-separated GitHub repo slugs for downloading the llama runtime bundle |
 
 ---
 

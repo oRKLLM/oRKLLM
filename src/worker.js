@@ -6,72 +6,80 @@ const require = createRequire(import.meta.url);
 
 const isProductionHardware = process.platform === 'linux' && process.arch === 'arm64';
 
-let nativeAddon = null;
-let engine = null;
-let useMock = !!process.env.ORKLLM_MOCK;
+// Backend-specific addon cache — loaded lazily per 'load' message
+const addonCache = {};
 
-// Attempt to load native N-API addon
-if (!useMock) {
+function loadAddon(name) {
+  if (addonCache[name]) return addonCache[name];
   try {
-    nativeAddon = require('../build/Release/orkllm_napi.node');
+    addonCache[name] = require(`../build/Release/${name}.node`);
+    return addonCache[name];
   } catch (e) {
     if (isProductionHardware) {
-      // Keep nativeAddon null — hard error reported when 'load' message arrives
-      console.error(`[Worker] Native N-API addon failed to load: ${e.message}`);
-    } else {
-      console.log("Could not load native N-API addon. Running in mock mode.");
-      useMock = true;
+      console.error(`[Worker] Native addon ${name} failed to load: ${e.message}`);
     }
+    return null;
   }
 }
 
+let engine = null;
+let useMock = !!process.env.ORKLLM_MOCK;
+
 process.on('message', async (msg) => {
   if (msg.type === 'load') {
-    const { modelPath, options, libPath } = msg;
+    const { modelPath, options, libPath, backend = 'rkllm' } = msg;
+
+    // Select addon and default lib path based on backend
+    const addonName = backend === 'llama' ? 'orkllm_llama_napi' : 'orkllm_napi';
     const resolvedLibPath = libPath || LIBRKLLMRT_PATH;
+
+    let nativeAddon = null;
+    if (!useMock) {
+      nativeAddon = loadAddon(addonName);
+      if (!nativeAddon && !isProductionHardware) {
+        console.log(`Could not load native addon ${addonName}. Running in mock mode.`);
+        useMock = true;
+      }
+    }
 
     if (!useMock) {
       if (!nativeAddon) {
-        if (isProductionHardware) {
-          process.send({ type: 'loaded', status: -1, error: 'Native N-API addon failed to load. Run npm install on the board to recompile.' });
+        process.send({ type: 'loaded', status: -1, error: `Native addon ${addonName} failed to load. Run npm install on the board to recompile.` });
+        return;
+      }
+      try {
+        console.log(`[Worker:${backend}] Loading library: ${resolvedLibPath}`);
+        const loaded = nativeAddon.load_library(resolvedLibPath);
+        if (!loaded) {
+          if (isProductionHardware) {
+            process.send({ type: 'loaded', status: -1, error: `Failed to dlopen ${resolvedLibPath}` });
+            return;
+          }
+          console.warn(`Failed to dlopen ${resolvedLibPath}. Falling back to mock engine.`);
+          useMock = true;
+        } else {
+          console.log(`[Worker:${backend}] Initializing model: ${modelPath}`);
+          const ret = nativeAddon.init_model(modelPath, options || {});
+          if (ret !== 0) {
+            const msg = backend === 'rkllm'
+              ? `rkllm_init failed (code ${ret}): likely RKLLM runtime version mismatch. See server logs.`
+              : `llama_init_from_model failed (code ${ret}). Check model format and library compatibility.`;
+            console.error(`[Worker:${backend}] init_model returned ${ret}`);
+            process.send({ type: 'loaded', status: ret, error: msg });
+            return;
+          }
+          engine = nativeAddon;
+          process.send({ type: 'loaded', status: 0, isMock: false });
           return;
         }
-        useMock = true;
-      } else {
-        try {
-          console.log(`Attempting to load NPU library from: ${resolvedLibPath}`);
-          const loaded = nativeAddon.load_library(resolvedLibPath);
-          if (!loaded) {
-            if (isProductionHardware) {
-              process.send({ type: 'loaded', status: -1, error: `Failed to load RKLLM library at ${resolvedLibPath}. Ensure librkllmrt.so is installed and ORKLLM_LIB_PATH is set correctly.` });
-              return;
-            }
-            console.warn(`Failed to dlopen ${LIBRKLLMRT_PATH}. Falling back to mock engine.`);
-            useMock = true;
-          } else {
-            console.log(`Initializing RKLLM model: ${modelPath}`);
-            const ret = nativeAddon.init_model(modelPath, options || {});
-            if (ret !== 0) {
-              console.error(`[Worker] rkllm_init returned error code: ${ret}`);
-              console.error(`[Worker] Possible causes: wrong target platform (RK3576 vs RK3588), runtime version mismatch, or corrupt model file.`);
-              console.error(`[Worker] Check journalctl -u orkllm for 'E rkllm:' lines with the specific reason.`);
-              process.send({ type: 'loaded', status: ret, error: `rkllm_init failed (code ${ret}): likely RKLLM runtime version mismatch. See server logs.` });
-              return;
-            }
-            engine = nativeAddon;
-            process.send({ type: 'loaded', status: 0, isMock: false });
-            return;
-          }
-        } catch (err) {
-          if (isProductionHardware) {
-            console.error("[Worker] Exception loading RKLLM library:", err.message);
-            process.send({ type: 'loaded', status: -1, error: `Exception loading RKLLM library: ${err.message}` });
-            return;
-          }
-          console.error("[Worker] Exception loading model natively:", err.message);
-          console.error(err.stack);
-          useMock = true;
+      } catch (err) {
+        if (isProductionHardware) {
+          console.error(`[Worker:${backend}] Exception:`, err.message);
+          process.send({ type: 'loaded', status: -1, error: `Exception: ${err.message}` });
+          return;
         }
+        console.error(`[Worker:${backend}] Exception loading model natively:`, err.message);
+        useMock = true;
       }
     }
 

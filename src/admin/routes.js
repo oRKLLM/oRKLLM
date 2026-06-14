@@ -16,6 +16,7 @@ import {
 } from '../db.js';
 import { v4 as uuidv4 } from 'uuid';
 import { isSpvAvailable } from '../spv_sync.js';
+import { isLlamaRuntimeAvailable, getLlamaRuntimeInfo, getLlamaReleases, syncLlamaRuntime, getLlamaSyncState } from '../llama_sync.js';
 import { getDramStatus, getCpuStatus } from '../monitor.js';
 import { getState as getPerfState } from '../perf_governor.js';
 import { fetchBaseEmbeddings, extractLocalEmbeddings, localBaseHasEmbeddings } from '../hf_embeddings.js';
@@ -243,6 +244,7 @@ export default async function adminRoutes(fastify, options) {
     status.platform = getPlatform();
     status.npuCores = getNpuCoreCount();
     status.spvAvailable = isSpvAvailable(); // Eagle-3 'vulkan' draft gated on this
+    status.llamaRuntime = getLlamaRuntimeInfo();
     const dram = getDramStatus(); // null off-board; { governor, curFreqMhz, maxFreqMhz, throttled }
     status.dram = dram ? { ...dram, management: getPerfState() } : null;
     const cpuFreq = getCpuStatus(); // perf-cluster CPU governor/clock (prefill is CPU-op bound)
@@ -433,6 +435,7 @@ export default async function adminRoutes(fastify, options) {
         pinnedModel: dbGetSetting('pinned_model') ?? '',
         autoDownloadRuntimes: dbGetSetting('auto_download_runtimes') === '1',
         autoDownloadSpv: dbGetSetting('auto_download_spv') === '1',
+        autoDownloadLlamaRuntime: dbGetSetting('auto_download_llama_runtime') === '1',
         npuPoolSize: parseInt(dbGetSetting('npu_pool_size') ?? '1'),
         langfuseEnabled:    dbGetSetting('langfuse_enabled')    === '1',
         langfuseBaseUrl:    dbGetSetting('langfuse_base_url')   ?? '',
@@ -450,7 +453,7 @@ export default async function adminRoutes(fastify, options) {
     const { idleTimeoutMinutes, temperature, topP, topK, maxNewTokens, repPenalty, hfToken,
             cacheEnabled, cacheHotLimitMB, cacheColdLimitMB, cacheDir, cacheMaxContextTokens,
             kvCacheQuant,
-            localAuthDisabled, trustedProxy, autoDownloadRuntimes, autoDownloadSpv, npuPoolSize,
+            localAuthDisabled, trustedProxy, autoDownloadRuntimes, autoDownloadSpv, autoDownloadLlamaRuntime, npuPoolSize,
             langfuseEnabled, langfuseBaseUrl, langfusePublicKey, langfuseSecretKey,
             mcpInferenceEnabled, managePerformance,
           } = request.body || {};
@@ -475,6 +478,7 @@ export default async function adminRoutes(fastify, options) {
     if (typeof trustedProxy === 'string') dbSetSetting('trusted_proxy', trustedProxy);
     if (typeof autoDownloadRuntimes === 'boolean') dbSetSetting('auto_download_runtimes', autoDownloadRuntimes ? '1' : '0');
     if (typeof autoDownloadSpv === 'boolean') dbSetSetting('auto_download_spv', autoDownloadSpv ? '1' : '0');
+    if (typeof autoDownloadLlamaRuntime === 'boolean') dbSetSetting('auto_download_llama_runtime', autoDownloadLlamaRuntime ? '1' : '0');
     if (typeof npuPoolSize === 'number' && npuPoolSize >= 1 && npuPoolSize <= 8)
       dbSetSetting('npu_pool_size', String(npuPoolSize));
     if (typeof langfuseEnabled   === 'boolean') dbSetSetting('langfuse_enabled',    langfuseEnabled ? '1' : '0');
@@ -508,6 +512,29 @@ export default async function adminRoutes(fastify, options) {
     const { syncRuntimes } = await import('../runtime_sync.js');
     syncRuntimes(version).catch(e => console.error('[RuntimeSync] Download failed:', e.message));
     return { success: true, message: `Downloading runtime ${version} in background` };
+  });
+
+  // ── Llama runtime (libllama.so bundle for .gguf serving) ─────────────────
+  // GET /api/admin/llama-runtime — install state + version info
+  fastify.get('/llama-runtime', async () => {
+    return {
+      ...getLlamaRuntimeInfo(),
+      syncState: getLlamaSyncState(),
+      autoDownload: dbGetSetting('auto_download_llama_runtime') === '1',
+    };
+  });
+
+  // GET /api/admin/llama-runtime/releases — available tags from the mirror
+  fastify.get('/llama-runtime/releases', async () => {
+    const releases = await getLlamaReleases();
+    return { releases };
+  });
+
+  // POST /api/admin/llama-runtime/sync — download or update the llama runtime bundle
+  fastify.post('/llama-runtime/sync', async (request, reply) => {
+    const { tag } = request.body || {};
+    syncLlamaRuntime(tag || null).catch(e => console.error('[LlamaSync] Manual sync failed:', e.message));
+    return { success: true, message: 'Llama runtime sync started in background' };
   });
 
   // ── Vulkan SPIR-V shaders (Eagle-3 'vulkan' draft) ────────────────────────
@@ -674,12 +701,14 @@ export default async function adminRoutes(fastify, options) {
     const listFiles = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; } };
     const sizeOf = (p) => { try { return fs.statSync(p).size; } catch { return null; } };
 
-    // Servable models: every .rkllm anywhere under MODELS_DIR.
-    (function scanRkllm(dir, prefix = '') {
+    // Servable models: every .rkllm or .gguf anywhere under MODELS_DIR.
+    // .rkllm → rkllm runtime; .gguf → llama runtime (open NPU stack).
+    (function scanModels(dir, prefix = '') {
       for (const e of listFiles(dir)) {
         const rel = prefix ? `${prefix}/${e.name}` : e.name;
-        if (e.isDirectory()) scanRkllm(path.join(dir, e.name), rel);
-        else if (/\.rkllm$/i.test(e.name)) available.push({ id: rel, sizeBytes: sizeOf(path.join(dir, e.name)) });
+        if (e.isDirectory()) scanModels(path.join(dir, e.name), rel);
+        else if (/\.rkllm$/i.test(e.name)) available.push({ id: rel, sizeBytes: sizeOf(path.join(dir, e.name)), runtime: 'rkllm' });
+        else if (/\.gguf$/i.test(e.name))  available.push({ id: rel, sizeBytes: sizeOf(path.join(dir, e.name)), runtime: 'llama' });
       }
     })(MODELS_DIR);
 
@@ -1182,7 +1211,7 @@ export default async function adminRoutes(fastify, options) {
   // DELETE /api/admin/models/* — supports subdirectory paths e.g. RepoName/model.rkllm
   fastify.delete('/models/*', async (request, reply) => {
     const modelId = request.params['*'];
-    if (!modelId || modelId.includes('..') || !modelId.endsWith('.rkllm')) {
+    if (!modelId || modelId.includes('..') || (!modelId.endsWith('.rkllm') && !modelId.endsWith('.gguf'))) {
       return reply.status(400).send({ error: 'Invalid model ID' });
     }
     // Path traversal guard: resolved path must be inside MODELS_DIR

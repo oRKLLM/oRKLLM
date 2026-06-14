@@ -34,7 +34,7 @@ function settings() {
 }
 
 // All possible extensions a cached file might use
-const CACHE_EXTS = ['.rkllmcache', '.q8cache', '.pq8cache', '.pq4cache'];
+const CACHE_EXTS = ['.rkllmcache', '.llamacache', '.q8cache', '.pq8cache', '.pq4cache'];
 
 function ensureDir(p) {
   if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });

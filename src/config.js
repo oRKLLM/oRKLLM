@@ -42,6 +42,21 @@ if (!fs.existsSync(RUNTIMES_DIR)) {
   fs.mkdirSync(RUNTIMES_DIR, { recursive: true });
 }
 
+// Llama runtime bundle (libllama.so + ggml-ork libs) for serving .gguf models on the open NPU stack.
+// Override mirror list with ORKLLM_LLAMA_RUNTIME_MIRRORS=owner/repo,... (comma-separated).
+export const LLAMA_RUNTIME_MIRRORS = (
+  process.env.ORKLLM_LLAMA_RUNTIME_MIRRORS ||
+  'oRKLLM/llama-rk-runtimes'
+).split(',').map(s => s.trim()).filter(Boolean);
+
+export const LLAMA_RUNTIME_DIR = process.env.ORKLLM_LLAMA_RUNTIME_DIR ||
+  (process.env.ORKLLM_DB_PATH
+    ? path.join(path.dirname(process.env.ORKLLM_DB_PATH), 'llama-runtime')
+    : path.join(CONFIG_DIR, 'llama-runtime'));
+if (!fs.existsSync(LLAMA_RUNTIME_DIR)) {
+  fs.mkdirSync(LLAMA_RUNTIME_DIR, { recursive: true });
+}
+
 // Vulkan SPIR-V shader mirror (Eagle-3 'vulkan' draft strategy). Same
 // distribution model as the runtime mirror: GitHub releases on oRKLLM/llama.cpp,
 // each attaching a ggml-vulkan-spirv-<tag>.tar.gz of the compiled .spv modules.

@@ -30,26 +30,28 @@ export default async function apiRoutes(fastify, options) {
   // GET /v1/models
   fastify.get('/models', async (request, reply) => {
     try {
-      // Recursively collect .rkllm files, using paths relative to MODELS_DIR as IDs
+      // Recursively collect .rkllm and .gguf files, using paths relative to MODELS_DIR as IDs
       function scanDir(dir, prefix = '') {
         const results = [];
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
           if (entry.isDirectory()) {
             results.push(...scanDir(path.join(dir, entry.name), prefix ? `${prefix}/${entry.name}` : entry.name));
-          } else if (entry.name.endsWith('.rkllm')) {
+          } else if (entry.name.endsWith('.rkllm') || entry.name.endsWith('.gguf')) {
             results.push(prefix ? `${prefix}/${entry.name}` : entry.name);
           }
         }
         return results;
       }
-      const rkllmFiles = scanDir(MODELS_DIR);
+      const modelFiles = scanDir(MODELS_DIR);
 
-      const data = rkllmFiles.map(file => {
+      const data = modelFiles.map(file => {
         const stats = fs.statSync(path.join(MODELS_DIR, file));
         const basename = path.basename(file);
+        const isGguf = basename.endsWith('.gguf');
+        const runtime = isGguf ? 'llama' : 'rkllm';
 
-        // Persist parsed runtime version into model_settings if not already stored
-        const runtimeVersion = parseRuntimeVersion(basename);
+        // Persist parsed runtime version into model_settings if not already stored (rkllm only)
+        const runtimeVersion = isGguf ? null : parseRuntimeVersion(basename);
         if (runtimeVersion) {
           const existing = dbGetModelSettings(file) || {};
           if (!existing.runtimeVersion) {
@@ -63,6 +65,7 @@ export default async function apiRoutes(fastify, options) {
           created: Math.floor(stats.birthtimeMs / 1000),
           owned_by: 'orkllm',
           size: stats.size,
+          runtime,
           runtimeVersion: runtimeVersion ?? (dbGetModelSettings(file)?.runtimeVersion ?? null),
         };
       });

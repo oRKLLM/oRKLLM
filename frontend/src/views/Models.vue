@@ -97,7 +97,12 @@
                 <v-list-item-title class="font-weight-bold text-truncate">
                   {{ modelSettings[model.id]?.display_name || model.id }}
                 </v-list-item-title>
-                <v-list-item-subtitle>{{ formatBytes(model.size) }}</v-list-item-subtitle>
+                <v-list-item-subtitle class="d-flex align-center gap-1">
+                  {{ formatBytes(model.size) }}
+                  <v-chip size="x-small" :color="model.runtime === 'llama' ? 'teal' : 'primary'" variant="tonal" class="ml-1">
+                    {{ model.runtime === 'llama' ? 'llama / .gguf' : 'rkllm / .rkllm' }}
+                  </v-chip>
+                </v-list-item-subtitle>
 
                 <template v-slot:append>
                   <div class="d-flex align-center gap-1">

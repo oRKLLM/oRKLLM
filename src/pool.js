@@ -2,10 +2,11 @@ import { fork, execFileSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { MODELS_DIR, LIBRKLLMRT_PATH, RUNTIMES_DIR, parseRuntimeVersion, getNpuCoreCount } from './config.js';
+import { MODELS_DIR, LIBRKLLMRT_PATH, RUNTIMES_DIR, LLAMA_RUNTIME_DIR, parseRuntimeVersion, getNpuCoreCount } from './config.js';
 import { dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings } from './db.js';
 import { applyPerformance, restoreGovernor } from './perf_governor.js';
 import { syncRuntimes, hasRuntime } from './runtime_sync.js';
+import { syncLlamaRuntime, isLlamaRuntimeAvailable } from './llama_sync.js';
 import { eagle3Generate } from './eagle.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -233,29 +234,67 @@ class EnginePool {
         throw new Error(`Model file not found: ${modelPath}`);
       }
 
-      const candidates = EnginePool.runtimeCandidates(modelName);
-      console.log(`[EnginePool] Runtime candidates for ${modelName}: ${candidates.join(', ')}`);
+      // Determine backend from file extension
+      const isGguf = modelName.toLowerCase().endsWith('.gguf');
+      const backend = isGguf ? 'llama' : 'rkllm';
 
       // NPU core pinning: with a single slot, leave the model unpinned so it
       // uses all cores (max single-model throughput). With multiple slots, pin
       // each slot to its own core (base_domain_id = slot+1, wrapped to the
-      // core count) so multiple models load and run in parallel — one model on
-      // all cores would otherwise leave none for a second init.
+      // core count) so multiple models load and run in parallel.
       const slotOptions = this._slots.length > 1
         ? { ...options, base_domain_id: (s.id % this.npuCores) + 1 }
         : { ...options };
 
-      // Try each candidate lib path until one succeeds
+      if (isGguf) {
+        // ── llama backend (.gguf) ──────────────────────────────────────────
+        const libPath = path.join(LLAMA_RUNTIME_DIR, 'libllama.so');
+        const result = await this._tryLoadSlot(s, modelName, modelPath, slotOptions, libPath, 'llama');
+        if (result.success) {
+          s.isLoaded = true;
+          applyPerformance();
+          s.activeModel = { name: modelName, path: modelPath, options, isMock: result.isMock, libPath, backend: 'llama' };
+          console.log(`[EnginePool] Slot ${s.id}: loaded ${modelName} (llama, isMock: ${result.isMock})`);
+          this.resetIdleTimer(s);
+          return { status: 0, activeModel: s.activeModel };
+        }
+        // Auto-download llama runtime if enabled and not yet present
+        if (dbGetSetting('auto_download_llama_runtime') === '1' && !isLlamaRuntimeAvailable()) {
+          console.log(`[EnginePool] Llama runtime missing — triggering sync`);
+          await syncLlamaRuntime();
+          const result2 = await this._tryLoadSlot(s, modelName, modelPath, slotOptions, libPath, 'llama');
+          if (result2.success) {
+            s.isLoaded = true;
+            applyPerformance();
+            s.activeModel = { name: modelName, path: modelPath, options, isMock: result2.isMock, libPath, backend: 'llama' };
+            console.log(`[EnginePool] Slot ${s.id}: loaded after llama runtime sync: ${modelName}`);
+            this.resetIdleTimer(s);
+            return { status: 0, activeModel: s.activeModel };
+          }
+          if (s.worker) { s.worker.kill(); s.worker = null; }
+        }
+        if (s.worker) { s.worker.kill(); s.worker = null; }
+        throw Object.assign(
+          new Error(`Failed to load ${modelName}. Llama runtime not available at ${libPath}. ` +
+            `Enable auto-download in Settings or manually sync via POST /api/admin/llama-runtime/sync.`),
+          { code: 'LLAMA_RUNTIME_MISSING' }
+        );
+      }
+
+      // ── rkllm backend (.rkllm) ─────────────────────────────────────────────
+      const candidates = EnginePool.runtimeCandidates(modelName);
+      console.log(`[EnginePool] Runtime candidates for ${modelName}: ${candidates.join(', ')}`);
+
       for (const libPath of candidates) {
-        const result = await this._tryLoadSlot(s, modelName, modelPath, slotOptions, libPath);
+        const result = await this._tryLoadSlot(s, modelName, modelPath, slotOptions, libPath, 'rkllm');
         if (result.success) {
           const settings = dbGetModelSettings(modelName) || {};
           if (settings.workingLibPath !== libPath) {
             dbSetModelSettings(modelName, { ...settings, workingLibPath: libPath });
           }
           s.isLoaded = true;
-          applyPerformance(); // pin CPU + DDR to performance while a model is resident
-          s.activeModel = { name: modelName, path: modelPath, options, isMock: result.isMock, libPath };
+          applyPerformance();
+          s.activeModel = { name: modelName, path: modelPath, options, isMock: result.isMock, libPath, backend: 'rkllm' };
           console.log(`[EnginePool] Slot ${s.id}: loaded ${modelName} using ${libPath} (isMock: ${result.isMock})`);
           this.resetIdleTimer(s);
           return { status: 0, activeModel: s.activeModel };
@@ -269,16 +308,15 @@ class EnginePool {
       if (dbGetSetting('auto_download_runtimes') === '1' && parsedVersion && !hasRuntime(parsedVersion)) {
         console.log(`[EnginePool] No runtime found for ${modelName} — triggering sync for v${parsedVersion}`);
         await syncRuntimes(parsedVersion);
-        // Rebuild candidates with newly downloaded runtime and retry once
         const freshCandidates = EnginePool.runtimeCandidates(modelName);
         for (const libPath of freshCandidates) {
-          const result2 = await this._tryLoadSlot(s, modelName, modelPath, slotOptions, libPath);
+          const result2 = await this._tryLoadSlot(s, modelName, modelPath, slotOptions, libPath, 'rkllm');
           if (result2.success) {
             const settings = dbGetModelSettings(modelName) || {};
             dbSetModelSettings(modelName, { ...settings, workingLibPath: libPath });
             s.isLoaded = true;
-          applyPerformance(); // pin CPU + DDR to performance while a model is resident
-            s.activeModel = { name: modelName, path: modelPath, options, isMock: result2.isMock, libPath };
+            applyPerformance();
+            s.activeModel = { name: modelName, path: modelPath, options, isMock: result2.isMock, libPath, backend: 'rkllm' };
             console.log(`[EnginePool] Slot ${s.id}: loaded after runtime sync: ${modelName} using ${libPath}`);
             this.resetIdleTimer(s);
             return { status: 0, activeModel: s.activeModel };
@@ -307,7 +345,7 @@ class EnginePool {
   }
 
   // Attempt to load a model on a slot with a specific libPath
-  _tryLoadSlot(slot, modelName, modelPath, options, libPath) {
+  _tryLoadSlot(slot, modelName, modelPath, options, libPath, backend = 'rkllm') {
     return new Promise((resolve) => {
       const workerPath = path.join(__dirname, 'worker.js');
       // 'advanced' (v8) IPC serialization preserves TypedArrays — Eagle-3's
@@ -361,7 +399,7 @@ class EnginePool {
 
       slot.worker.on('message', onMessage);
       slot.worker.once('exit', onExit);
-      slot.worker.send({ type: 'load', modelPath, options, libPath });
+      slot.worker.send({ type: 'load', modelPath, options, libPath, backend });
     });
   }
 
@@ -845,20 +883,22 @@ class EnginePool {
     // Primary slot (slot 0) drives the single-model status reported to the UI
     const primary = this._slots[0];
     return {
-      isLoaded:   primary.isLoaded,
-      model:      primary.activeModel?.name  ?? null,
-      isMock:     primary.activeModel?.isMock ?? false,
-      options:    primary.activeModel?.options ?? null,
+      isLoaded:      primary.isLoaded,
+      model:         primary.activeModel?.name  ?? null,
+      isMock:        primary.activeModel?.isMock ?? false,
+      options:       primary.activeModel?.options ?? null,
+      activeRuntime: primary.activeModel?.backend ?? null,
       // Current idle-unload timeout (independent of whether a model is loaded),
       // so the UI can restore the saved value on page refresh.
       idleTimeoutMs: this.idleTimeoutMs,
-      pinned:     this.pinned,
-      poolSize:   this._slots.length,
-      slots:      this._slots.map(s => ({
+      pinned:        this.pinned,
+      poolSize:      this._slots.length,
+      slots:         this._slots.map(s => ({
         id:      s.id,
         model:   s.activeModel?.name ?? null,
         loaded:  s.isLoaded,
         busy:    !!s.activeGeneration,
+        backend: s.activeModel?.backend ?? null,
       })),
     };
   }

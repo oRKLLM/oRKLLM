@@ -103,6 +103,47 @@
         </div>
       </v-card>
 
+      <!-- Llama Runtime (libllama.so + ggml-ork for .gguf serving) -->
+      <v-card class="glass-card pa-5 mb-5">
+        <div class="section-heading mb-4">
+          <v-icon color="teal" size="18" class="mr-2">mdi-lightning-bolt</v-icon>
+          Llama Runtime (Open NPU)
+        </div>
+        <div class="d-flex align-center justify-space-between mb-3">
+          <div>
+            <div class="text-subtitle-2 font-weight-medium mb-1">Auto-download llama runtime</div>
+            <div class="text-caption text-grey">
+              Downloads <code>libllama.so</code> + <code>libggml-ork.so</code> (the open NPU backend built from
+              <a href="https://github.com/oRKLLM/llama.cpp-rockchip" target="_blank" class="text-primary">llama.cpp-rockchip</a>)
+              from <a href="https://github.com/oRKLLM/llama-rk-runtimes" target="_blank" class="text-primary">oRKLLM/llama-rk-runtimes</a>.
+              Required to load <code>.gguf</code> models. ARM64 (board) only.
+            </div>
+          </div>
+          <v-switch :model-value="settings.autoDownloadLlamaRuntime" @update:model-value="onToggleAutoLlama" color="teal" hide-details density="compact" class="ml-4 flex-shrink-0"></v-switch>
+        </div>
+        <v-divider class="my-3"></v-divider>
+        <div class="d-flex align-center gap-3 flex-wrap">
+          <v-chip size="small" :color="llamaRuntime.available ? 'success' : 'grey'" variant="tonal">
+            <v-icon start size="14">{{ llamaRuntime.available ? 'mdi-check-circle' : 'mdi-close-circle' }}</v-icon>
+            {{ llamaRuntime.available
+              ? `Installed: llama.cpp ${llamaRuntime.llamaVersion || llamaRuntime.tag || '?'} / ork-driver ${llamaRuntime.orkDriverVersion || '?'}`
+              : 'Not installed' }}
+          </v-chip>
+          <v-select
+            v-model="llamaSelectedTag"
+            :items="llamaReleases.map(r => ({ title: r.tag === (llamaRuntime.tag) ? `${r.tag} (installed)` : r.tag, value: r.tag }))"
+            label="Release" placeholder="latest"
+            density="compact" variant="outlined" hide-details
+            style="min-width: 180px; max-width: 260px;"
+            :no-data-text="'No releases found — the mirror may not have a release yet'"
+          ></v-select>
+          <v-btn size="small" variant="tonal" color="teal" :loading="llamaSyncing"
+            prepend-icon="mdi-download" @click="downloadLlama">
+            {{ llamaRuntime.available ? 'Sync / update' : 'Download' }}
+          </v-btn>
+        </div>
+      </v-card>
+
       <!-- Vulkan Shaders (Eagle-3) -->
       <v-card class="glass-card pa-5 mb-5">
         <div class="section-heading mb-4">
@@ -651,6 +692,7 @@ export default {
       autoDownloadRuntimes: true,
       savedAutoDownloadRuntimes: true,
       autoDownloadSpv: false,
+      autoDownloadLlamaRuntime: false,
       mcpInferenceEnabled: false,
       managePerformance: true,
     },
@@ -659,6 +701,10 @@ export default {
     spvSelectedTag: null,
     spvSyncing: false,
     spvLicense: { open: false, text: '', source: null, scrolledToBottom: false },
+    llamaRuntime: { available: false, tag: null, llamaVersion: null, orkDriverVersion: null },
+    llamaReleases: [],
+    llamaSelectedTag: null,
+    llamaSyncing: false,
     cacheStats: null,
     clearingCache: false,
     passwordForm: { current: '', next: '', confirm: '' },
@@ -695,6 +741,8 @@ export default {
     this.fetchMcpServers();
     this.fetchSpv();
     this.fetchSpvReleases();
+    this.fetchLlamaRuntime();
+    this.fetchLlamaReleases();
   },
   methods: {
     async fetchAuth() {
@@ -729,7 +777,8 @@ export default {
         this.settings.trustedProxy          = s.trustedProxy ?? '';
         this.settings.autoDownloadRuntimes  = s.autoDownloadRuntimes ?? true;
         this.savedAutoDownloadRuntimes       = this.settings.autoDownloadRuntimes;
-        this.settings.autoDownloadSpv       = s.autoDownloadSpv ?? false;
+        this.settings.autoDownloadSpv           = s.autoDownloadSpv ?? false;
+        this.settings.autoDownloadLlamaRuntime  = s.autoDownloadLlamaRuntime ?? false;
         this.settings.mcpInferenceEnabled   = s.mcpInferenceEnabled ?? false;
         this.settings.managePerformance     = s.managePerformance ?? true;
         this.cacheStats = data.cacheStats || null;
@@ -753,6 +802,34 @@ export default {
         if (res.ok) this.spvReleases = (await res.json()).releases || [];
       } catch (e) {}
     },
+    async fetchLlamaRuntime() {
+      try {
+        const res = await fetch('/api/admin/llama-runtime');
+        if (res.ok) {
+          const d = await res.json();
+          this.llamaRuntime = { available: d.available, tag: d.tag, llamaVersion: d.llamaVersion, orkDriverVersion: d.orkDriverVersion };
+          if (!this.llamaSelectedTag && d.tag) this.llamaSelectedTag = d.tag;
+        }
+      } catch (e) {}
+    },
+    async fetchLlamaReleases() {
+      try {
+        const res = await fetch('/api/admin/llama-runtime/releases');
+        if (res.ok) this.llamaReleases = (await res.json()).releases || [];
+      } catch (e) {}
+    },
+    async onToggleAutoLlama(val) {
+      this.settings.autoDownloadLlamaRuntime = val;
+      try { await fetch('/api/admin/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ autoDownloadLlamaRuntime: val }) }); } catch (e) {}
+    },
+    async downloadLlama() {
+      this.llamaSyncing = true;
+      try {
+        await fetch('/api/admin/llama-runtime/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tag: this.llamaSelectedTag || null }) });
+        setTimeout(() => { this.fetchLlamaRuntime(); this.llamaSyncing = false; }, 3000);
+      } catch (e) { this.llamaSyncing = false; }
+    },
+
     // Show the upstream license; resolves true only once the admin scrolls + accepts.
     async ensureSpvLicense() {
       if (this.spv.licenseAccepted) return true;

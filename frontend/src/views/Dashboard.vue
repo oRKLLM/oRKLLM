@@ -408,6 +408,28 @@
             </div>
           </v-card>
 
+          <!-- Llama Runtime (open NPU stack — libllama.so + ggml-ork) -->
+          <v-card class="glass-card pa-5">
+            <div class="text-h6 font-weight-bold mb-4 d-flex align-center">
+              <v-icon start color="teal">mdi-lightning-bolt</v-icon>
+              Llama Runtime (Open NPU)
+            </div>
+            <div v-if="status.llamaRuntime?.available">
+              <div class="d-flex flex-wrap gap-2 mb-2">
+                <v-chip size="small" color="teal" variant="tonal">
+                  llama.cpp {{ status.llamaRuntime.llamaVersion || status.llamaRuntime.tag || '—' }}
+                </v-chip>
+                <v-chip v-if="status.llamaRuntime.orkDriverVersion" size="small" color="primary" variant="tonal">
+                  ork-driver v{{ status.llamaRuntime.orkDriverVersion }}
+                </v-chip>
+              </div>
+              <div class="text-caption text-grey">Serves .gguf models on the Rockchip NPU via the open ggml-ork backend.</div>
+            </div>
+            <div v-else class="text-caption text-grey">
+              Not installed. Sync via Settings → Llama Runtime, or POST /api/admin/llama-runtime/sync.
+            </div>
+          </v-card>
+
         </v-col>
 
       </v-row>

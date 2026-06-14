@@ -551,3 +551,123 @@ test('Version: /api/version returns the app version and matches the bundle', asy
   await page.waitForTimeout(1500);
   await expect(page).toHaveURL(/\/login/); // still here — no forced reload loop
 });
+
+// ── Dual-runtime (rkllm + llama) feature tests ──────────────────────────────
+
+test.describe('Dual-runtime (rkllm + llama)', () => {
+  const dummyGgufName = 'test_model.gguf';
+  const dummyGgufPath = path.join(modelsDir, dummyGgufName);
+
+  test.beforeAll(async () => {
+    fs.writeFileSync(dummyGgufPath, 'fake-gguf-data', 'utf-8');
+    // Unload any model left by the Bench test so activeRuntime is null.
+    // Unload requires auth — login first to obtain the session cookie.
+    try {
+      const loginRes = await fetch('http://127.0.0.1:18000/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: ADMIN_USER, password: ADMIN_PASS }),
+      });
+      const cookie = (loginRes.headers.get('set-cookie') || '').split(';')[0];
+      if (cookie) {
+        await fetch('http://127.0.0.1:18000/api/admin/unload', {
+          method: 'POST',
+          headers: { Cookie: cookie },
+        });
+      }
+    } catch {}
+  });
+
+  test.afterAll(() => {
+    if (fs.existsSync(dummyGgufPath)) fs.rmSync(dummyGgufPath, { force: true });
+  });
+
+  test('/v1/models lists .gguf files tagged with runtime=llama', async ({ page }) => {
+    const res = await page.request.get('/v1/models');
+    expect(res.ok()).toBeTruthy();
+    const { data } = await res.json();
+    const gguf = data.find(m => m.id === dummyGgufName);
+    expect(gguf).toBeTruthy();
+    expect(gguf.runtime).toBe('llama');
+    const rkllm = data.find(m => m.id === dummyModelName);
+    expect(rkllm).toBeTruthy();
+    expect(rkllm.runtime).toBe('rkllm');
+  });
+
+  test('/api/admin/library includes .gguf in available with runtime=llama', async ({ page }) => {
+    await login(page);
+    const res = await page.request.get('/api/admin/library');
+    expect(res.ok()).toBeTruthy();
+    const { available } = await res.json();
+    const gguf = available.find(m => m.id === dummyGgufName);
+    expect(gguf).toBeTruthy();
+    expect(gguf.runtime).toBe('llama');
+  });
+
+  test('/api/admin/status includes activeRuntime and llamaRuntime fields', async ({ page }) => {
+    await login(page);
+    const res = await page.request.get('/api/admin/status');
+    expect(res.ok()).toBeTruthy();
+    const status = await res.json();
+    expect('activeRuntime' in status).toBeTruthy();
+    expect('llamaRuntime' in status).toBeTruthy();
+    expect(status.activeRuntime).toBeNull(); // nothing loaded after explicit unload in beforeAll
+    expect(typeof status.llamaRuntime).toBe('object');
+    expect('available' in status.llamaRuntime).toBeTruthy();
+  });
+
+  test('/api/admin/llama-runtime endpoint exists and returns correct shape', async ({ page }) => {
+    await login(page);
+    const res = await page.request.get('/api/admin/llama-runtime');
+    expect(res.ok()).toBeTruthy();
+    const d = await res.json();
+    expect('available' in d).toBeTruthy();
+    expect('path' in d).toBeTruthy();
+    expect('syncState' in d).toBeTruthy();
+    expect('autoDownload' in d).toBeTruthy();
+    expect(d.available).toBe(false); // not installed in test env
+  });
+
+  test('/api/admin/global-settings includes autoDownloadLlamaRuntime', async ({ page }) => {
+    await login(page);
+    const res = await page.request.get('/api/admin/global-settings');
+    expect(res.ok()).toBeTruthy();
+    const { settings } = await res.json();
+    expect('autoDownloadLlamaRuntime' in settings).toBeTruthy();
+    expect(typeof settings.autoDownloadLlamaRuntime).toBe('boolean');
+  });
+
+  test('autoDownloadLlamaRuntime setting can be toggled and persists', async ({ page }) => {
+    await login(page);
+    const res1 = await page.request.post('/api/admin/global-settings', {
+      data: { autoDownloadLlamaRuntime: true }
+    });
+    expect(res1.ok()).toBeTruthy();
+    const res2 = await page.request.get('/api/admin/global-settings');
+    const { settings } = await res2.json();
+    expect(settings.autoDownloadLlamaRuntime).toBe(true);
+    // restore
+    await page.request.post('/api/admin/global-settings', { data: { autoDownloadLlamaRuntime: false } });
+  });
+
+  test('Settings page shows Llama Runtime card', async ({ page }) => {
+    await login(page);
+    await page.goto('/settings');
+    await expect(page.locator('text=Llama Runtime (Open NPU)')).toBeVisible({ timeout: 6000 });
+    await expect(page.locator('text=Auto-download llama runtime')).toBeVisible();
+  });
+
+  test('Models page shows runtime chip for rkllm and gguf models', async ({ page }) => {
+    await login(page);
+    await page.goto('/models');
+    // Both chips should appear somewhere in the available models list
+    await expect(page.locator('.v-chip', { hasText: 'rkllm / .rkllm' }).first()).toBeVisible({ timeout: 6000 });
+    await expect(page.locator('.v-chip', { hasText: 'llama / .gguf' }).first()).toBeVisible({ timeout: 6000 });
+  });
+
+  test('Dashboard shows Llama Runtime (Open NPU) card', async ({ page }) => {
+    await login(page);
+    await page.goto('/');
+    await expect(page.locator('text=Llama Runtime (Open NPU)')).toBeVisible({ timeout: 6000 });
+  });
+});
