@@ -41,6 +41,7 @@ typedef int32_t llama_seq_id;
 struct llama_model;
 struct llama_context;
 struct llama_sampler;
+struct llama_vocab;
 
 // Struct layout verified against llama.cpp-rockchip include/llama.h.
 // Must be kept in sync with that header to avoid ABI mismatches when calling
@@ -116,9 +117,10 @@ typedef struct llama_model * (*llama_model_load_from_file_t)(const char *, struc
 typedef void     (*llama_model_free_t)(struct llama_model *);
 typedef struct llama_context * (*llama_init_from_model_t)(struct llama_model *, struct llama_context_params);
 typedef void     (*llama_free_t)(struct llama_context *);
-typedef int32_t  (*llama_model_n_vocab_t)(const struct llama_model *);
-typedef int32_t  (*llama_tokenize_t)(const struct llama_model *, const char *, int32_t, llama_token *, int32_t, bool, bool);
-typedef int32_t  (*llama_token_to_piece_t)(const struct llama_model *, llama_token, char *, int32_t, int32_t, bool);
+typedef const struct llama_vocab * (*llama_model_get_vocab_t)(const struct llama_model *);
+typedef int32_t  (*llama_vocab_n_tokens_t)(const struct llama_vocab *);
+typedef int32_t  (*llama_tokenize_t)(const struct llama_vocab *, const char *, int32_t, llama_token *, int32_t, bool, bool);
+typedef int32_t  (*llama_token_to_piece_t)(const struct llama_vocab *, llama_token, char *, int32_t, int32_t, bool);
 typedef struct llama_batch (*llama_batch_get_one_t)(llama_token *, int32_t);
 typedef int32_t  (*llama_decode_t)(struct llama_context *, struct llama_batch);
 typedef void     (*llama_kv_self_clear_t)(struct llama_context *);
@@ -136,16 +138,17 @@ typedef struct llama_sampler * (*llama_sampler_init_temp_t)(float);
 typedef struct llama_sampler * (*llama_sampler_init_dist_t)(uint32_t);
 typedef llama_token (*llama_sampler_sample_t)(struct llama_sampler *, struct llama_context *, int32_t);
 typedef void     (*llama_sampler_free_t)(struct llama_sampler *);
-typedef bool     (*llama_token_is_eog_t)(const struct llama_model *, llama_token);
+typedef bool     (*llama_token_is_eog_t)(const struct llama_vocab *, llama_token);
 typedef int32_t  (*llama_n_ctx_t)(const struct llama_context *);
 typedef int32_t  (*llama_kv_self_used_cells_t)(const struct llama_context *);
 
 // ── Global state ──────────────────────────────────────────────────────────────
 static DYNLIB_HANDLE g_lib = nullptr;
-static struct llama_model   *g_model   = nullptr;
-static struct llama_context *g_ctx     = nullptr;
-static struct llama_sampler *g_sampler = nullptr;
-static std::atomic<bool>     g_abort{false};
+static struct llama_model        *g_model   = nullptr;
+static const struct llama_vocab  *g_vocab   = nullptr;
+static struct llama_context      *g_ctx     = nullptr;
+static struct llama_sampler      *g_sampler = nullptr;
+static std::atomic<bool>          g_abort{false};
 
 // Resolved function pointers
 static llama_backend_init_t              fn_backend_init   = nullptr;
@@ -156,7 +159,8 @@ static llama_model_load_from_file_t      fn_model_load     = nullptr;
 static llama_model_free_t                fn_model_free     = nullptr;
 static llama_init_from_model_t           fn_ctx_init       = nullptr;
 static llama_free_t                      fn_ctx_free       = nullptr;
-static llama_model_n_vocab_t             fn_n_vocab        = nullptr;
+static llama_model_get_vocab_t           fn_get_vocab      = nullptr;
+static llama_vocab_n_tokens_t            fn_n_vocab        = nullptr;
 static llama_tokenize_t                  fn_tokenize       = nullptr;
 static llama_token_to_piece_t            fn_tok2piece      = nullptr;
 static llama_batch_get_one_t             fn_batch_one      = nullptr;
@@ -206,7 +210,8 @@ Napi::Value LoadLibrary(const Napi::CallbackInfo& info) {
     LOAD_SYM2(model_free,    "llama_model_free");
     LOAD_SYM2(ctx_init,      "llama_init_from_model");
     LOAD_SYM2(ctx_free,      "llama_free");
-    LOAD_SYM2(n_vocab,       "llama_n_vocab");
+    LOAD_SYM2(get_vocab,     "llama_model_get_vocab");
+    LOAD_SYM2(n_vocab,       "llama_vocab_n_tokens");
     LOAD_SYM(tokenize);
     LOAD_SYM2(tok2piece,     "llama_token_to_piece");
     LOAD_SYM2(batch_one,     "llama_batch_get_one");
@@ -256,6 +261,7 @@ Napi::Value InitModel(const Napi::CallbackInfo& info) {
     if (g_sampler) { fn_samp_free(g_sampler); g_sampler = nullptr; }
     if (g_ctx)     { fn_ctx_free(g_ctx);       g_ctx = nullptr; }
     if (g_model)   { fn_model_free(g_model);   g_model = nullptr; }
+    g_vocab = nullptr;
 
     auto mpar = fn_model_def_par();
     mpar.n_gpu_layers = 999; // offload all to NPU/GPU via ggml-ork backend
@@ -263,6 +269,8 @@ Napi::Value InitModel(const Napi::CallbackInfo& info) {
 
     g_model = fn_model_load(s_modelPath.c_str(), mpar);
     if (!g_model) return Napi::Number::New(env, -1);
+
+    g_vocab = fn_get_vocab(g_model);
 
     auto cpar = fn_ctx_def_par();
     cpar.n_ctx     = opts.Has("max_context_len") ? (uint32_t)opts.Get("max_context_len").As<Napi::Number>().Int32Value() : 4096;
@@ -345,7 +353,7 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
         // Tokenize
         const int maxTok = 8192;
         std::vector<llama_token> toks(maxTok);
-        int n = fn_tokenize(g_model, prompt.c_str(), (int32_t)prompt.size(),
+        int n = fn_tokenize(g_vocab, prompt.c_str(), (int32_t)prompt.size(),
                             toks.data(), maxTok, /*add_special=*/true, /*parse_special=*/true);
         if (n < 0) { finish("", 3 /*RKLLM_RUN_ERROR*/); return; }
         toks.resize(n);
@@ -368,9 +376,9 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
         char piece[128];
         for (int gen = 0; gen < maxNewTokens && !g_abort; gen++) {
             llama_token tok = fn_sample(g_sampler, g_ctx, -1);
-            if (fn_is_eog(g_model, tok)) break;
+            if (fn_is_eog(g_vocab, tok)) break;
 
-            int plen = fn_tok2piece(g_model, tok, piece, sizeof(piece) - 1, 0, true);
+            int plen = fn_tok2piece(g_vocab, tok, piece, sizeof(piece) - 1, 0, true);
             if (plen < 0) plen = 0;
             piece[plen] = '\0';
             std::string s(piece, plen);
