@@ -112,7 +112,8 @@ export default async function apiRoutes(fastify, options) {
     const trimmed = trimMessages(messages, maxCtx);
 
     // Prefix cache: check if we have KV state for all messages except the new user turn
-    const cacheEnabled = isCacheEnabled();
+    // Callers can set no_cache:true (e.g. benchmark runs) to force fresh prefill.
+    const cacheEnabled = isCacheEnabled() && !body.no_cache;
     let loadCachePath = null;
     let saveCachePath = null;
     let prefixMessages = trimmed;

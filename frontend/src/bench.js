@@ -44,7 +44,8 @@ export async function runBenchmark(model) {
         stream: true,
         max_tokens: benchState.maxTokens,
         temperature: 0.7,
-        top_p: 0.9
+        top_p: 0.9,
+        no_cache: true,
       })
     });
 
