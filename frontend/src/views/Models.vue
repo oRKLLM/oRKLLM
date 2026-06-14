@@ -608,7 +608,7 @@
               <v-icon start color="primary">mdi-magnify</v-icon>
               Search HuggingFace
             </div>
-            <div class="text-caption text-grey mb-4">Find .rkllm models on HuggingFace Hub.</div>
+            <div class="text-caption text-grey mb-4">Find .rkllm and .gguf models on HuggingFace Hub.</div>
 
             <div class="d-flex gap-3 align-start mb-3 flex-wrap">
               <v-text-field
@@ -1052,7 +1052,7 @@ export default {
     // HF Search
     searchQuery: '',
     searchSort: 'downloads',
-    searchRkllmOnly: true,
+    searchRkllmOnly: false,
     searchPlatformOnly: true,
     searchEagle3Only: false,
     detectedPlatform: null,
@@ -1522,7 +1522,7 @@ export default {
         const res = await fetch(`/api/admin/hf/files?repoId=${encodeURIComponent(id)}`);
         const data = await res.json();
         if (!res.ok) { this.dlFileError = data.error || 'Failed to fetch files'; return; }
-        if (data.files.length === 0) { this.dlFileError = `No .rkllm files found in ${id}.`; return; }
+        if (data.files.length === 0) { this.dlFileError = `No .rkllm or .gguf files found in ${id}.`; return; }
         // Kick off all downloads in parallel
         await Promise.all(data.files.map(f => this.startDownload(f.name)));
         // Scroll to the queue
@@ -1546,10 +1546,24 @@ export default {
         const res = await fetch(`/api/admin/hf/files?repoId=${encodeURIComponent(this.dlRepoId.trim())}`);
         const data = await res.json();
         if (!res.ok) { this.dlFileError = data.error || 'Failed to fetch files'; return; }
-        if (data.files.length === 0) { this.dlFileError = 'No .rkllm files found in this repository.'; return; }
-        this.dlFiles = data.files;
-        // Auto-start if only one file
-        if (data.files.length === 1) this.startDownload(data.files[0].name);
+        this.dlFiles = data.filter(f =>
+          f.type === 'file' && (
+            /\.rkllm$/i.test(f.path) ||
+            /\.gguf$/i.test(f.path) ||
+            /\.safetensors$/i.test(f.path) ||
+            /\.bin$/i.test(f.path) ||
+            /\.pt$/i.test(f.path) ||
+            /\.pth$/i.test(f.path) ||
+            f.path === 'config.json'
+          )
+        );
+        // Default to checking the first valid file
+        this.dlFiles.forEach(f => {
+          f.selected = false;
+        });
+        if (this.dlFiles.length > 0) {
+          this.dlFiles[0].selected = true;
+        }
       } catch (e) {
         this.dlFileError = 'Network error: ' + e.message;
       } finally {
