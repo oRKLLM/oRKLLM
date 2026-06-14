@@ -29,6 +29,7 @@ export async function runBenchmark(model) {
   let ttft = null;
   let genTokens = 0;
   let prefillTimeMs = 0;
+  let prefillTokens = 0;
   let genTimeMs = 0;
   let specDecode = null;   // { enabled, strategy, hardware, k } from the stop chunk
 
@@ -85,8 +86,13 @@ export async function runBenchmark(model) {
           }
 
           if (obj.perf) {
-            prefillTimeMs = obj.perf.prefill_time_ms || 0;
-            genTimeMs = obj.perf.generate_time_ms || 0;
+            // Only update from non-zero values — the llama backend sends
+            // prefill stats in an early callback and generate stats in the
+            // final callback (each with the other zeroed out), so we must
+            // not overwrite a non-zero value with 0.
+            if (obj.perf.prefill_time_ms > 0) prefillTimeMs = obj.perf.prefill_time_ms;
+            if (obj.perf.prefill_tokens  > 0) prefillTokens = obj.perf.prefill_tokens;
+            if (obj.perf.generate_time_ms > 0) genTimeMs = obj.perf.generate_time_ms;
             genTokens = obj.perf.generate_tokens || genTokens;
           }
           if (obj.specDecode) specDecode = obj.specDecode;
@@ -98,9 +104,22 @@ export async function runBenchmark(model) {
 
     benchState.results = {
       ttft_ms: ttft ?? total,
-      prefill_tps: prefillTimeMs > 0 ? ((benchState.benchPrompt.split(' ').length) / (prefillTimeMs / 1000)) : 0,
-      gen_tps: genTimeMs > 0 ? (genTokens / (genTimeMs / 1000)) : (genTokens / (total / 1000)),
+      // Use the server-reported prefill_tokens (actual tokenized count, includes
+      // chat template) rather than a client-side word split which can be 30-50%
+      // lower than the real token count.
+      prefill_tps: prefillTimeMs > 0 && prefillTokens > 0
+        ? (prefillTokens / (prefillTimeMs / 1000))
+        : 0,
+      // When the server doesn't report generate_time_ms (Eagle-3 / speculative
+      // paths currently report 0), subtract prefill time from the total wall-clock
+      // so we don't penalise the gen speed with prefill + network overhead.
+      gen_tps: genTimeMs > 0
+        ? (genTokens / (genTimeMs / 1000))
+        : genTokens > 0
+        ? (genTokens / (Math.max(total - prefillTimeMs, total * 0.1) / 1000))
+        : 0,
       gen_tokens: genTokens,
+      prefill_tokens: prefillTokens,
       total_ms: total,
       model,
       max_tokens: benchState.maxTokens,
