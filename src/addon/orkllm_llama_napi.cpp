@@ -141,6 +141,9 @@ typedef void     (*llama_sampler_free_t)(struct llama_sampler *);
 typedef bool     (*llama_token_is_eog_t)(const struct llama_vocab *, llama_token);
 typedef int32_t  (*llama_n_ctx_t)(const struct llama_context *);
 typedef int32_t  (*llama_kv_self_used_cells_t)(const struct llama_context *);
+typedef int32_t  (*llama_model_n_embd_t)(const struct llama_model *);
+typedef float *  (*llama_get_logits_ith_t)(struct llama_context *, int32_t);
+typedef float *  (*llama_get_embeddings_ith_t)(struct llama_context *, int32_t);
 
 // ── Global state ──────────────────────────────────────────────────────────────
 static DYNLIB_HANDLE g_lib = nullptr;
@@ -180,6 +183,9 @@ static llama_sampler_free_t              fn_samp_free      = nullptr;
 static llama_token_is_eog_t              fn_is_eog         = nullptr;
 static llama_n_ctx_t                     fn_n_ctx          = nullptr;
 static llama_kv_self_used_cells_t        fn_kv_used        = nullptr;
+static llama_model_n_embd_t              fn_n_embd         = nullptr;
+static llama_get_logits_ith_t            fn_get_logits_ith = nullptr;
+static llama_get_embeddings_ith_t        fn_get_embeddings_ith = nullptr;
 
 #define LOAD_SYM(name) fn_##name = (decltype(fn_##name))DYNLIB_GETSYM(g_lib, "llama_" #name)
 #define LOAD_SYM2(fn_name, sym) fn_##fn_name = (decltype(fn_##fn_name))DYNLIB_GETSYM(g_lib, sym)
@@ -231,6 +237,9 @@ Napi::Value LoadLibrary(const Napi::CallbackInfo& info) {
     LOAD_SYM2(is_eog,        "llama_token_is_eog");
     LOAD_SYM2(n_ctx,         "llama_n_ctx");
     LOAD_SYM2(kv_used,       "llama_kv_self_used_cells");
+    LOAD_SYM2(n_embd,        "llama_model_n_embd");
+    LOAD_SYM2(get_logits_ith,"llama_get_logits_ith");
+    LOAD_SYM2(get_embeddings_ith, "llama_get_embeddings_ith");
 
     if (!fn_backend_init || !fn_model_load || !fn_ctx_init || !fn_decode ||
         !fn_tokenize || !fn_tok2piece || !fn_sample || !fn_is_eog) {
@@ -279,6 +288,7 @@ Napi::Value InitModel(const Napi::CallbackInfo& info) {
     cpar.n_threads = 4;
     cpar.n_threads_batch = 4;
     cpar.offload_kqv = true;
+    cpar.embeddings = true;
 
     g_ctx = fn_ctx_init(g_model, cpar);
     if (!g_ctx) {
@@ -323,13 +333,25 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
                                   ? input.Get("saveCachePath").As<Napi::String>().Utf8Value() : "";
     int maxNewTokens = 512;
 
+    int inferMode = input.Has("infer_mode") && input.Get("infer_mode").IsNumber() ? input.Get("infer_mode").As<Napi::Number>().Int32Value() : 0;
+    bool keepHistory = input.Has("keep_history") && input.Get("keep_history").As<Napi::Boolean>().Value();
+    std::vector<int32_t> tokenIds;
+    bool useTokenInput = false;
+    if (input.Has("token_ids") && input.Get("token_ids").IsTypedArray()) {
+        auto arr = input.Get("token_ids").As<Napi::Int32Array>();
+        tokenIds.assign(arr.Data(), arr.Data() + arr.ElementLength());
+        useTokenInput = !tokenIds.empty();
+    }
+
     auto *rctx = new RunContext();
     rctx->tsfn  = Napi::ThreadSafeFunction::New(env, cb, "LlamaCallback", 0, 1);
     g_abort = false;
 
-    std::thread([prompt, loadCachePath, saveCachePath, maxNewTokens, rctx]() {
-        auto finish = [&](const std::string &text, int state) {
-            rctx->tsfn.NonBlockingCall([text, state](Napi::Env e, Napi::Function f) {
+    std::thread([prompt, loadCachePath, saveCachePath, maxNewTokens, inferMode, keepHistory, tokenIds, useTokenInput, rctx]() {
+        auto finish = [&](const std::string &text, int state,
+                          const std::vector<float>& h_states = {}, int h_embd = 0, int h_num = 0,
+                          const std::vector<float>& l_states = {}, int l_vocab = 0, int l_num = 0) {
+            rctx->tsfn.NonBlockingCall([text, state, h_states, h_embd, h_num, l_states, l_vocab, l_num](Napi::Env e, Napi::Function f) {
                 Napi::Object o = Napi::Object::New(e);
                 o.Set("text",  Napi::String::New(e, text));
                 o.Set("state", Napi::Number::New(e, state));
@@ -339,11 +361,31 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
                 perf.Set("generate_time_ms", Napi::Number::New(e, 0));
                 perf.Set("generate_tokens",  Napi::Number::New(e, 0));
                 o.Set("perf", perf);
+                if (!h_states.empty()) {
+                    auto buf = Napi::Float32Array::New(e, h_states.size());
+                    std::memcpy(buf.Data(), h_states.data(), h_states.size() * sizeof(float));
+                    o.Set("hidden_states", buf);
+                    o.Set("hidden_embd_size", Napi::Number::New(e, h_embd));
+                    o.Set("hidden_num_tokens", Napi::Number::New(e, h_num));
+                }
+                o.Set("logits_vocab_size", Napi::Number::New(e, l_vocab));
+                if (!l_states.empty()) {
+                    auto buf = Napi::Float32Array::New(e, l_states.size());
+                    std::memcpy(buf.Data(), l_states.data(), l_states.size() * sizeof(float));
+                    o.Set("logits", buf);
+                    o.Set("logits_num_tokens", Napi::Number::New(e, l_num));
+                }
                 f.Call({o});
             });
-            rctx->tsfn.Release();
-            delete rctx;
+            if (state == 2 || state == 3 || !h_states.empty() || !l_states.empty()) {
+                rctx->tsfn.Release();
+                delete rctx;
+            }
         };
+
+        if (!keepHistory && fn_kv_clear) {
+            fn_kv_clear(g_ctx);
+        }
 
         // Optional: load KV cache prefix from disk
         if (!loadCachePath.empty() && fn_state_load) {
@@ -351,21 +393,70 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
         }
 
         // Tokenize
-        const int maxTok = 8192;
-        std::vector<llama_token> toks(maxTok);
-        int n = fn_tokenize(g_vocab, prompt.c_str(), (int32_t)prompt.size(),
-                            toks.data(), maxTok, /*add_special=*/true, /*parse_special=*/true);
-        if (n < 0) { finish("", 3 /*RKLLM_RUN_ERROR*/); return; }
-        toks.resize(n);
+        std::vector<llama_token> toks;
+        if (useTokenInput) {
+            toks = tokenIds;
+        } else {
+            const int maxTok = 8192;
+            toks.resize(maxTok);
+            int n = fn_tokenize(g_vocab, prompt.c_str(), (int32_t)prompt.size(),
+                                toks.data(), maxTok, /*add_special=*/true, /*parse_special=*/true);
+            if (n < 0) { finish("", 3); return; }
+            toks.resize(n);
+        }
+
+        int n = toks.size();
+        std::vector<float> all_hidden_states;
+        std::vector<float> all_logits;
+        int n_embd = fn_n_embd ? fn_n_embd(g_model) : 0;
+        int n_vocab = fn_n_vocab(g_vocab);
 
         // Decode the prompt (prefill)
         for (int i = 0; i < n && !g_abort; ) {
             int batch = std::min(n - i, 512);
             auto b = fn_batch_one(toks.data() + i, batch);
+            if (inferMode == 1 || inferMode == 2) {
+                for (int j = 0; j < batch; j++) b.logits[j] = 1;
+            }
             if (fn_decode(g_ctx, b) != 0) { finish("", 3); return; }
+            
+            if (inferMode == 1 || inferMode == 2) {
+                for (int j = 0; j < batch; j++) {
+                    if (fn_get_embeddings_ith) {
+                        float* embd = fn_get_embeddings_ith(g_ctx, j);
+                        if (embd) all_hidden_states.insert(all_hidden_states.end(), embd, embd + n_embd);
+                    }
+                    if (inferMode == 2 && fn_get_logits_ith) {
+                        float* l = fn_get_logits_ith(g_ctx, j);
+                        if (l) all_logits.insert(all_logits.end(), l, l + n_vocab);
+                    }
+                    
+                    char piece[128];
+                    int plen = fn_tok2piece(g_vocab, toks[i+j], piece, sizeof(piece) - 1, 0, true);
+                    if (plen < 0) plen = 0;
+                    piece[plen] = '\0';
+                    std::string s(piece, plen);
+
+                    rctx->tsfn.NonBlockingCall([s, tok=toks[i+j]](Napi::Env e, Napi::Function f) {
+                        Napi::Object o = Napi::Object::New(e);
+                        o.Set("text",  Napi::String::New(e, s));
+                        o.Set("token_id", Napi::Number::New(e, tok));
+                        o.Set("state", Napi::Number::New(e, 0));
+                        f.Call({o});
+                    });
+                }
+            }
             i += batch;
         }
         if (g_abort) { finish("", 3); return; }
+
+        if (inferMode == 1) {
+            finish("", 0, all_hidden_states, n_embd, n, {}, n_vocab, 0);
+            return;
+        } else if (inferMode == 2) {
+            finish("", 0, all_hidden_states, n_embd, n, all_logits, n_vocab, n);
+            return;
+        }
 
         // Optional: save KV cache to disk after prefill
         if (!saveCachePath.empty() && fn_state_save) {
