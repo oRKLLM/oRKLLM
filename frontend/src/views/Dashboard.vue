@@ -400,18 +400,19 @@
             <!-- RKLLM subsection -->
             <div class="mb-4">
               <div class="text-overline text-grey-darken-1 mb-2" style="letter-spacing:0.08em">RKLLM</div>
+              <!-- Effective runtime — the lib that will be used for the next load -->
               <div class="mb-2">
-                <div class="text-caption text-grey mb-1">System fallback ({{ runtimes.systemRuntime?.path || '—' }})</div>
+                <div class="text-caption text-grey mb-1">Active runtime ({{ runtimes.effectiveRuntime?.file || runtimes.effectiveRuntime?.path || '—' }})</div>
                 <v-chip
-                  :color="runtimes.systemRuntime?.version ? 'primary' : runtimes.systemRuntime?.exists === false ? 'grey' : 'warning'"
+                  :color="runtimes.effectiveRuntime?.version ? 'primary' : runtimes.effectiveRuntime?.exists === false ? 'grey' : 'warning'"
                   variant="tonal"
                   size="small"
                 >
-                  {{ runtimes.systemRuntime?.version ? `v${runtimes.systemRuntime.version}` : runtimes.systemRuntime?.exists === false ? 'not installed' : 'version unknown' }}
+                  {{ runtimes.effectiveRuntime?.version ? `v${runtimes.effectiveRuntime.version}` : runtimes.effectiveRuntime?.exists === false ? 'not installed' : 'version unknown' }}
                 </v-chip>
               </div>
               <div v-if="runtimes.runtimes && runtimes.runtimes.length">
-                <div class="text-caption text-grey mb-2">Versioned — {{ runtimes.runtimesDir }}</div>
+                <div class="text-caption text-grey mb-2">Installed — {{ runtimes.runtimesDir }}</div>
                 <v-table density="compact" class="text-caption">
                   <thead>
                     <tr>

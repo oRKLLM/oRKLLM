@@ -259,9 +259,14 @@ export default async function adminRoutes(fastify, options) {
     const runtimes = pool.constructor.getAvailableRuntimes();
     const systemExists = fs.existsSync(LIBRKLLMRT_PATH);
     const systemVersion = systemExists ? pool.constructor.readSoVersion(LIBRKLLMRT_PATH) : null;
+    // Effective runtime = best available candidate (newest versioned runtime, or system fallback)
+    const effectiveRuntime = runtimes[0]
+      ? { path: runtimes[0].path, version: runtimes[0].version, exists: true, file: runtimes[0].file }
+      : { path: LIBRKLLMRT_PATH, version: systemVersion, exists: systemExists };
     return {
       runtimesDir: RUNTIMES_DIR,
       systemRuntime: { path: LIBRKLLMRT_PATH, version: systemVersion, exists: systemExists },
+      effectiveRuntime,
       runtimes,
       syncState: getSyncState(),
     };
