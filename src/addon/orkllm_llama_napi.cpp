@@ -42,12 +42,18 @@ struct llama_model;
 struct llama_context;
 struct llama_sampler;
 
+// Struct layout verified against llama.cpp-rockchip include/llama.h.
+// Must be kept in sync with that header to avoid ABI mismatches when calling
+// llama_model_default_params / llama_context_default_params by value.
 struct llama_model_params {
+    // Two pointer fields added in newer llama.cpp before n_gpu_layers
+    void *devices;                    // ggml_backend_dev_t** NULL-terminated device list
+    void *tensor_buft_overrides;      // const llama_model_tensor_buft_override*
     int32_t n_gpu_layers;
-    int32_t split_mode;
+    int32_t split_mode;               // enum llama_split_mode (int32)
     int32_t main_gpu;
+    // implicit 4-byte padding before pointer (ABI alignment)
     const float *tensor_split;
-    // progress callback (we leave null)
     void (*progress_callback)(float, void *);
     void *progress_callback_user_data;
     const struct llama_model_kv_override *kv_overrides;
@@ -64,9 +70,9 @@ struct llama_context_params {
     uint32_t n_seq_max;
     int32_t  n_threads;
     int32_t  n_threads_batch;
-    int32_t  rope_scaling_type;
-    int32_t  pooling_type;
-    int32_t  attention_type;
+    int32_t  rope_scaling_type;       // enum llama_rope_scaling_type
+    int32_t  pooling_type;            // enum llama_pooling_type
+    int32_t  attention_type;          // enum llama_attention_type
     float    rope_freq_base;
     float    rope_freq_scale;
     float    yarn_ext_factor;
@@ -75,17 +81,20 @@ struct llama_context_params {
     float    yarn_beta_slow;
     uint32_t yarn_orig_ctx;
     float    defrag_thold;
-    // type-erased ggml backend sched callback — leave null
-    void *cb_eval;
+    // implicit 4-byte padding before pointer (ABI alignment)
+    void *cb_eval;                    // ggml_backend_sched_eval_callback
     void *cb_eval_user_data;
-    int32_t type_k;
-    int32_t type_v;
-    bool logits_all;
+    int32_t type_k;                   // enum ggml_type for K-cache
+    int32_t type_v;                   // enum ggml_type for V-cache
+    void *abort_callback;             // ggml_abort_callback (fn ptr, added in newer llama.cpp)
+    void *abort_callback_data;
+    // booleans kept at end per llama.cpp comment (avoid misalignment during copy-by-value)
     bool embeddings;
     bool offload_kqv;
     bool flash_attn;
     bool no_perf;
-    bool abort_callback_data_ptr; // padding; actual abort uses the struct below
+    bool op_offload;
+    bool swa_full;
 };
 
 struct llama_batch {

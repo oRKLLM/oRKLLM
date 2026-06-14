@@ -400,14 +400,14 @@
             <!-- RKLLM subsection -->
             <div class="mb-4">
               <div class="text-overline text-grey-darken-1 mb-2" style="letter-spacing:0.08em">RKLLM</div>
-              <div v-if="runtimes.systemRuntime?.exists !== false" class="mb-2">
-                <div class="text-caption text-grey mb-1">System ({{ runtimes.systemRuntime?.path || '—' }})</div>
+              <div class="mb-2">
+                <div class="text-caption text-grey mb-1">System fallback ({{ runtimes.systemRuntime?.path || '—' }})</div>
                 <v-chip
-                  :color="runtimes.systemRuntime?.version ? 'primary' : 'warning'"
+                  :color="runtimes.systemRuntime?.version ? 'primary' : runtimes.systemRuntime?.exists === false ? 'grey' : 'warning'"
                   variant="tonal"
                   size="small"
                 >
-                  {{ runtimes.systemRuntime?.version ? `v${runtimes.systemRuntime.version}` : 'version unknown' }}
+                  {{ runtimes.systemRuntime?.version ? `v${runtimes.systemRuntime.version}` : runtimes.systemRuntime?.exists === false ? 'not installed' : 'version unknown' }}
                 </v-chip>
               </div>
               <div v-if="runtimes.runtimes && runtimes.runtimes.length">
