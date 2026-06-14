@@ -115,6 +115,9 @@ typedef int32_t  (*llama_decode_t)(struct llama_context *, struct llama_batch);
 typedef void     (*llama_kv_self_clear_t)(struct llama_context *);
 typedef bool     (*llama_state_seq_save_file_t)(struct llama_context *, const char *, llama_seq_id, const llama_token *, size_t);
 typedef size_t   (*llama_state_seq_load_file_t)(struct llama_context *, const char *, llama_seq_id, llama_token *, size_t, size_t *);
+struct llama_sampler_chain_params {
+    bool no_perf;   // whether to measure performance timings
+};
 typedef struct llama_sampler * (*llama_sampler_chain_init_t)(struct llama_sampler_chain_params);
 typedef struct llama_sampler_chain_params (*llama_sampler_chain_default_params_t)(void);
 typedef void     (*llama_sampler_chain_add_t)(struct llama_sampler *, struct llama_sampler *);
