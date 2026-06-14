@@ -257,10 +257,11 @@ export default async function adminRoutes(fastify, options) {
   fastify.get('/runtimes', async (request, reply) => {
     const { getSyncState } = await import('../runtime_sync.js');
     const runtimes = pool.constructor.getAvailableRuntimes();
-    const systemVersion = pool.constructor.readSoVersion(LIBRKLLMRT_PATH);
+    const systemExists = fs.existsSync(LIBRKLLMRT_PATH);
+    const systemVersion = systemExists ? pool.constructor.readSoVersion(LIBRKLLMRT_PATH) : null;
     return {
       runtimesDir: RUNTIMES_DIR,
-      systemRuntime: { path: LIBRKLLMRT_PATH, version: systemVersion },
+      systemRuntime: { path: LIBRKLLMRT_PATH, version: systemVersion, exists: systemExists },
       runtimes,
       syncState: getSyncState(),
     };

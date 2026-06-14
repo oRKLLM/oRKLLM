@@ -235,6 +235,35 @@
                 </tbody>
               </v-table>
             </div>
+
+            <!-- Accelerator Devices table -->
+            <div class="mt-4">
+              <v-divider class="mb-3"></v-divider>
+              <v-table density="compact" class="text-caption">
+                <thead>
+                  <tr>
+                    <th class="text-left">Device</th>
+                    <th class="text-left">Type</th>
+                    <th class="text-left">Detail</th>
+                    <th class="text-right">Load</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="dev in acceleratorDevices" :key="dev.type">
+                    <td>{{ dev.name }}</td>
+                    <td>
+                      <v-chip size="x-small" :color="dev.color" variant="tonal">{{ dev.type }}</v-chip>
+                    </td>
+                    <td class="text-grey">{{ dev.detail || '—' }}</td>
+                    <td class="text-right">
+                      <v-chip size="x-small" :color="dev.load > 70 ? 'warning' : 'grey'" variant="tonal">
+                        {{ dev.load }}%
+                      </v-chip>
+                    </td>
+                  </tr>
+                </tbody>
+              </v-table>
+            </div>
           </v-card>
 
           <!-- API Endpoints Panel -->
@@ -374,11 +403,11 @@
               <div class="mb-2">
                 <div class="text-caption text-grey mb-1">System ({{ runtimes.systemRuntime?.path || '—' }})</div>
                 <v-chip
-                  :color="runtimes.systemRuntime?.version ? 'primary' : 'grey'"
+                  :color="runtimes.systemRuntime?.version ? 'primary' : runtimes.systemRuntime?.exists === false ? 'grey' : 'warning'"
                   variant="tonal"
                   size="small"
                 >
-                  {{ runtimes.systemRuntime?.version ? `v${runtimes.systemRuntime.version}` : 'version unknown' }}
+                  {{ runtimes.systemRuntime?.version ? `v${runtimes.systemRuntime.version}` : runtimes.systemRuntime?.exists === false ? 'not installed' : 'version unknown' }}
                 </v-chip>
               </div>
               <div v-if="runtimes.runtimes && runtimes.runtimes.length">
@@ -429,21 +458,6 @@
               </div>
             </div>
 
-            <v-divider class="mb-3" />
-
-            <!-- Vulkan subsection -->
-            <div>
-              <div class="text-overline text-grey-darken-1 mb-2" style="letter-spacing:0.08em">Vulkan (Eagle-3 GPU Draft)</div>
-              <div v-if="status.spvAvailable">
-                <v-chip size="small" color="deep-purple" variant="tonal">
-                  {{ status.spvTag || 'installed' }}
-                </v-chip>
-                <div class="text-caption text-grey mt-1">SPIR-V shaders for Eagle-3 Mali GPU speculative decoding.</div>
-              </div>
-              <div v-else class="text-caption text-grey">
-                Not installed. Sync via Settings → Vulkan Shaders.
-              </div>
-            </div>
 
           </v-card>
 
@@ -510,7 +524,28 @@ export default {
       const s = this.currentStats;
       if (!s || s.totalGenerateTimeMs === 0) return '0.0';
       return (s.totalGeneratedTokens / (s.totalGenerateTimeMs / 1000)).toFixed(1);
-    }
+    },
+    acceleratorDevices() {
+      const platform = this.status?.platform;
+      const npuCores = this.status?.npuCores;
+      const GPU_BY_SOC = { rk3576: 'Mali-G52 MC3', rk3588: 'Mali-G610 MP4', rk3588s: 'Mali-G610 MP4' };
+      const NPU_BY_SOC = { rk3576: 'Rockchip NPU (RK3576)', rk3588: 'Rockchip NPU (RK3588)', rk3588s: 'Rockchip NPU (RK3588S)' };
+      const npu = {
+        type: 'NPU',
+        name: platform ? (NPU_BY_SOC[platform] || `Rockchip NPU (${platform})`) : 'Rockchip NPU',
+        detail: npuCores ? `${npuCores} core${npuCores > 1 ? 's' : ''}` : null,
+        load: this.metrics.npu,
+        color: 'primary',
+      };
+      const gpu = {
+        type: 'GPU',
+        name: platform ? (GPU_BY_SOC[platform] || 'Mali GPU') : 'Mali GPU',
+        detail: null,
+        load: this.metrics.gpu,
+        color: 'orange',
+      };
+      return [npu, gpu];
+    },
   },
   mounted() {
     this.fetchAuth();

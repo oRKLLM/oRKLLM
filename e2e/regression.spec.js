@@ -665,9 +665,10 @@ test.describe('Dual-runtime (rkllm + llama)', () => {
     await expect(page.locator('.v-chip', { hasText: 'llama / .gguf' }).first()).toBeVisible({ timeout: 6000 });
   });
 
-  test('Dashboard shows Llama Runtime (Open NPU) card', async ({ page }) => {
+  test('Dashboard shows Inference Engines card with Llama subsection', async ({ page }) => {
     await login(page);
     await page.goto('/');
-    await expect(page.locator('text=Llama Runtime (Open NPU)')).toBeVisible({ timeout: 6000 });
+    await expect(page.locator('text=Inference Engines')).toBeVisible({ timeout: 6000 });
+    await expect(page.locator('text=Llama (Open NPU)')).toBeVisible({ timeout: 6000 });
   });
 });

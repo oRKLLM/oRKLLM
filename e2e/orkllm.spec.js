@@ -202,7 +202,7 @@ test('Dashboard shows cache observability and runtime versions sections', async 
   await page.goto('/');
 
   await expect(page.locator('text=Prefix Cache Observability')).toBeVisible({ timeout: 5000 });
-  await expect(page.locator('text=RKLLM Runtime Versions')).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('text=Inference Engines')).toBeVisible({ timeout: 5000 });
 });
 
 // ---------------------------------------------------------------------------
