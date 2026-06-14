@@ -145,7 +145,8 @@ typedef void     (*llama_sampler_accept_t)(struct llama_sampler *, llama_token);
 typedef int32_t  (*llama_model_n_embd_t)(const struct llama_model *);
 typedef float *  (*llama_get_logits_ith_t)(struct llama_context *, int32_t);
 typedef float *  (*llama_get_embeddings_ith_t)(struct llama_context *, int32_t);
-
+typedef struct llama_batch (*llama_batch_init_t)(int32_t, int32_t, int32_t);
+typedef void (*llama_batch_free_t)(struct llama_batch);
 // ── Global state ──────────────────────────────────────────────────────────────
 static DYNLIB_HANDLE g_lib = nullptr;
 static struct llama_model        *g_model   = nullptr;
@@ -188,6 +189,8 @@ static llama_kv_self_used_cells_t        fn_kv_used        = nullptr;
 static llama_model_n_embd_t              fn_n_embd         = nullptr;
 static llama_get_logits_ith_t            fn_get_logits_ith = nullptr;
 static llama_get_embeddings_ith_t        fn_get_embeddings_ith = nullptr;
+static llama_batch_init_t                fn_batch_init     = nullptr;
+static llama_batch_free_t                fn_batch_free     = nullptr;
 
 #define LOAD_SYM(name) fn_##name = (decltype(fn_##name))DYNLIB_GETSYM(g_lib, "llama_" #name)
 #define LOAD_SYM2(fn_name, sym) fn_##fn_name = (decltype(fn_##fn_name))DYNLIB_GETSYM(g_lib, sym)
@@ -243,9 +246,11 @@ Napi::Value LoadLibrary(const Napi::CallbackInfo& info) {
     LOAD_SYM2(n_embd,        "llama_model_n_embd");
     LOAD_SYM2(get_logits_ith,"llama_get_logits_ith");
     LOAD_SYM2(get_embeddings_ith, "llama_get_embeddings_ith");
+    LOAD_SYM2(batch_init,    "llama_batch_init");
+    LOAD_SYM2(batch_free,    "llama_batch_free");
 
     if (!fn_backend_init || !fn_model_load || !fn_ctx_init || !fn_decode ||
-        !fn_tokenize || !fn_tok2piece || !fn_sample || !fn_is_eog) {
+        !fn_tokenize || !fn_tok2piece || !fn_sample || !fn_is_eog || !fn_batch_init || !fn_batch_free) {
         DYNLIB_FREE(g_lib); g_lib = nullptr;
         return Napi::Boolean::New(env, false);
     }
@@ -346,6 +351,10 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
         useTokenInput = !tokenIds.empty();
     }
 
+    // Clear any leftover KV state from a previous run (e.g. an aborted Eagle-3
+    // GET_LAST_HIDDEN_LAYER attempt that generated and discarded tokens).
+    if (fn_kv_clear) fn_kv_clear(g_ctx);
+
     auto *rctx = new RunContext();
     rctx->tsfn  = Napi::ThreadSafeFunction::New(env, cb, "LlamaCallback", 0, 1);
     g_abort = false;
@@ -429,12 +438,16 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
         // Decode the prompt (prefill)
         for (int i = 0; i < n && !g_abort; ) {
             int batch = std::min(n - i, 512);
-            auto b = fn_batch_one(toks.data() + i, batch);
+            auto b = fn_batch_init(batch, 0, 1);
+            b.n_tokens = batch;
             for (int j = 0; j < batch; j++) {
+                b.token[j] = toks[i + j];
                 b.pos[j] = n_past + j;
-                if (inferMode == 1 || inferMode == 2) b.logits[j] = 1;
+                b.n_seq_id[j] = 1;
+                b.seq_id[j][0] = 0;
+                b.logits[j] = (inferMode == 1 || inferMode == 2) ? 1 : (j == batch - 1 ? 1 : 0);
             }
-            if (fn_decode(g_ctx, b) != 0) { finish("", 3); return; }
+            if (fn_decode(g_ctx, b) != 0) { fn_batch_free(b); finish("", 3); return; }
             
             if (inferMode == 1 || inferMode == 2) {
                 for (int j = 0; j < batch; j++) {
@@ -465,9 +478,12 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
             i += batch;
             n_past += batch;
             prefill_tokens += batch;
+            if (i >= n) {
+                auto t1 = std::chrono::high_resolution_clock::now();
+                prefill_time = std::chrono::duration<float, std::milli>(t1 - t0).count();
+            }
+            fn_batch_free(b);
         }
-        auto t1 = std::chrono::high_resolution_clock::now();
-        prefill_time = std::chrono::duration<float, std::milli>(t1 - t0).count();
         if (g_abort) { finish("", 3); return; }
 
         if (inferMode == 1) {
@@ -511,10 +527,17 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
             });
 
             // Decode the sampled token
-            std::vector<llama_token> next = {tok};
-            auto b = fn_batch_one(next.data(), 1);
+            if (maxNewTokens > 0 && generated_tokens >= maxNewTokens) break;
+
+            auto b = fn_batch_init(1, 0, 1);
+            b.n_tokens = 1;
+            b.token[0] = tok;
             b.pos[0] = n_past;
-            if (fn_decode(g_ctx, b) != 0) break;
+            b.n_seq_id[0] = 1;
+            b.seq_id[0][0] = 0;
+            b.logits[0] = 1;
+            if (fn_decode(g_ctx, b) != 0) { fn_batch_free(b); break; }
+            fn_batch_free(b);
             n_past++;
         }
         auto t3 = std::chrono::high_resolution_clock::now();

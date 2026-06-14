@@ -302,7 +302,8 @@ export default async function apiRoutes(fastify, options) {
 
         try {
           const cachePaths = loadCachePath || saveCachePath ? { loadCachePath, saveCachePath } : {};
-          const specMode    = saved.speculative_mode;
+          const isLlamaModel = model.endsWith('.gguf');
+          const specMode    = isLlamaModel ? null : saved.speculative_mode;
           const draftModel  = saved.draft_model;
           const specK       = saved.spec_draft_tokens || 8;
           const eagle3Weights = saved.eagle3_weights_path ?? null;
@@ -358,7 +359,7 @@ export default async function apiRoutes(fastify, options) {
       try {
         const finalResult = await traceInference(traceParams, async (gen) => {
           const cachePaths  = loadCachePath || saveCachePath ? { loadCachePath, saveCachePath } : {};
-          const specMode2   = saved.speculative_mode;
+          const specMode2   = model.endsWith('.gguf') ? null : saved.speculative_mode;
           let result;
           if (specMode2 === 'eagle3') {
             result = await pool.generateEagle3(model, prompt, modelOptions, onToken, {
