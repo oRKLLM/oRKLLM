@@ -1,15 +1,15 @@
 Package: orkllm
-Version: 0.8.0-alpha.87
+Version: 0.8.0-alpha.88
 Architecture: arm64
 Maintainer: Michael Fischer <mfischer@toorakcapital.io>
 Pre-Depends: debconf (>= 0.5) | debconf-2.0
 Depends: nodejs (>= 18.0.0), smartmontools, libgomp1, libvulkan1, mesa-vulkan-drivers
 Suggests: tailscale
-Filename: pool/alpha/o/orkllm/orkllm_0.8.0-alpha.87_arm64.deb
-Size: 8884680
-MD5sum: 4fc5a94f38d7f77b675f8d1b03a8001d
-SHA1: c56816c2d14bca2cee082cbf5e459b5dcf68f048
-SHA256: 3fd32578dd7604a3ce84c75eb0613c1db49ba35530022dcb8b911467bb83a37c
+Filename: pool/alpha/o/orkllm/orkllm_0.8.0-alpha.88_arm64.deb
+Size: 8881854
+MD5sum: cb4e9b41397f280a0f8025e80b8a7099
+SHA1: 201fa381e87446f9e669ef4b982fb116f69715ab
+SHA256: 8cc3cbaeee5cc8dbc485ce7714fb7c8efead65aa3311c79bebf2adce747773dd
 Section: net
 Priority: optional
 Homepage: https://github.com/mafischer/oRKLLM
