@@ -357,77 +357,94 @@
             </template>
           </v-card>
 
-          <!-- RKLLM Runtime Versions -->
+          <!-- Inference Engines -->
           <v-card class="glass-card pa-5">
             <div class="text-h6 font-weight-bold mb-4 d-flex align-center justify-space-between">
               <div class="d-flex align-center">
-                <v-icon start color="primary">mdi-chip</v-icon>
-                RKLLM Runtime Versions
+                <v-icon start color="primary">mdi-cpu-64-bit</v-icon>
+                Inference Engines
               </div>
               <v-btn size="small" variant="text" color="primary" prepend-icon="mdi-refresh"
                 @click="fetchRuntimes">Refresh</v-btn>
             </div>
 
-            <!-- System runtime -->
-            <div class="mb-3">
-              <div class="text-caption text-grey mb-1">System Runtime ({{ runtimes.systemRuntime?.path || '—' }})</div>
-              <v-chip
-                :color="runtimes.systemRuntime?.version ? 'primary' : 'grey'"
-                variant="tonal"
-                size="small"
-              >
-                {{ runtimes.systemRuntime?.version ? `v${runtimes.systemRuntime.version}` : 'version unknown' }}
-              </v-chip>
-            </div>
-
-            <!-- Versioned runtimes table -->
-            <div v-if="runtimes.runtimes && runtimes.runtimes.length">
-              <div class="text-caption text-grey mb-2">Installed in {{ runtimes.runtimesDir }}</div>
-              <v-table density="compact" class="text-caption">
-                <thead>
-                  <tr>
-                    <th>File</th>
-                    <th>Version</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="r in runtimes.runtimes" :key="r.path">
-                    <td class="font-mono">{{ r.file }}</td>
-                    <td>
-                      <v-chip size="x-small" color="primary" variant="tonal">
-                        {{ r.version ? `v${r.version}` : '—' }}
-                      </v-chip>
-                    </td>
-                  </tr>
-                </tbody>
-              </v-table>
-            </div>
-            <div v-else class="text-caption text-grey">
-              No versioned runtimes installed. Enable auto-download in Settings or place
-              <code>librkllmrt-aarch64-vX.Y.Z.so</code> files in the runtimes directory.
-            </div>
-          </v-card>
-
-          <!-- Llama Runtime (open NPU stack — libllama.so + ggml-ork) -->
-          <v-card class="glass-card pa-5">
-            <div class="text-h6 font-weight-bold mb-4 d-flex align-center">
-              <v-icon start color="teal">mdi-lightning-bolt</v-icon>
-              Llama Runtime (Open NPU)
-            </div>
-            <div v-if="status.llamaRuntime?.available">
-              <div class="d-flex flex-wrap gap-2 mb-2">
-                <v-chip size="small" color="teal" variant="tonal">
-                  llama.cpp {{ status.llamaRuntime.llamaVersion || status.llamaRuntime.tag || '—' }}
-                </v-chip>
-                <v-chip v-if="status.llamaRuntime.orkDriverVersion" size="small" color="primary" variant="tonal">
-                  ork-driver v{{ status.llamaRuntime.orkDriverVersion }}
+            <!-- RKLLM subsection -->
+            <div class="mb-4">
+              <div class="text-overline text-grey-darken-1 mb-2" style="letter-spacing:0.08em">RKLLM</div>
+              <div class="mb-2">
+                <div class="text-caption text-grey mb-1">System ({{ runtimes.systemRuntime?.path || '—' }})</div>
+                <v-chip
+                  :color="runtimes.systemRuntime?.version ? 'primary' : 'grey'"
+                  variant="tonal"
+                  size="small"
+                >
+                  {{ runtimes.systemRuntime?.version ? `v${runtimes.systemRuntime.version}` : 'version unknown' }}
                 </v-chip>
               </div>
-              <div class="text-caption text-grey">Serves .gguf models on the Rockchip NPU via the open ggml-ork backend.</div>
+              <div v-if="runtimes.runtimes && runtimes.runtimes.length">
+                <div class="text-caption text-grey mb-2">Versioned — {{ runtimes.runtimesDir }}</div>
+                <v-table density="compact" class="text-caption">
+                  <thead>
+                    <tr>
+                      <th>File</th>
+                      <th>Version</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="r in runtimes.runtimes" :key="r.path">
+                      <td class="font-mono">{{ r.file }}</td>
+                      <td>
+                        <v-chip size="x-small" color="primary" variant="tonal">
+                          {{ r.version ? `v${r.version}` : '—' }}
+                        </v-chip>
+                      </td>
+                    </tr>
+                  </tbody>
+                </v-table>
+              </div>
+              <div v-else class="text-caption text-grey">
+                No versioned runtimes. Enable auto-download in Settings or place
+                <code>librkllmrt-aarch64-vX.Y.Z.so</code> files in the runtimes directory.
+              </div>
             </div>
-            <div v-else class="text-caption text-grey">
-              Not installed. Sync via Settings → Llama Runtime, or POST /api/admin/llama-runtime/sync.
+
+            <v-divider class="mb-3" />
+
+            <!-- Llama subsection -->
+            <div class="mb-4">
+              <div class="text-overline text-grey-darken-1 mb-2" style="letter-spacing:0.08em">Llama (Open NPU)</div>
+              <div v-if="status.llamaRuntime?.available">
+                <div class="d-flex flex-wrap gap-2 mb-1">
+                  <v-chip size="small" color="teal" variant="tonal">
+                    llama.cpp {{ status.llamaRuntime.llamaVersion || status.llamaRuntime.tag || '—' }}
+                  </v-chip>
+                  <v-chip v-if="status.llamaRuntime.orkDriverVersion" size="small" color="teal" variant="tonal">
+                    ork-driver v{{ status.llamaRuntime.orkDriverVersion }}
+                  </v-chip>
+                </div>
+                <div class="text-caption text-grey">Serves .gguf models via the open ggml-ork NPU backend.</div>
+              </div>
+              <div v-else class="text-caption text-grey">
+                Not installed. Sync via Settings → Llama Runtime.
+              </div>
             </div>
+
+            <v-divider class="mb-3" />
+
+            <!-- Vulkan subsection -->
+            <div>
+              <div class="text-overline text-grey-darken-1 mb-2" style="letter-spacing:0.08em">Vulkan (Eagle-3 GPU Draft)</div>
+              <div v-if="status.spvAvailable">
+                <v-chip size="small" color="deep-purple" variant="tonal">
+                  {{ status.spvTag || 'installed' }}
+                </v-chip>
+                <div class="text-caption text-grey mt-1">SPIR-V shaders for Eagle-3 Mali GPU speculative decoding.</div>
+              </div>
+              <div v-else class="text-caption text-grey">
+                Not installed. Sync via Settings → Vulkan Shaders.
+              </div>
+            </div>
+
           </v-card>
 
         </v-col>

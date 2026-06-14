@@ -197,7 +197,7 @@ Napi::Value LoadLibrary(const Napi::CallbackInfo& info) {
     LOAD_SYM2(model_free,    "llama_model_free");
     LOAD_SYM2(ctx_init,      "llama_init_from_model");
     LOAD_SYM2(ctx_free,      "llama_free");
-    LOAD_SYM2(n_vocab,       "llama_model_n_vocab");
+    LOAD_SYM2(n_vocab,       "llama_n_vocab");
     LOAD_SYM(tokenize);
     LOAD_SYM2(tok2piece,     "llama_token_to_piece");
     LOAD_SYM2(batch_one,     "llama_batch_get_one");
@@ -212,7 +212,7 @@ Napi::Value LoadLibrary(const Napi::CallbackInfo& info) {
     LOAD_SYM2(s_topp,        "llama_sampler_init_top_p");
     LOAD_SYM2(s_temp,        "llama_sampler_init_temp");
     LOAD_SYM2(s_dist,        "llama_sampler_init_dist");
-    LOAD_SYM(sample);
+    LOAD_SYM2(sample,        "llama_sampler_sample");
     LOAD_SYM2(samp_free,     "llama_sampler_free");
     LOAD_SYM2(is_eog,        "llama_token_is_eog");
     LOAD_SYM2(n_ctx,         "llama_n_ctx");

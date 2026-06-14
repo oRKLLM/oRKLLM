@@ -15,7 +15,7 @@ import {
   dbCreateBenchRun, dbListBenchRuns, dbDeleteBenchRun, dbClearBenchRuns,
 } from '../db.js';
 import { v4 as uuidv4 } from 'uuid';
-import { isSpvAvailable } from '../spv_sync.js';
+import { isSpvAvailable, installedSpvTag } from '../spv_sync.js';
 import { isLlamaRuntimeAvailable, getLlamaRuntimeInfo, getLlamaReleases, syncLlamaRuntime, getLlamaSyncState } from '../llama_sync.js';
 import { getDramStatus, getCpuStatus } from '../monitor.js';
 import { getState as getPerfState } from '../perf_governor.js';
@@ -244,6 +244,7 @@ export default async function adminRoutes(fastify, options) {
     status.platform = getPlatform();
     status.npuCores = getNpuCoreCount();
     status.spvAvailable = isSpvAvailable(); // Eagle-3 'vulkan' draft gated on this
+    status.spvTag = installedSpvTag(); // null when not installed
     status.llamaRuntime = getLlamaRuntimeInfo();
     const dram = getDramStatus(); // null off-board; { governor, curFreqMhz, maxFreqMhz, throttled }
     status.dram = dram ? { ...dram, management: getPerfState() } : null;
