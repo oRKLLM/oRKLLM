@@ -118,10 +118,17 @@ process.on('message', async (msg) => {
           token_ids: token_ids ? Int32Array.from(token_ids) : undefined,
           keep_history: !!keep_history,
           // Forwarded per-request params; read by the llama addon, ignored by rkllm.
-          max_new_tokens: options?.max_new_tokens,
-          temperature:    options?.temperature,
-          top_p:          options?.top_p,
-          top_k:          options?.top_k,
+          max_new_tokens:    options?.max_new_tokens,
+          temperature:       options?.temperature,
+          top_p:             options?.top_p,
+          top_k:             options?.top_k,
+          min_p:             options?.min_p,
+          repeat_penalty:    options?.repeat_penalty,
+          presence_penalty:  options?.presence_penalty,
+          frequency_penalty: options?.frequency_penalty,
+          mirostat:          options?.mirostat,
+          mirostat_tau:      options?.mirostat_tau,
+          mirostat_eta:      options?.mirostat_eta,
         }, (res) => {
           process.send({ type: 'token', ...res });
         });

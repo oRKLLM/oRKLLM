@@ -136,6 +136,11 @@ typedef struct llama_sampler * (*llama_sampler_init_top_k_t)(int32_t);
 typedef struct llama_sampler * (*llama_sampler_init_top_p_t)(float, size_t);
 typedef struct llama_sampler * (*llama_sampler_init_temp_t)(float);
 typedef struct llama_sampler * (*llama_sampler_init_dist_t)(uint32_t);
+// Signatures pinned to the runtime's llama.cpp (commit 8a72f666, the modern
+// 4-arg penalties form — older builds also took n_vocab + special-token ids).
+typedef struct llama_sampler * (*llama_sampler_init_penalties_t)(int32_t, float, float, float);
+typedef struct llama_sampler * (*llama_sampler_init_min_p_t)(float, size_t);
+typedef struct llama_sampler * (*llama_sampler_init_mirostat_v2_t)(uint32_t, float, float);
 typedef llama_token (*llama_sampler_sample_t)(struct llama_sampler *, struct llama_context *, int32_t);
 typedef void     (*llama_sampler_free_t)(struct llama_sampler *);
 typedef bool     (*llama_token_is_eog_t)(const struct llama_vocab *, llama_token);
@@ -151,6 +156,10 @@ typedef void (*llama_batch_free_t)(struct llama_batch);
 static DYNLIB_HANDLE g_lib = nullptr;
 static struct llama_model        *g_model   = nullptr;
 static const struct llama_vocab  *g_vocab   = nullptr;
+// llama.cpp interprets this seed as "pick a fresh random seed per run", so
+// generations actually vary at temperature > 0 (a fixed seed made identical
+// prompts always produce identical output).
+static const uint32_t LLAMA_RANDOM_SEED = 0xFFFFFFFFu;
 static struct llama_context      *g_ctx     = nullptr;
 static struct llama_sampler      *g_sampler = nullptr;
 static std::atomic<bool>          g_abort{false};
@@ -180,6 +189,9 @@ static llama_sampler_init_top_k_t        fn_s_topk         = nullptr;
 static llama_sampler_init_top_p_t        fn_s_topp         = nullptr;
 static llama_sampler_init_temp_t         fn_s_temp         = nullptr;
 static llama_sampler_init_dist_t         fn_s_dist         = nullptr;
+static llama_sampler_init_penalties_t    fn_s_penalties    = nullptr;
+static llama_sampler_init_min_p_t        fn_s_min_p        = nullptr;
+static llama_sampler_init_mirostat_v2_t  fn_s_mirostat_v2  = nullptr;
 static llama_sampler_sample_t            fn_sample         = nullptr;
 static llama_sampler_accept_t            fn_samp_accept    = nullptr;
 static llama_sampler_free_t              fn_samp_free      = nullptr;
@@ -237,6 +249,11 @@ Napi::Value LoadLibrary(const Napi::CallbackInfo& info) {
     LOAD_SYM2(s_topp,        "llama_sampler_init_top_p");
     LOAD_SYM2(s_temp,        "llama_sampler_init_temp");
     LOAD_SYM2(s_dist,        "llama_sampler_init_dist");
+    // Optional samplers (nullptr if absent — guarded at use). Enable the model's
+    // penalty / mirostat / min_p settings on the gguf path.
+    LOAD_SYM2(s_penalties,   "llama_sampler_init_penalties");
+    LOAD_SYM2(s_min_p,       "llama_sampler_init_min_p");
+    LOAD_SYM2(s_mirostat_v2, "llama_sampler_init_mirostat_v2");
     LOAD_SYM2(sample,        "llama_sampler_sample");
     LOAD_SYM2(samp_accept,   "llama_sampler_accept");
     LOAD_SYM2(samp_free,     "llama_sampler_free");
@@ -313,7 +330,7 @@ Napi::Value InitModel(const Napi::CallbackInfo& info) {
     fn_schain_add(g_sampler, fn_s_topk(topk));
     fn_schain_add(g_sampler, fn_s_topp(topp, 1));
     fn_schain_add(g_sampler, fn_s_temp(temp));
-    fn_schain_add(g_sampler, fn_s_dist(0xDEADBEEF));
+    fn_schain_add(g_sampler, fn_s_dist(LLAMA_RANDOM_SEED));
 
     g_abort = false;
     return Napi::Number::New(env, 0);
@@ -339,6 +356,8 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
                                   ? input.Get("loadCachePath").As<Napi::String>().Utf8Value() : "";
     std::string saveCachePath   = input.Has("saveCachePath") && input.Get("saveCachePath").IsString()
                                   ? input.Get("saveCachePath").As<Napi::String>().Utf8Value() : "";
+    int inferMode = input.Has("infer_mode") && input.Get("infer_mode").IsNumber() ? input.Get("infer_mode").As<Napi::Number>().Int32Value() : 0;
+
     // Per-request generation cap. The chat/bench layer sends max_new_tokens;
     // honour it instead of a fixed limit (this used to be hardcoded to 512, so
     // the model's Max New Tokens setting had no effect on the gguf path).
@@ -347,27 +366,49 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
     if (maxNewTokens <= 0) maxNewTokens = 512;
 
     // Rebuild the sampler chain from THIS request's sampling params so per-request
-    // temperature/top_p/top_k take effect. The chain is otherwise fixed at load
-    // time (init_model), so changing a model's sampling settings did nothing
-    // until reload. Runs are serialized per worker, so replacing g_sampler here
-    // is safe. Uses only the samplers already resolved at load.
+    // settings take effect. The chain is otherwise fixed at load (init_model), so
+    // changing a model's sampling settings did nothing until reload. Runs are
+    // serialized per worker, so replacing g_sampler here is safe. Penalty /
+    // mirostat / min_p samplers are optional (nullptr if libllama lacks them).
+    auto optF = [&](const char* k, float d) {
+        return input.Has(k) && input.Get(k).IsNumber() ? input.Get(k).As<Napi::Number>().FloatValue() : d;
+    };
+    auto optI = [&](const char* k, int32_t d) {
+        return input.Has(k) && input.Get(k).IsNumber() ? input.Get(k).As<Napi::Number>().Int32Value() : d;
+    };
     if (inferMode == 0) {
-        int32_t topk = input.Has("top_k") && input.Get("top_k").IsNumber()
-                       ? input.Get("top_k").As<Napi::Number>().Int32Value() : 40;
-        float   topp = input.Has("top_p") && input.Get("top_p").IsNumber()
-                       ? input.Get("top_p").As<Napi::Number>().FloatValue() : 0.9f;
-        float   temp = input.Has("temperature") && input.Get("temperature").IsNumber()
-                       ? input.Get("temperature").As<Napi::Number>().FloatValue() : 0.8f;
+        int32_t topk = optI("top_k", 40);
+        float   topp = optF("top_p", 0.9f);
+        float   temp = optF("temperature", 0.8f);
+        float   minp = optF("min_p", 0.0f);
+        float   rep  = optF("repeat_penalty", 1.0f);
+        float   freq = optF("frequency_penalty", 0.0f);
+        float   pres = optF("presence_penalty", 0.0f);
+        int32_t miro = optI("mirostat", 0);
+        float   mtau = optF("mirostat_tau", 5.0f);
+        float   meta = optF("mirostat_eta", 0.1f);
+
         if (g_sampler) { fn_samp_free(g_sampler); g_sampler = nullptr; }
         auto sp = fn_schain_par();
         g_sampler = fn_schain_init(sp);
-        fn_schain_add(g_sampler, fn_s_topk(topk));
-        fn_schain_add(g_sampler, fn_s_topp(topp, 1));
-        fn_schain_add(g_sampler, fn_s_temp(temp));
-        fn_schain_add(g_sampler, fn_s_dist(0xDEADBEEF));
-    }
 
-    int inferMode = input.Has("infer_mode") && input.Get("infer_mode").IsNumber() ? input.Get("infer_mode").As<Napi::Number>().Int32Value() : 0;
+        // Repetition/frequency/presence penalties operate on raw logits — add first.
+        if (fn_s_penalties && (rep != 1.0f || freq != 0.0f || pres != 0.0f)) {
+            fn_schain_add(g_sampler, fn_s_penalties(64, rep, freq, pres));
+        }
+
+        if (miro > 0 && fn_s_mirostat_v2) {
+            // Mirostat v2 is a terminal sampler (selects the token); temp first.
+            fn_schain_add(g_sampler, fn_s_temp(temp));
+            fn_schain_add(g_sampler, fn_s_mirostat_v2(LLAMA_RANDOM_SEED, mtau, meta));
+        } else {
+            fn_schain_add(g_sampler, fn_s_topk(topk));
+            fn_schain_add(g_sampler, fn_s_topp(topp, 1));
+            if (minp > 0.0f && fn_s_min_p) fn_schain_add(g_sampler, fn_s_min_p(minp, 1));
+            fn_schain_add(g_sampler, fn_s_temp(temp));
+            fn_schain_add(g_sampler, fn_s_dist(LLAMA_RANDOM_SEED));
+        }
+    }
     bool keepHistory = input.Has("keep_history") && input.Get("keep_history").As<Napi::Boolean>().Value();
     std::vector<int32_t> tokenIds;
     bool useTokenInput = false;

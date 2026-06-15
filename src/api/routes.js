@@ -172,13 +172,16 @@ export default async function apiRoutes(fastify, options) {
 
     // Apply the saved per-model overrides
     if (saved.force_sampling) {
-      // Force sampling: stored values override per-request params
+      // Force sampling: stored values override the per-request sampling params
+      // (temperature/top_p/top_k/max_new_tokens are normally sent by the client).
       if (saved.temperature != null)       modelOptions.temperature       = saved.temperature;
       if (saved.top_p != null)             modelOptions.top_p             = saved.top_p;
       if (saved.top_k != null)             modelOptions.top_k             = saved.top_k;
       if (saved.max_new_tokens != null)    modelOptions.max_new_tokens    = saved.max_new_tokens;
-      if (saved.rep_penalty != null)       modelOptions.repeat_penalty    = saved.rep_penalty;
     }
+    // Penalties/mirostat aren't part of the OpenAI request body, so they always
+    // come from the saved per-model settings (independent of force_sampling).
+    if (saved.rep_penalty != null)         modelOptions.repeat_penalty    = saved.rep_penalty;
     if (saved.presence_penalty != null)    modelOptions.presence_penalty  = saved.presence_penalty;
     if (saved.frequency_penalty != null)   modelOptions.frequency_penalty = saved.frequency_penalty;
     if (saved.mirostat)                    modelOptions.mirostat          = saved.mirostat;
