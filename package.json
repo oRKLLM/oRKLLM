@@ -8,7 +8,7 @@
     "start": "node src/server.js",
     "dev:server": "node --watch src/server.js",
     "install:addon": "node-gyp rebuild",
-    "postinstall": "node scripts/install-git-hooks.mjs",
+    "postinstall": "node scripts/install-git-hooks.mjs 2>/dev/null || true",
     "build:frontend": "cd frontend && npm run build",
     "dev:frontend": "cd frontend && npm run dev",
     "test:unit": "node --test test/**/*.mjs",
