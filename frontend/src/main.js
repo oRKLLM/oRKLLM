@@ -38,14 +38,15 @@ async function checkForNewVersion() {
   // Guard against infinite reload loops: only reload once per tab session.
   // If the reload doesn't resolve the mismatch (e.g. server and client
   // package.json disagree), we stop rather than hammering the server.
-  if (sessionStorage.getItem('sw-reload-guard')) return;
   try {
     const res = await fetch('/api/version', { cache: 'no-store' });
     if (!res.ok) return;
     const { version } = await res.json();
     if (!version || version === __APP_VERSION__) return;
+    // Guard: don't loop if we already reloaded for this exact server version.
+    if (sessionStorage.getItem('sw-reload-guard') === version) return;
     console.info(`[update] server ${version} ≠ client ${__APP_VERSION__} — refreshing`);
-    sessionStorage.setItem('sw-reload-guard', '1');
+    sessionStorage.setItem('sw-reload-guard', version);
     try { await Promise.all((await caches.keys()).map(k => caches.delete(k))); } catch {}
     try { await Promise.all((await navigator.serviceWorker.getRegistrations()).map(r => r.unregister())); } catch {}
     location.reload();
