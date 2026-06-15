@@ -1597,23 +1597,11 @@ export default {
         const res = await fetch(`/api/admin/hf/files?repoId=${encodeURIComponent(this.dlRepoId.trim())}`);
         const data = await this._readJson(res);
         if (!res.ok) { this.dlFileError = data.error || 'Failed to fetch files'; return; }
-        this.dlFiles = data.filter(f =>
-          f.type === 'file' && (
-            /\.rkllm$/i.test(f.path) ||
-            /\.gguf$/i.test(f.path) ||
-            /\.safetensors$/i.test(f.path) ||
-            /\.bin$/i.test(f.path) ||
-            /\.pt$/i.test(f.path) ||
-            /\.pth$/i.test(f.path) ||
-            f.path === 'config.json'
-          )
-        );
-        // Default to checking the first valid file
-        this.dlFiles.forEach(f => {
-          f.selected = false;
-        });
-        if (this.dlFiles.length > 0) {
-          this.dlFiles[0].selected = true;
+        // The endpoint returns { repoId, files:[{name,size}] } (already filtered
+        // to downloadable weights + companion json) — use that shape directly.
+        this.dlFiles = data.files || [];
+        if (this.dlFiles.length === 0) {
+          this.dlFileError = `No downloadable files found in ${this.dlRepoId.trim()}.`;
         }
       } catch (e) {
         this.dlFileError = 'Network error: ' + e.message;

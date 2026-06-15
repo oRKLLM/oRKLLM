@@ -672,3 +672,37 @@ test.describe('Dual-runtime (rkllm + llama)', () => {
     await expect(page.locator('text=Llama (Open NPU)')).toBeVisible({ timeout: 6000 });
   });
 });
+
+// Regression: the manual "Find Files" path (fetchRepoFiles) once treated the
+// /api/admin/hf/files response as an array and called .filter on it, throwing
+// "filter is not a function". The endpoint actually returns { repoId, files:[…] }.
+// Intercept it with that shape and assert the picker renders (with quant chips)
+// and does not crash — no live HuggingFace dependency.
+test('Downloader: Find Files renders the picker for a multi-quant repo', async ({ page }) => {
+  await login(page);
+  await page.goto('/models');
+  await page.click('.v-tab:has-text("Downloader")');
+
+  await page.route('**/api/admin/hf/files**', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      repoId: 'test/Multi-GGUF',
+      files: [
+        { name: 'model-Q4_K_M.gguf', size: 1200000000 },
+        { name: 'model-Q8_0.gguf',   size: 2000000000 },
+        { name: 'config.json',       size: 1024 },
+      ],
+    }),
+  }));
+
+  const repoField = page.locator('.v-text-field').filter({ hasText: /Repo ID/i }).first();
+  await repoField.locator('input').fill('test/Multi-GGUF');
+  await page.click('button:has-text("Find Files")');
+
+  // Picker lists each file with its quant chip — and crucially, no crash.
+  await expect(page.locator('.v-list-item', { hasText: 'model-Q4_K_M.gguf' })).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('.v-list-item', { hasText: 'model-Q8_0.gguf' })).toBeVisible();
+  await expect(page.locator('.v-chip', { hasText: 'Q4_K_M' })).toBeVisible();
+  await expect(page.getByText('is not a function')).toHaveCount(0);
+});
