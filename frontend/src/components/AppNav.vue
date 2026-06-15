@@ -159,6 +159,7 @@ export default {
       { path: '/logs',     label: 'Logs',      icon: 'mdi-text-box-outline' },
       { path: '/bench',    label: 'Bench',     icon: 'mdi-speedometer' },
       { path: '/chat',     label: 'Chat',      icon: 'mdi-chat-outline' },
+      { path: '/help',     label: 'Help',      icon: 'mdi-lifebuoy' },
     ]
   }),
   methods: {

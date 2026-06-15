@@ -113,7 +113,7 @@ test('Dashboard shows telemetry and navbar does not overlap content', async ({ p
     await expect(telemetry.locator('.text-caption.text-grey', { hasText: label }).first()).toBeVisible();
   }
 
-  for (const label of ['Dashboard', 'Models', 'Settings', 'Logs', 'Bench', 'Chat']) {
+  for (const label of ['Dashboard', 'Models', 'Settings', 'Logs', 'Bench', 'Chat', 'Help']) {
     await expect(navBtn(page, label)).toBeVisible();
   }
 
@@ -146,6 +146,13 @@ test('Navbar buttons navigate to correct pages', async ({ page }) => {
 
   await navBtn(page, 'Chat').click();
   await expect(page).toHaveURL(/\/chat/);
+
+  await navBtn(page, 'Help').click();
+  await expect(page).toHaveURL(/\/help/);
+  // Help page renders curated content: concept accordions + resource links
+  await expect(page.locator('.text-h5', { hasText: 'Help' })).toBeVisible();
+  await expect(page.locator('.v-expansion-panel-title', { hasText: 'Tokens & the context window' })).toBeVisible();
+  await expect(page.locator('a[href="https://github.com/oRKLLM/oRKLLM/wiki"]')).toBeVisible();
 
   await navBtn(page, 'Dashboard').click();
   await expect(page).toHaveURL(/http:\/\/127.0.0.1:18000\/?$/);

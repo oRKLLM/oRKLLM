@@ -7,6 +7,7 @@ import Models from './views/Models.vue';
 import Logs from './views/Logs.vue';
 import Bench from './views/Bench.vue';
 import Chat from './views/Chat.vue';
+import Help from './views/Help.vue';
 import SiteManagement from './views/SiteManagement.vue';
 
 const routes = [
@@ -18,6 +19,7 @@ const routes = [
   { path: '/logs',            name: 'Logs',           component: Logs,           meta: { title: 'Logs' } },
   { path: '/bench',           name: 'Bench',          component: Bench,          meta: { title: 'Bench' } },
   { path: '/chat',            name: 'Chat',           component: Chat,           meta: { title: 'Chat' } },
+  { path: '/help',            name: 'Help',           component: Help,           meta: { title: 'Help' } },
   { path: '/site-management', name: 'SiteManagement', component: SiteManagement, meta: { title: 'Site Management', requireRole: 'admin' } },
 ];
 

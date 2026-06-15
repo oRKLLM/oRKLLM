@@ -42,13 +42,14 @@ Inspired by [jundot/oMLX](https://github.com/jundot/omlx) (which does the same f
 ## 🚀 Key Features
 
 * **OpenAI API Compatibility**: Drop-in `/v1/chat/completions`, `/v1/models`, and `/v1/embeddings` endpoints — works with Open WebUI, Claude Code, and any OpenAI-compatible client.
-* **Full Admin Console**: Built with **Vue 3** and **Vuetify 3** — six dedicated pages:
+* **Full Admin Console**: Built with **Vue 3** and **Vuetify 3** — seven dedicated pages:
   * **Dashboard** — live CPU/NPU/GPU/RAM/Disk/Temperature/Fan/RAM-bandwidth gauges, serving stats, prefix cache observability, RKLLM runtime versions
   * **Models** — local model manager (sorted into servable `.rkllm` models, base models, and Eagle-3 draft heads), HuggingFace search, collection browser, direct downloader
   * **Settings** — inference defaults, HF token, prefix cache config, trusted proxy
   * **Logs** — full-page real-time log terminal over WebSocket
   * **Bench** — inference benchmark (TTFT, prefill tok/s, generation tok/s); completed runs are persisted and listed in a Previous Runs history table
   * **Chat** — full streaming chat UI with conversation history sidebar (grouped by model), message queueing during inference, system prompt, model selector, and parameter controls
+  * **Help** — a Help &amp; Learning hub: quick-start guide, expandable explanations of core concepts (LLM fundamentals, running models efficiently, self-hosting on Rockchip, enterprise features, and cutting-edge research), curated external resources, and a searchable glossary of the whole oRKLLM ecosystem
 * **Conversation History**: Chat sessions persisted in SQLite grouped by model. Collapsible sidebar on desktop, bottom-sheet on mobile. Partial responses saved via `sendBeacon` on page navigation.
 * **Pin Model**: Pin the active model to prevent idle auto-unload. Pin state persists across server restarts and triggers automatic model load on startup when sufficient RAM is available.
 * **Multi-User Auth & RBAC**: Local accounts or federated SSO via OIDC/SAML (Keycloak, Google, Azure AD). Two roles: `admin` and `user`. Site Management UI for user CRUD, auth provider config, and audit log.
