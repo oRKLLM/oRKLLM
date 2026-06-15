@@ -137,6 +137,19 @@ export default async function apiRoutes(fastify, options) {
       }
     }
 
+    // Per-model settings overrides from model_settings JSON
+    const saved = dbGetModelSettings(model) || {};
+
+    // Thinking (Qwen3 reasoning) control. The rkllm addon honours
+    // `enable_thinking` directly (set below). The llama/gguf addon tokenizes the
+    // prompt verbatim with no chat-template step, so thinking is controlled here
+    // in the prompt: with reasoning OFF (the default), seed the assistant turn
+    // with an empty `<think></think>` block — the Qwen3 convention that
+    // suppresses the reasoning block; with it ON, leave the turn open so the
+    // model emits its own `<think>…</think>`.
+    const isGguf = model.toLowerCase().endsWith('.gguf');
+    const suppressThinking = isGguf && !saved.thinking_enabled;
+
     // Convert (possibly shortened) messages to ChatML format
     function formatMessages(msgs) {
       let p = "";
@@ -146,7 +159,7 @@ export default async function apiRoutes(fastify, options) {
         else if (msg.role === 'assistant') p += `<|im_start|>assistant\n${msg.content}<|im_end|>\n`;
         else if (msg.role === 'tool') p += `<|im_start|>tool\n${msg.content}<|im_end|>\n`;
       }
-      return p + `<|im_start|>assistant\n`;
+      return p + `<|im_start|>assistant\n` + (suppressThinking ? `<think>\n\n</think>\n\n` : ``);
     }
     const prompt = formatMessages(prefixMessages);
 
@@ -157,8 +170,7 @@ export default async function apiRoutes(fastify, options) {
       max_new_tokens: max_tokens
     };
 
-    // Apply per-model settings overrides from model_settings JSON
-    const saved = dbGetModelSettings(model) || {};
+    // Apply the saved per-model overrides
     if (saved.force_sampling) {
       // Force sampling: stored values override per-request params
       if (saved.temperature != null)       modelOptions.temperature       = saved.temperature;
