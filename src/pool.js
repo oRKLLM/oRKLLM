@@ -403,8 +403,11 @@ class EnginePool {
       const onMessage = (msg) => {
         if (msg.type !== 'loaded') return;
         clearTimeout(loadTimeout);
-        slot.worker.removeListener('exit', onExit);
-        slot.worker.removeListener('message', onMessage);
+        // slot.worker can be nulled by a concurrent exit/unload (swap race); guard
+        // it — an unguarded throw here is in an IPC event handler and would take
+        // the whole process down, dropping every in-flight stream.
+        slot.worker?.removeListener('exit', onExit);
+        slot.worker?.removeListener('message', onMessage);
         if (msg.status === 0) {
           resolve({ success: true, isMock: msg.isMock });
         } else {

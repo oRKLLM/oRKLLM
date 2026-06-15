@@ -80,6 +80,19 @@ const fastify = Fastify({
   trustProxy: getTrustedProxy(),
 });
 
+// Resilience: a single unguarded throw in an async/event context (e.g. a worker
+// swap race in the pool) must never crash the whole server — that drops every
+// in-flight SSE stream at once and forces a systemd restart. Log loudly and keep
+// serving; the error is still visible in the logs for diagnosis.
+process.on('uncaughtException', (err) => {
+  try { fastify.log.error({ err }, '[uncaughtException] kept process alive'); }
+  catch { console.error('[uncaughtException]', err); }
+});
+process.on('unhandledRejection', (reason) => {
+  try { fastify.log.error({ err: reason }, '[unhandledRejection] kept process alive'); }
+  catch { console.error('[unhandledRejection]', reason); }
+});
+
 // Register plugins
 await fastify.register(fastifyCookie);
 await fastify.register(fastifyWebsocket);
