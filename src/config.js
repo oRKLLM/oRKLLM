@@ -43,10 +43,11 @@ if (!fs.existsSync(RUNTIMES_DIR)) {
 }
 
 // Llama runtime bundle (libllama.so + ggml-ork libs) for serving .gguf models on the open NPU stack.
-// Override mirror list with ORKLLM_LLAMA_RUNTIME_MIRRORS=owner/repo,... (comma-separated).
+// Defaults to the llama.cpp-rockchip release builds (the constantly-updated open
+// NPU runtime); override with ORKLLM_LLAMA_RUNTIME_MIRRORS=owner/repo,... (comma-separated).
 export const LLAMA_RUNTIME_MIRRORS = (
   process.env.ORKLLM_LLAMA_RUNTIME_MIRRORS ||
-  'oRKLLM/llama-rk-runtimes'
+  'oRKLLM/llama.cpp-rockchip'
 ).split(',').map(s => s.trim()).filter(Boolean);
 
 export const LLAMA_RUNTIME_DIR = process.env.ORKLLM_LLAMA_RUNTIME_DIR ||

@@ -115,7 +115,7 @@
             <div class="text-caption text-grey">
               Downloads <code>libllama.so</code> + <code>libggml-ork.so</code> (the open NPU backend built from
               <a href="https://github.com/oRKLLM/llama.cpp-rockchip" target="_blank" class="text-primary">llama.cpp-rockchip</a>)
-              from <a href="https://github.com/oRKLLM/llama-rk-runtimes" target="_blank" class="text-primary">oRKLLM/llama-rk-runtimes</a>.
+              from <a href="https://github.com/oRKLLM/llama.cpp-rockchip" target="_blank" class="text-primary">oRKLLM/llama.cpp-rockchip</a>.
               Required to load <code>.gguf</code> models. ARM64 (board) only.
             </div>
           </div>
