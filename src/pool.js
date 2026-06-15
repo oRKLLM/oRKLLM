@@ -874,6 +874,10 @@ class EnginePool {
           prompt,
           loadCachePath: cachePaths?.loadCachePath,
           saveCachePath: cachePaths?.saveCachePath,
+          // Per-request generation/sampling params. The llama (gguf) addon reads
+          // these per run (max_new_tokens, temperature, top_p, top_k); the rkllm
+          // addon ignores them (it samples with its init-time params).
+          options,
         });
       });
 

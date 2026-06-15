@@ -339,7 +339,33 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
                                   ? input.Get("loadCachePath").As<Napi::String>().Utf8Value() : "";
     std::string saveCachePath   = input.Has("saveCachePath") && input.Get("saveCachePath").IsString()
                                   ? input.Get("saveCachePath").As<Napi::String>().Utf8Value() : "";
-    int maxNewTokens = 512;
+    // Per-request generation cap. The chat/bench layer sends max_new_tokens;
+    // honour it instead of a fixed limit (this used to be hardcoded to 512, so
+    // the model's Max New Tokens setting had no effect on the gguf path).
+    int maxNewTokens = input.Has("max_new_tokens") && input.Get("max_new_tokens").IsNumber()
+                       ? input.Get("max_new_tokens").As<Napi::Number>().Int32Value() : 512;
+    if (maxNewTokens <= 0) maxNewTokens = 512;
+
+    // Rebuild the sampler chain from THIS request's sampling params so per-request
+    // temperature/top_p/top_k take effect. The chain is otherwise fixed at load
+    // time (init_model), so changing a model's sampling settings did nothing
+    // until reload. Runs are serialized per worker, so replacing g_sampler here
+    // is safe. Uses only the samplers already resolved at load.
+    if (inferMode == 0) {
+        int32_t topk = input.Has("top_k") && input.Get("top_k").IsNumber()
+                       ? input.Get("top_k").As<Napi::Number>().Int32Value() : 40;
+        float   topp = input.Has("top_p") && input.Get("top_p").IsNumber()
+                       ? input.Get("top_p").As<Napi::Number>().FloatValue() : 0.9f;
+        float   temp = input.Has("temperature") && input.Get("temperature").IsNumber()
+                       ? input.Get("temperature").As<Napi::Number>().FloatValue() : 0.8f;
+        if (g_sampler) { fn_samp_free(g_sampler); g_sampler = nullptr; }
+        auto sp = fn_schain_par();
+        g_sampler = fn_schain_init(sp);
+        fn_schain_add(g_sampler, fn_s_topk(topk));
+        fn_schain_add(g_sampler, fn_s_topp(topp, 1));
+        fn_schain_add(g_sampler, fn_s_temp(temp));
+        fn_schain_add(g_sampler, fn_s_dist(0xDEADBEEF));
+    }
 
     int inferMode = input.Has("infer_mode") && input.Get("infer_mode").IsNumber() ? input.Get("infer_mode").As<Napi::Number>().Int32Value() : 0;
     bool keepHistory = input.Has("keep_history") && input.Get("keep_history").As<Napi::Boolean>().Value();

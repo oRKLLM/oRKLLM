@@ -95,7 +95,7 @@ process.on('message', async (msg) => {
   }
 
   else if (msg.type === 'run') {
-    const { prompt, loadCachePath, saveCachePath, infer_mode, token_ids, keep_history } = msg;
+    const { prompt, loadCachePath, saveCachePath, infer_mode, token_ids, keep_history, options } = msg;
     if (!engine) {
       process.send({ type: 'error', message: 'No active engine loaded' });
       return;
@@ -117,6 +117,11 @@ process.on('message', async (msg) => {
           infer_mode: infer_mode || 0,
           token_ids: token_ids ? Int32Array.from(token_ids) : undefined,
           keep_history: !!keep_history,
+          // Forwarded per-request params; read by the llama addon, ignored by rkllm.
+          max_new_tokens: options?.max_new_tokens,
+          temperature:    options?.temperature,
+          top_p:          options?.top_p,
+          top_k:          options?.top_k,
         }, (res) => {
           process.send({ type: 'token', ...res });
         });
