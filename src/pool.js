@@ -19,6 +19,17 @@ const __dirname = path.dirname(__filename);
 // ctx_window setting (e.g. raise for long-context models, lower for 2048-only).
 const DEFAULT_MAX_CONTEXT_LEN = 4096;
 
+// Worker env with the llama + rkllm runtime dirs prepended to LD_LIBRARY_PATH so
+// a dlopen'd libllama.so resolves its libggml-*.so siblings from the runtime dir
+// regardless of the RUNPATH baked into a prebuilt bundle (some CI bundles bake an
+// absolute build path that doesn't exist on the target). LD_LIBRARY_PATH is
+// searched before DT_RUNPATH, so this wins. Must be set at fork time (the loader
+// reads it at process start, not per dlopen).
+function workerEnv() {
+  const dirs = [LLAMA_RUNTIME_DIR, RUNTIMES_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean);
+  return { ...process.env, LD_LIBRARY_PATH: dirs.join(':') };
+}
+
 // Per-worker slot — each holds one loaded model and one worker process.
 function createSlot(id) {
   return {
@@ -388,7 +399,11 @@ class EnginePool {
       // 'advanced' (v8) IPC serialization preserves TypedArrays — Eagle-3's
       // hidden_states/logits are Float32Arrays and the default 'json' codec
       // turns them into plain objects (length lost), breaking the GPU draft.
-      slot.worker = fork(workerPath, { serialization: 'advanced' });
+      // LD_LIBRARY_PATH includes the llama runtime dir so a dlopen'd libllama.so
+      // finds its libggml-*.so siblings there even when the prebuilt bundle bakes
+      // a CI build path into its RUNPATH (LD_LIBRARY_PATH is searched before
+      // DT_RUNPATH). Harmless for the rkllm backend.
+      slot.worker = fork(workerPath, { serialization: 'advanced', env: workerEnv() });
 
       // Persistent guards so a worker that dies mid-inference can never crash the
       // whole server. Without an 'error' listener, an IPC failure (e.g.
@@ -544,7 +559,7 @@ class EnginePool {
   _tryLoadWorker(slot, modelName, modelPath, options, libPath) {
     const workerPath = path.join(__dirname, 'worker.js');
     if (slot === 'draft') {
-      this.draftWorker = fork(workerPath, { serialization: 'advanced' });
+      this.draftWorker = fork(workerPath, { serialization: 'advanced', env: workerEnv() });
       // Guard against unhandled 'error' (IPC failure) crashing the server.
       this.draftWorker.on('error', (err) => {
         console.error(`[EnginePool] Draft worker IPC error: ${err.message}`);
