@@ -89,7 +89,8 @@ export default async function apiRoutes(fastify, options) {
       top_p = 0.9,
       top_k = 40,
       max_tokens = 512,
-      mcp_tools = undefined
+      mcp_tools = undefined,
+      no_cache = false,
     } = request.body || {};
 
     // Per-request MCP tool selection (sent by the Chat page's tool picker).
@@ -113,7 +114,7 @@ export default async function apiRoutes(fastify, options) {
 
     // Prefix cache: check if we have KV state for all messages except the new user turn
     // Callers can set no_cache:true (e.g. benchmark runs) to force fresh prefill.
-    const cacheEnabled = isCacheEnabled() && !body.no_cache;
+    const cacheEnabled = isCacheEnabled() && !no_cache;
     let loadCachePath = null;
     let saveCachePath = null;
     let prefixMessages = trimmed;
