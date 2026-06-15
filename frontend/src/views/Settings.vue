@@ -131,7 +131,7 @@
           </v-chip>
           <v-select
             v-model="llamaSelectedTag"
-            :items="llamaReleases.map(r => ({ title: r.tag === (llamaRuntime.tag) ? `${r.tag} (installed)` : r.tag, value: r.tag }))"
+            :items="llamaReleases.map((r, i) => ({ title: r.tag + (r.tag === llamaRuntime.tag ? ' (installed)' : i === 0 ? ' (latest)' : ''), value: r.tag }))"
             label="Release" placeholder="latest"
             density="compact" variant="outlined" hide-details
             style="min-width: 180px; max-width: 260px;"
@@ -815,7 +815,14 @@ export default {
     async fetchLlamaReleases() {
       try {
         const res = await fetch('/api/admin/llama-runtime/releases');
-        if (res.ok) this.llamaReleases = (await res.json()).releases || [];
+        if (res.ok) {
+          this.llamaReleases = (await res.json()).releases || [];
+          // Default the picker to the newest release (the list is newest-first)
+          // so the one-click action installs latest; users can still pick older.
+          if (!this.llamaSelectedTag && this.llamaReleases.length) {
+            this.llamaSelectedTag = this.llamaReleases[0].tag;
+          }
+        }
       } catch (e) {}
     },
     async onToggleAutoLlama(val) {

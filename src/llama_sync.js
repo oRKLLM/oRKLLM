@@ -96,12 +96,16 @@ export async function getLlamaReleases() {
 
   for (const slug of LLAMA_RUNTIME_MIRRORS) {
     try {
+      // llama.cpp pushes builds constantly, so only surface the newest handful
+      // for the picker (GitHub returns newest-first). syncLlamaRuntime fetches a
+      // wider window, so any listed tag still resolves.
       const res = await httpsGet(mirrorApi(slug) + '?per_page=20');
       if (res.status !== 200) continue;
       const releases = JSON.parse(res.body.toString());
       return releases
         .filter(r => r.assets?.some(a => a.name.endsWith('.tar.gz')))
-        .map(r => ({ tag: r.tag_name, publishedAt: r.published_at }));
+        .map(r => ({ tag: r.tag_name, publishedAt: r.published_at }))
+        .slice(0, 10);
     } catch { /* try next */ }
   }
   return [];
