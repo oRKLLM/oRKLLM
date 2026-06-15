@@ -304,6 +304,24 @@ export default async function apiRoutes(fastify, options) {
         'X-Accel-Buffering': 'no'
       });
 
+      // SSE heartbeat: a long prefill (a gguf prompt can take 30s+ before the
+      // first token) or any pause sends no bytes, so a reverse proxy with a read
+      // /idle timeout (nginx proxy_read_timeout, etc.) resets the connection
+      // mid-request — the client then sees a spurious "network error". Emit an
+      // SSE comment line (ignored by clients) whenever the stream has been silent
+      // for HEARTBEAT_MS; every real write reschedules it, so it only fires
+      // during genuine gaps.
+      const HEARTBEAT_MS = 15000;
+      let heartbeat = null;
+      const scheduleHeartbeat = () => {
+        if (heartbeat) clearTimeout(heartbeat);
+        heartbeat = setTimeout(() => {
+          try { reply.raw.write(': keepalive\n\n'); } catch {}
+          scheduleHeartbeat();
+        }, HEARTBEAT_MS);
+      };
+      const stopHeartbeat = () => { if (heartbeat) { clearTimeout(heartbeat); heartbeat = null; } };
+
       await traceInference(traceParams, async (gen) => {
         let streamText = '';
         const onToken = (msg) => {
@@ -314,9 +332,11 @@ export default async function apiRoutes(fastify, options) {
               choices: [{ index: 0, delta: { content: msg.text }, finish_reason: null }]
             };
             reply.raw.write(`data: ${JSON.stringify(chunk)}\n\n`);
+            scheduleHeartbeat();
           }
         };
 
+        scheduleHeartbeat(); // cover the prefill gap before the first token
         try {
           const cachePaths = loadCachePath || saveCachePath ? { loadCachePath, saveCachePath } : {};
           const isLlamaModel = model.endsWith('.gguf');
@@ -358,10 +378,12 @@ export default async function apiRoutes(fastify, options) {
             perf: finalResult.perf,
             specDecode
           };
+          stopHeartbeat();
           reply.raw.write(`data: ${JSON.stringify(stopChunk)}\n\n`);
           reply.raw.write('data: [DONE]\n\n');
           reply.raw.end();
         } catch (err) {
+          stopHeartbeat();
           reply.raw.write(`data: ${JSON.stringify({ error: { message: err.message, type: 'invalid_request_error' } })}\n\n`);
           reply.raw.end();
           throw err;
