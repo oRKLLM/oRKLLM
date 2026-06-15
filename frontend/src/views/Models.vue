@@ -1535,6 +1535,17 @@ export default {
         this.collectionLoading = false;
       }
     },
+    // Parse a JSON response, but give a clean message for non-JSON bodies —
+    // e.g. an nginx 502/503 HTML page while the server is restarting — instead
+    // of a cryptic "Unexpected token '<'". Returns parsed JSON even for error
+    // statuses when the body is JSON, so callers can still read data.error.
+    async _readJson(res) {
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('application/json')) return res.json();
+      if ([502, 503, 504].includes(res.status))
+        throw new Error('server is restarting or unavailable — try again in a moment');
+      throw new Error(`unexpected response from server (HTTP ${res.status})`);
+    },
     async selectModel(id) {
       // Fetch all .rkllm files and start every download immediately
       this.dlRepoId = id;
@@ -1544,7 +1555,7 @@ export default {
       this.loadingRepoId = id;
       try {
         const res = await fetch(`/api/admin/hf/files?repoId=${encodeURIComponent(id)}`);
-        const data = await res.json();
+        const data = await this._readJson(res);
         if (!res.ok) { this.dlFileError = data.error || 'Failed to fetch files'; return; }
         if (data.files.length === 0) { this.dlFileError = `No .rkllm or .gguf files found in ${id}.`; return; }
         // Kick off all downloads in parallel
@@ -1568,7 +1579,7 @@ export default {
       this.dlFileError = '';
       try {
         const res = await fetch(`/api/admin/hf/files?repoId=${encodeURIComponent(this.dlRepoId.trim())}`);
-        const data = await res.json();
+        const data = await this._readJson(res);
         if (!res.ok) { this.dlFileError = data.error || 'Failed to fetch files'; return; }
         this.dlFiles = data.filter(f =>
           f.type === 'file' && (
@@ -1611,7 +1622,7 @@ export default {
             hfToken: this.dlHfToken.trim() || undefined,
           }),
         });
-        const data = await res.json();
+        const data = await this._readJson(res);
         if (!res.ok) { this.$notify(data.error || 'Failed to start download', 'error'); return; }
         this.dlFiles = [];
         this.startPollDownloadStatus();
