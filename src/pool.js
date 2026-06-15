@@ -264,26 +264,41 @@ class EnginePool {
           this.resetIdleTimer(s);
           return { status: 0, activeModel: s.activeModel };
         }
-        // Auto-download llama runtime if enabled and not yet present
-        if (dbGetSetting('auto_download_llama_runtime') === '1' && !isLlamaRuntimeAvailable()) {
-          console.log(`[EnginePool] Llama runtime missing — triggering sync`);
-          await syncLlamaRuntime();
-          const result2 = await this._tryLoadSlot(s, modelName, modelPath, slotOptions, libPath, 'llama');
-          if (result2.success) {
-            s.isLoaded = true;
-            applyPerformance();
-            s.activeModel = { name: modelName, path: modelPath, options, isMock: result2.isMock, libPath, backend: 'llama' };
-            console.log(`[EnginePool] Slot ${s.id}: loaded after llama runtime sync: ${modelName}`);
-            this.resetIdleTimer(s);
-            return { status: 0, activeModel: s.activeModel };
+        // Distinguish a genuinely missing runtime from a present-but-failed load
+        // (e.g. an unsupported model architecture). Only the former is
+        // RUNTIME_MISSING; the latter must report the actual error so the user
+        // isn't told to install a runtime that's already there.
+        if (!isLlamaRuntimeAvailable()) {
+          if (dbGetSetting('auto_download_llama_runtime') === '1') {
+            console.log(`[EnginePool] Llama runtime missing — triggering sync`);
+            await syncLlamaRuntime();
+            const result2 = await this._tryLoadSlot(s, modelName, modelPath, slotOptions, libPath, 'llama');
+            if (result2.success) {
+              s.isLoaded = true;
+              applyPerformance();
+              s.activeModel = { name: modelName, path: modelPath, options, isMock: result2.isMock, libPath, backend: 'llama' };
+              console.log(`[EnginePool] Slot ${s.id}: loaded after llama runtime sync: ${modelName}`);
+              this.resetIdleTimer(s);
+              return { status: 0, activeModel: s.activeModel };
+            }
+            if (s.worker) { s.worker.kill(); s.worker = null; }
           }
           if (s.worker) { s.worker.kill(); s.worker = null; }
+          throw Object.assign(
+            new Error(`Failed to load ${modelName}. Llama runtime not available at ${libPath}. ` +
+              `Enable auto-download in Settings or manually sync via POST /api/admin/llama-runtime/sync.`),
+            { code: 'LLAMA_RUNTIME_MISSING' }
+          );
         }
+        // Runtime IS present — the model itself failed to load. Surface why
+        // (e.g. "unknown model architecture: 'lfm2moe'" appears in the server
+        // log) rather than blaming a missing runtime.
         if (s.worker) { s.worker.kill(); s.worker = null; }
         throw Object.assign(
-          new Error(`Failed to load ${modelName}. Llama runtime not available at ${libPath}. ` +
-            `Enable auto-download in Settings or manually sync via POST /api/admin/llama-runtime/sync.`),
-          { code: 'LLAMA_RUNTIME_MISSING' }
+          new Error(`Failed to load ${modelName}: ${result.error || 'llama init failed'}. ` +
+            `The bundled llama runtime may not support this model's architecture — a newer libllama may be required ` +
+            `(check the server log for the exact reason, e.g. "unknown model architecture").`),
+          { code: 'LLAMA_LOAD_FAILED' }
         );
       }
 

@@ -859,7 +859,10 @@
                   :key="f.name"
                   class="border-bottom py-2 px-0"
                 >
-                  <v-list-item-title class="text-body-2 font-mono">{{ f.name }}</v-list-item-title>
+                  <v-list-item-title class="text-body-2 font-mono d-flex align-center" style="gap: 8px;">
+                    <v-chip v-if="quantOf(f.name)" size="x-small" color="primary" variant="tonal">{{ quantOf(f.name) }}</v-chip>
+                    <span>{{ f.name }}</span>
+                  </v-list-item-title>
                   <v-list-item-subtitle v-if="f.size" class="text-caption">{{ formatBytes(f.size) }}</v-list-item-subtitle>
                   <template #append>
                     <v-btn size="small" color="primary" variant="flat" @click="startDownload(f.name)">
@@ -1558,13 +1561,26 @@ export default {
         const data = await this._readJson(res);
         if (!res.ok) { this.dlFileError = data.error || 'Failed to fetch files'; return; }
         if (data.files.length === 0) { this.dlFileError = `No .rkllm or .gguf files found in ${id}.`; return; }
-        // Kick off all downloads in parallel
-        await Promise.all(data.files.map(f => this.startDownload(f.name)));
-        // Scroll to the queue
-        this.$nextTick(() => {
-          const el = this.$refs.downloadCard?.$el || this.$refs.downloadCard;
-          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        });
+        // A repo can ship multiple weight files — several GGUF quants (Q4_K_M,
+        // Q5_K_M, Q6_K, Q8_0, …) and/or shards. Auto-downloading all of them
+        // pulls tens of GB of redundant variants, so only auto-download when
+        // there's a single weight file; otherwise show the picker so the user
+        // chooses the quant they want.
+        const weights = data.files.filter(f => /\.(rkllm|gguf|safetensors|bin|pt|pth)$/i.test(f.name));
+        if (weights.length <= 1) {
+          await Promise.all(data.files.map(f => this.startDownload(f.name)));
+          this.$nextTick(() => {
+            const el = this.$refs.downloadCard?.$el || this.$refs.downloadCard;
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          });
+        } else {
+          // Show the file picker (quant chip per GGUF) for the user to choose.
+          this.dlFiles = data.files;
+          this.$nextTick(() => {
+            const el = this.$refs.downloadCard?.$el || this.$refs.downloadCard;
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          });
+        }
       } catch (e) {
         this.dlFileError = 'Network error: ' + e.message;
       } finally {
@@ -1604,6 +1620,12 @@ export default {
       } finally {
         this.dlLoading = false;
       }
+    },
+    // Extract the quantization label from a GGUF filename (Q4_K_M, Q5_K_M,
+    // Q6_K, Q8_0, IQ4_XS, F16, …) for the picker chip; null if none.
+    quantOf(name) {
+      const m = (name || '').match(/(IQ\d+\w*|Q\d+(?:_K(?:_[SML])?|_[01])?|BF16|F16|F32)/i);
+      return m ? m[1].toUpperCase() : null;
     },
     formatNum(n) {
       if (!n) return '0';
