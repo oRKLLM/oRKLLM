@@ -53,6 +53,12 @@ class EnginePool {
     this.pinned = false;
     this.queue  = [];
 
+    // Async load tracking — so a slow (multi-second, CPU-bound gguf) load can be
+    // kicked off by beginLoad() and observed via getStatus() instead of holding
+    // an HTTP request open for the whole load (which a reverse proxy can time
+    // out, dropping the connection → the client sees a spurious "Network error").
+    this._loadStatus = { loading: null, error: null }; // loading:{model}|null, error:{model,message,code}|null
+
     // Speculative decoding — draft model worker (null when spec decode disabled)
     this.draftWorker   = null;
     this.draftModel    = null;
@@ -337,11 +343,27 @@ class EnginePool {
       );
     })();
 
+    this._loadStatus = { loading: { model: modelName }, error: null };
     try {
-      return await s.loadingPromise;
+      const res = await s.loadingPromise;
+      this._loadStatus.loading = null;
+      return res;
+    } catch (e) {
+      this._loadStatus = { loading: null, error: { model: modelName, message: e.message, code: e.code ?? null } };
+      throw e;
     } finally {
       s.loadingPromise = null;
     }
+  }
+
+  // Fire-and-forget load. Starts loading and returns immediately; progress and
+  // failures are reported through getStatus().loading / .loadError so the client
+  // polls instead of holding open a request that a reverse proxy could time out.
+  // The rejection is swallowed here because it's recorded in _loadStatus.error
+  // (an unhandled rejection would otherwise be noisy).
+  beginLoad(modelName, options = {}) {
+    this.load(modelName, options).catch(() => {});
+    return { accepted: true, model: modelName };
   }
 
   // Attempt to load a model on a slot with a specific libPath
@@ -892,6 +914,10 @@ class EnginePool {
       // so the UI can restore the saved value on page refresh.
       idleTimeoutMs: this.idleTimeoutMs,
       pinned:        this.pinned,
+      // Async load observability (see beginLoad): a client that POSTed /load
+      // polls these instead of awaiting the load over a single HTTP request.
+      loading:       this._loadStatus.loading,  // { model } while a load runs, else null
+      loadError:     this._loadStatus.error,    // { model, message, code } of the last failed load, else null
       poolSize:      this._slots.length,
       slots:         this._slots.map(s => ({
         id:      s.id,

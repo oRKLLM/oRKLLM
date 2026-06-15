@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# oRKLLM pre-commit hook — gates commits on a passing E2E run.
+# Canonical source: scripts/pre-commit. Wired into .git/hooks/pre-commit by
+# scripts/install-git-hooks.mjs (run from `postinstall` on dev installs only).
+set -e
+
+GITDIR="$(git rev-parse --git-dir)"
+STAMP="$GITDIR/e2e-pass"
+
+# Paths whose changes require re-running E2E. Anything outside these (docs,
+# memory, CI yaml) doesn't affect the suite.
+WATCH=(src frontend/src e2e binding.gyp package.json playwright.config.js)
+
+# Skip the run if a passing E2E stamp exists and NO watched file has been
+# modified since it — i.e. you already ran `npm run test:e2e` and haven't
+# touched testable code since. Re-running would be wasteful.
+if [ -f "$STAMP" ]; then
+  newer="$(find "${WATCH[@]}" -type f -newer "$STAMP" 2>/dev/null | head -1)"
+  if [ -z "$newer" ]; then
+    echo "[pre-commit] E2E already passed since last source change — skipping (delete $STAMP to force)."
+    exit 0
+  fi
+  echo "[pre-commit] Source changed since last E2E pass (e.g. $newer) — re-running."
+fi
+
+echo "[pre-commit] Running E2E tests..."
+npm run test:e2e
+echo "[pre-commit] Tests passed."

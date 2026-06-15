@@ -295,19 +295,14 @@ export default async function adminRoutes(fastify, options) {
     if (!model) {
       return reply.status(400).send({ error: 'Model name required' });
     }
-    try {
-      const res = await pool.load(model, options || {});
-      return { success: true, activeModel: res.activeModel };
-    } catch (e) {
-      if (e.code === 'RUNTIME_MISSING') {
-        return reply.status(422).send({
-          error: e.message,
-          code: 'RUNTIME_MISSING',
-          runtimeVersion: e.runtimeVersion ?? null,
-        });
-      }
-      return reply.status(500).send({ error: e.message });
-    }
+    // Async load: kick the load off and return 202 immediately. A model load
+    // can take tens of seconds (CPU-bound gguf prefill), and holding the HTTP
+    // request open that long lets a reverse proxy (nginx proxy_read_timeout)
+    // reset the connection — the client then sees a spurious "Network error"
+    // and the PWA falls back to its offline shell. The client polls
+    // GET /api/admin/status for { loading, loadError, isLoaded } instead.
+    pool.beginLoad(model, options || {});
+    return reply.status(202).send({ accepted: true, model });
   });
 
   // POST /api/admin/unload

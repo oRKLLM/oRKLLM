@@ -350,9 +350,10 @@ export default {
           body: JSON.stringify({ model: modelId })
         });
         if (res.ok) {
-          await this.fetchStatus();
+          // 202 Accepted — the load runs asynchronously; poll status for it.
+          if (!await this.pollUntilLoaded(modelId)) this.selectedModel = this.status.model;
         } else {
-          const data = await res.json();
+          const data = await res.json().catch(() => ({}));
           this.$notify(data.error || 'Failed to load model', 'error');
           this.selectedModel = this.status.model;
         }
@@ -361,6 +362,30 @@ export default {
       } finally {
         this.loadingModel = false;
       }
+    },
+    // The load endpoint returns 202 and loads in the background (a heavy gguf
+    // load can take tens of seconds). Poll status until the model is loaded or
+    // the load reports an error, so no single request is held open long enough
+    // for a reverse proxy to time out. Transient fetch failures keep polling.
+    async pollUntilLoaded(modelId, timeoutMs = 300000) {
+      const start = Date.now();
+      while (Date.now() - start < timeoutMs) {
+        await new Promise(r => setTimeout(r, 1200));
+        let data;
+        try {
+          const r = await fetch('/api/admin/status');
+          if (!r.ok) continue;
+          data = await r.json();
+        } catch { continue; }
+        this.status = data;
+        if (data.loadError && data.loadError.model === modelId) {
+          this.$notify(data.loadError.message || 'Failed to load model', 'error');
+          return false;
+        }
+        if (data.isLoaded && data.model === modelId && !data.loading) return true;
+      }
+      this.$notify('Model load timed out', 'error');
+      return false;
     },
     runBenchmark() {
       if (!this.status.isLoaded || this.running) return;

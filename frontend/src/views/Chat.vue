@@ -486,13 +486,18 @@ export default {
           body: JSON.stringify({ model: modelId, options: { max_new_tokens: this.params.max_tokens } })
         });
         if (res.ok) {
-          chatState.activeModel = modelId;
-          chatState.chatHistory = [];
-          chatState.activeConversationId = null;
-          await this.fetchStatus();
-          await fetchConvs(modelId);
+          // 202 Accepted — the load runs asynchronously; poll status for it.
+          if (await this.pollUntilLoaded(modelId)) {
+            chatState.activeModel = modelId;
+            chatState.chatHistory = [];
+            chatState.activeConversationId = null;
+            await fetchConvs(modelId);
+          } else {
+            chatState.selectedModel = this.status.model;
+            chatState.activeModel = this.status.model;
+          }
         } else {
-          const data = await res.json();
+          const data = await res.json().catch(() => ({}));
           this.$notify(data.error || 'Failed to load model', 'error');
           chatState.selectedModel = this.status.model;
           chatState.activeModel = this.status.model;
@@ -504,6 +509,29 @@ export default {
         if (this.runtimeSyncPoller) { clearInterval(this.runtimeSyncPoller); this.runtimeSyncPoller = null; }
         this.showRuntimeSyncDialog = false;
       }
+    },
+    // /api/admin/load returns 202 and loads in the background (a heavy gguf load
+    // can take tens of seconds). Poll status until loaded or errored so no
+    // single request stays open long enough for a reverse proxy to reset it.
+    async pollUntilLoaded(modelId, timeoutMs = 300000) {
+      const start = Date.now();
+      while (Date.now() - start < timeoutMs) {
+        await new Promise(r => setTimeout(r, 1200));
+        let data;
+        try {
+          const r = await fetch('/api/admin/status');
+          if (!r.ok) continue;
+          data = await r.json();
+        } catch { continue; }
+        this.status = data;
+        if (data.loadError && data.loadError.model === modelId) {
+          this.$notify(data.loadError.message || 'Failed to load model', 'error');
+          return false;
+        }
+        if (data.isLoaded && data.model === modelId && !data.loading) return true;
+      }
+      this.$notify('Model load timed out', 'error');
+      return false;
     },
 
     // ── Conversation management — delegate to the shared store ────────────
