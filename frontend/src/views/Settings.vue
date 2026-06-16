@@ -126,7 +126,7 @@
           <v-chip size="small" :color="llamaRuntime.available ? 'success' : 'grey'" variant="tonal">
             <v-icon start size="14">{{ llamaRuntime.available ? 'mdi-check-circle' : 'mdi-close-circle' }}</v-icon>
             {{ llamaRuntime.available
-              ? `Installed: llama.cpp ${llamaRuntime.llamaVersion || llamaRuntime.tag || '?'} / ork-driver ${llamaRuntime.orkDriverVersion || '?'}`
+              ? `Installed: llama.cpp ${llamaRuntime.tag || llamaRuntime.llamaVersion || '?'}` + (llamaRuntime.orkDriverVersion ? ` / ork-driver ${llamaRuntime.orkDriverVersion}` : '')
               : 'Not installed' }}
           </v-chip>
           <v-select

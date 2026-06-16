@@ -95,6 +95,11 @@ export function getLlamaRuntimeInfo() {
       available: isLlamaRuntimeAvailable(),
       path: LLAMA_RUNTIME_DIR,
       ...manifest,
+      // Normalize the version fields the UI reads — the manifest may name them
+      // llamaCommit/orkDriverCommit (or omit them), so map to llamaVersion/
+      // orkDriverVersion with the build tag as the friendly llama.cpp fallback.
+      llamaVersion:    manifest.llamaVersion    ?? manifest.llamaCommit    ?? manifest.tag ?? null,
+      orkDriverVersion: manifest.orkDriverVersion ?? manifest.orkDriverCommit ?? null,
     };
   } catch {
     return { available: isLlamaRuntimeAvailable(), path: LLAMA_RUNTIME_DIR };
