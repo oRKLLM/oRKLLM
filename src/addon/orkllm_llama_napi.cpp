@@ -495,12 +495,18 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
                     // reasoning. When the model's Thinking setting is OFF, close
                     // that block immediately (empty) so the model skips reasoning.
                     bool enableThinking = input.Has("enable_thinking") && input.Get("enable_thinking").As<Napi::Boolean>().Value();
+                    size_t tp = prompt.rfind("<think>");
+                    bool openThink = (tp != std::string::npos && prompt.find("</think>", tp) == std::string::npos);
                     if (!enableThinking) {
-                        size_t tp = prompt.rfind("<think>");
-                        if (tp != std::string::npos && prompt.find("</think>", tp) == std::string::npos) {
-                            prompt += "\n</think>\n\n";
+                        if (openThink) {
+                            prompt += "\n</think>\n\n";           // template opened it → close empty
+                        } else if (tp == std::string::npos && strstr(tmpl, "think")) {
+                            prompt += "<think>\n\n</think>\n\n";   // reasoning model self-emits think → seed empty
                         }
                     }
+                    fprintf(stderr, "[orkllm-llama] chat-template applied: enableThinking=%d hasThink=%d openThink=%d tail=[%s]\n",
+                            (int)enableThinking, (int)(tp != std::string::npos), (int)openThink,
+                            prompt.substr(prompt.size() > 70 ? prompt.size() - 70 : 0).c_str());
                 }
             }
         }
