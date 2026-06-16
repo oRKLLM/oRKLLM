@@ -26,6 +26,56 @@ function trimMessages(messages, maxTokens) {
   return [...sys, ...conv];
 }
 
+// Streaming-safe trimmer for a leading EMPTY `<think></think>` marker. When we
+// disable reasoning on a toggle-capable model (Qwen3+) by seeding a closed think
+// block, the model still emits its own empty `<think>\n\n</think>` marker before
+// the answer. This removes only that empty marker (whitespace-only interior) so
+// "thinking off" yields clean output. It is NOT reasoning stripping: a think
+// block with any real content passes through untouched. `feed()` returns text
+// safe to emit now; `flush()` returns any remainder at end of stream.
+function makeEmptyThinkTrimmer(active) {
+  if (!active) return { feed: (t) => t, flush: () => '' };
+  const OPEN = '<think>', CLOSE = '</think>';
+  let state = 'lead';   // lead = inspecting the start; pass = streaming through
+  let buf = '';
+  let trimNext = false; // drop leading whitespace once after the close
+  return {
+    feed(text) {
+      if (state === 'pass') {
+        if (trimNext) { text = text.replace(/^\s+/, ''); if (text === '') return ''; trimNext = false; }
+        return text;
+      }
+      buf += text;
+      const lead = buf.replace(/^\s+/, '');
+      if (lead === '' || (OPEN.startsWith(lead) && lead.length < OPEN.length)) return ''; // partial <think>
+      if (!lead.startsWith(OPEN)) { state = 'pass'; const o = buf; buf = ''; return o; }   // not a think block
+      const after = lead.slice(OPEN.length);
+      const ci = after.indexOf(CLOSE);
+      if (ci === -1) {
+        // Inside the think block, no close yet. Whitespace, or a partial `</think>`
+        // tag still arriving, means keep waiting; any other content is real
+        // reasoning → emit everything and stop inspecting.
+        const inner = after.replace(/^\s+/, '');
+        if (inner === '' || (CLOSE.startsWith(inner) && inner.length < CLOSE.length)) return '';
+        state = 'pass'; const o = buf; buf = ''; return o;
+      }
+      if (after.slice(0, ci).trim() !== '') { state = 'pass'; const o = buf; buf = ''; return o; } // non-empty → keep
+      state = 'pass';                                                                        // empty marker → drop it
+      const rest = after.slice(ci + CLOSE.length).replace(/^\s+/, '');
+      buf = '';
+      trimNext = (rest === '');
+      return rest;
+    },
+    flush() {
+      const o = state === 'pass' ? '' : buf; // unclosed leading think → surface rather than swallow
+      buf = ''; state = 'pass';
+      return o;
+    },
+  };
+}
+
+export { makeEmptyThinkTrimmer };
+
 export default async function apiRoutes(fastify, options) {
   
   // GET /v1/models
@@ -282,7 +332,8 @@ export default async function apiRoutes(fastify, options) {
           return reply.status(500).send({ error: err.message });
         }
         recordRequest(resolved.perf);
-        const finalText = resolved.finalText || '';
+        const mcpTrim = makeEmptyThinkTrimmer(seedNoThink);
+        const finalText = mcpTrim.feed(resolved.finalText || '') + mcpTrim.flush();
 
         if (stream) {
           reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
@@ -339,17 +390,18 @@ export default async function apiRoutes(fastify, options) {
 
       await traceInference(traceParams, async (gen) => {
         let streamText = '';
-        const onToken = (msg) => {
-          if (msg.text) {
-            streamText += msg.text;
-            const chunk = {
-              id: completionId, object: 'chat.completion.chunk', created, model,
-              choices: [{ index: 0, delta: { content: msg.text }, finish_reason: null }]
-            };
-            reply.raw.write(`data: ${JSON.stringify(chunk)}\n\n`);
-            scheduleHeartbeat();
-          }
+        const trimmer = makeEmptyThinkTrimmer(seedNoThink);
+        const emit = (text) => {
+          if (!text) return;
+          streamText += text;
+          const chunk = {
+            id: completionId, object: 'chat.completion.chunk', created, model,
+            choices: [{ index: 0, delta: { content: text }, finish_reason: null }]
+          };
+          reply.raw.write(`data: ${JSON.stringify(chunk)}\n\n`);
+          scheduleHeartbeat();
         };
+        const onToken = (msg) => { if (msg.text) emit(trimmer.feed(msg.text)); };
 
         scheduleHeartbeat(); // cover the prefill gap before the first token
         try {
@@ -375,6 +427,7 @@ export default async function apiRoutes(fastify, options) {
           } else {
             finalResult = await pool.generate(model, prompt, modelOptions, onToken, cachePaths);
           }
+          emit(trimmer.flush()); // release any text held while inspecting the leading think marker
           recordRequest(finalResult.perf);
           if (cacheEnabled && saveCachePath)
             putCachePath(cacheKey(model, trimmed), saveCachePath, saved.kv_cache_quant ?? null);
@@ -409,8 +462,13 @@ export default async function apiRoutes(fastify, options) {
     } else {
       let accumulatedText = '';
       const onToken = (msg) => { if (msg.text) accumulatedText += msg.text; };
+      const trimEmptyThink = (t) => {
+        const tr = makeEmptyThinkTrimmer(seedNoThink);
+        return tr.feed(t) + tr.flush();
+      };
 
       try {
+        let visibleText = '';
         const finalResult = await traceInference(traceParams, async (gen) => {
           const cachePaths  = loadCachePath || saveCachePath ? { loadCachePath, saveCachePath } : {};
           const specMode2   = model.endsWith('.gguf') ? null : saved.speculative_mode;
@@ -428,7 +486,8 @@ export default async function apiRoutes(fastify, options) {
           if (cacheEnabled && saveCachePath)
             putCachePath(cacheKey(model, trimmed), saveCachePath, saved.kv_cache_quant ?? null);
 
-          gen.setOutput(accumulatedText, {
+          visibleText = trimEmptyThink(accumulatedText);
+          gen.setOutput(visibleText, {
             promptTokens:    result.perf?.prefill_tokens,
             completionTokens: result.perf?.generate_tokens,
             prefillMs:       result.perf?.prefill_time_ms,
@@ -440,7 +499,7 @@ export default async function apiRoutes(fastify, options) {
 
         return {
           id: completionId, object: 'chat.completion', created, model,
-          choices: [{ index: 0, message: { role: 'assistant', content: accumulatedText }, finish_reason: 'stop' }],
+          choices: [{ index: 0, message: { role: 'assistant', content: visibleText }, finish_reason: 'stop' }],
           usage: {
             prompt_tokens:     finalResult.perf?.prefill_tokens     || 0,
             completion_tokens: finalResult.perf?.generate_tokens    || 0,
