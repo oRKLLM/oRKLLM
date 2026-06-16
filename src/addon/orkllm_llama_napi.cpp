@@ -43,25 +43,32 @@ struct llama_context;
 struct llama_sampler;
 struct llama_vocab;
 
-// Struct layout verified against llama.cpp-rockchip include/llama.h.
+// Struct layout verified against llama.cpp include/llama.h.
 // Must be kept in sync with that header to avoid ABI mismatches when calling
 // llama_model_default_params / llama_context_default_params by value.
 struct llama_model_params {
-    // Two pointer fields added in newer llama.cpp before n_gpu_layers
-    void *devices;                    // ggml_backend_dev_t** NULL-terminated device list
-    void *tensor_buft_overrides;      // const llama_model_tensor_buft_override*
+    void * devices;
+    const void * tensor_buft_overrides;
+
     int32_t n_gpu_layers;
-    int32_t split_mode;               // enum llama_split_mode (int32)
+    int32_t split_mode;
+
     int32_t main_gpu;
-    // implicit 4-byte padding before pointer (ABI alignment)
-    const float *tensor_split;
-    void (*progress_callback)(float, void *);
-    void *progress_callback_user_data;
-    const struct llama_model_kv_override *kv_overrides;
+    const float * tensor_split;
+
+    bool (*progress_callback)(float progress, void * user_data);
+    void * progress_callback_user_data;
+
+    const void * kv_overrides;
+
     bool vocab_only;
     bool use_mmap;
+    bool use_direct_io;
     bool use_mlock;
     bool check_tensors;
+    bool use_extra_bufts;
+    bool no_host;
+    bool no_alloc;
 };
 
 struct llama_context_params {
@@ -69,11 +76,17 @@ struct llama_context_params {
     uint32_t n_batch;
     uint32_t n_ubatch;
     uint32_t n_seq_max;
+    uint32_t n_rs_seq;
+    uint32_t n_outputs_max;
     int32_t  n_threads;
     int32_t  n_threads_batch;
-    int32_t  rope_scaling_type;       // enum llama_rope_scaling_type
-    int32_t  pooling_type;            // enum llama_pooling_type
-    int32_t  attention_type;          // enum llama_attention_type
+
+    int32_t  ctx_type;
+    int32_t  rope_scaling_type;
+    int32_t  pooling_type;
+    int32_t  attention_type;
+    int32_t  flash_attn_type;
+
     float    rope_freq_base;
     float    rope_freq_scale;
     float    yarn_ext_factor;
@@ -82,20 +95,26 @@ struct llama_context_params {
     float    yarn_beta_slow;
     uint32_t yarn_orig_ctx;
     float    defrag_thold;
-    // implicit 4-byte padding before pointer (ABI alignment)
-    void *cb_eval;                    // ggml_backend_sched_eval_callback
-    void *cb_eval_user_data;
-    int32_t type_k;                   // enum ggml_type for K-cache
-    int32_t type_v;                   // enum ggml_type for V-cache
-    void *abort_callback;             // ggml_abort_callback (fn ptr, added in newer llama.cpp)
-    void *abort_callback_data;
-    // booleans kept at end per llama.cpp comment (avoid misalignment during copy-by-value)
+
+    void * cb_eval;
+    void * cb_eval_user_data;
+
+    int32_t  type_k;
+    int32_t  type_v;
+
+    void * abort_callback;
+    void * abort_callback_data;
+
     bool embeddings;
     bool offload_kqv;
-    bool flash_attn;
     bool no_perf;
     bool op_offload;
     bool swa_full;
+    bool kv_unified;
+
+    void * samplers;
+    size_t n_samplers;
+    struct llama_context * ctx_other;
 };
 
 struct llama_batch {
