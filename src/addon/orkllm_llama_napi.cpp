@@ -142,6 +142,12 @@ typedef int32_t  (*llama_tokenize_t)(const struct llama_vocab *, const char *, i
 typedef int32_t  (*llama_token_to_piece_t)(const struct llama_vocab *, llama_token, char *, int32_t, int32_t, bool);
 typedef struct llama_batch (*llama_batch_get_one_t)(llama_token *, int32_t);
 typedef int32_t  (*llama_decode_t)(struct llama_context *, struct llama_batch);
+// Chat templating (ABI pinned to llama.cpp b9659-ork). Lets the gguf path apply
+// a model's OWN chat template (e.g. LFM2's <|startoftext|>) instead of oRKLLM's
+// hardcoded ChatML — which only suits ChatML-family models like Qwen.
+struct llama_chat_message { const char * role; const char * content; };
+typedef int32_t (*llama_chat_apply_template_t)(const char *, const struct llama_chat_message *, size_t, bool, char *, int32_t);
+typedef const char * (*llama_model_chat_template_t)(const struct llama_model *, const char *);
 typedef void     (*llama_kv_self_clear_t)(struct llama_context *);
 typedef bool     (*llama_state_seq_save_file_t)(struct llama_context *, const char *, llama_seq_id, const llama_token *, size_t);
 typedef size_t   (*llama_state_seq_load_file_t)(struct llama_context *, const char *, llama_seq_id, llama_token *, size_t, size_t *);
@@ -211,6 +217,8 @@ static llama_sampler_init_dist_t         fn_s_dist         = nullptr;
 static llama_sampler_init_penalties_t    fn_s_penalties    = nullptr;
 static llama_sampler_init_min_p_t        fn_s_min_p        = nullptr;
 static llama_sampler_init_mirostat_v2_t  fn_s_mirostat_v2  = nullptr;
+static llama_chat_apply_template_t       fn_chat_apply     = nullptr;
+static llama_model_chat_template_t       fn_model_tmpl     = nullptr;
 static llama_sampler_sample_t            fn_sample         = nullptr;
 static llama_sampler_accept_t            fn_samp_accept    = nullptr;
 static llama_sampler_free_t              fn_samp_free      = nullptr;
@@ -273,6 +281,8 @@ Napi::Value LoadLibrary(const Napi::CallbackInfo& info) {
     LOAD_SYM2(s_penalties,   "llama_sampler_init_penalties");
     LOAD_SYM2(s_min_p,       "llama_sampler_init_min_p");
     LOAD_SYM2(s_mirostat_v2, "llama_sampler_init_mirostat_v2");
+    LOAD_SYM2(chat_apply,    "llama_chat_apply_template");
+    LOAD_SYM2(model_tmpl,    "llama_model_chat_template");
     LOAD_SYM2(sample,        "llama_sampler_sample");
     LOAD_SYM2(samp_accept,   "llama_sampler_accept");
     LOAD_SYM2(samp_free,     "llama_sampler_free");
@@ -435,6 +445,35 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
         auto arr = input.Get("token_ids").As<Napi::Int32Array>();
         tokenIds.assign(arr.Data(), arr.Data() + arr.ElementLength());
         useTokenInput = !tokenIds.empty();
+    }
+
+    // Chat templating: if structured messages were passed and the model has a
+    // NON-ChatML template (e.g. LFM2's <|startoftext|>), format the prompt with
+    // the model's OWN template via llama.cpp instead of the ChatML `prompt` the
+    // chat layer built (which only suits ChatML models like Qwen — for those the
+    // template contains "im_start" and we keep `prompt` as-is, preserving the
+    // thinking-mode seed). Any failure (unsupported template, no symbols) falls
+    // back to `prompt`.
+    if (inferMode == 0 && !useTokenInput && input.Has("messages") && input.Get("messages").IsArray()
+        && fn_chat_apply && fn_model_tmpl) {
+        const char* tmpl = fn_model_tmpl(g_model, nullptr);
+        if (tmpl && !strstr(tmpl, "im_start")) {
+            auto arr = input.Get("messages").As<Napi::Array>();
+            std::vector<std::string> roles, contents;
+            for (uint32_t i = 0; i < arr.Length(); i++) {
+                Napi::Object m = arr.Get(i).As<Napi::Object>();
+                roles.push_back(m.Has("role")    ? m.Get("role").As<Napi::String>().Utf8Value()    : std::string("user"));
+                contents.push_back(m.Has("content") ? m.Get("content").As<Napi::String>().Utf8Value() : std::string(""));
+            }
+            std::vector<llama_chat_message> msgs;
+            for (size_t i = 0; i < roles.size(); i++) msgs.push_back({ roles[i].c_str(), contents[i].c_str() });
+            if (!msgs.empty()) {
+                std::vector<char> buf(8192);
+                int32_t n = fn_chat_apply(tmpl, msgs.data(), msgs.size(), true, buf.data(), (int32_t)buf.size());
+                if (n > (int32_t)buf.size()) { buf.resize(n); n = fn_chat_apply(tmpl, msgs.data(), msgs.size(), true, buf.data(), (int32_t)buf.size()); }
+                if (n > 0) prompt = std::string(buf.data(), (size_t)n);
+            }
+        }
     }
 
     // Clear any leftover KV state from a previous run (e.g. an aborted Eagle-3

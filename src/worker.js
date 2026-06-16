@@ -129,6 +129,8 @@ process.on('message', async (msg) => {
           mirostat:          options?.mirostat,
           mirostat_tau:      options?.mirostat_tau,
           mirostat_eta:      options?.mirostat_eta,
+          // Structured messages for llama.cpp chat templating (non-ChatML models).
+          messages:          options?.messages,
         }, (res) => {
           process.send({ type: 'token', ...res });
         });

@@ -190,6 +190,14 @@ export default async function apiRoutes(fastify, options) {
     if (saved.ctx_window != null)          modelOptions.max_context_len   = saved.ctx_window;
     if (saved.thinking_enabled)            modelOptions.enable_thinking   = true;
 
+    // For the llama (gguf) backend, also pass the structured messages so the addon
+    // can apply the model's OWN chat template (non-ChatML models like LFM2 use a
+    // different format than the ChatML `prompt` we build). The rkllm backend
+    // ignores this and keeps using the prompt string.
+    if (isGguf) {
+      modelOptions.messages = prefixMessages.map(m => ({ role: m.role, content: m.content }));
+    }
+
     // Speculative-decode status from the model's saved settings. Computed once
     // and attached to the stop chunk of every response path (normal, eagle-3,
     // and the MCP tool loop) so the benchmark records what's configured.
