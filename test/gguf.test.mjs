@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { readGgufString, getGgufChatTemplate, supportsThinkingToggle } from '../src/gguf.js';
+import { readGgufString, getGgufChatTemplate, supportsThinkingToggle, getGgufArchitecture, isRecurrentArch } from '../src/gguf.js';
 
 // ── Minimal GGUF writer (mirrors the reader's understanding of the format) ────
 const T = { UINT32: 4, STRING: 8, ARRAY: 9 };
@@ -63,6 +63,17 @@ describe('gguf metadata reader', () => {
       assert.equal(supportsThinkingToggle(p), false);
       assert.ok(getGgufChatTemplate(p).includes('im_start'));
     } finally { fs.unlinkSync(p); }
+  });
+
+  test('reads general.architecture and flags recurrent/hybrid archs', () => {
+    const recurrent = writeGguf([kvString('general.architecture', 'lfm2moe'), kvString('tokenizer.chat_template', '<|im_start|>')]);
+    const transformer = writeGguf([kvString('general.architecture', 'qwen3moe'), kvString('tokenizer.chat_template', '<|im_start|>')]);
+    try {
+      assert.equal(getGgufArchitecture(recurrent), 'lfm2moe');
+      assert.equal(isRecurrentArch(recurrent), true);   // LFM2.5-MoE → recurrent
+      assert.equal(getGgufArchitecture(transformer), 'qwen3moe');
+      assert.equal(isRecurrentArch(transformer), false); // plain transformer → not recurrent
+    } finally { fs.unlinkSync(recurrent); fs.unlinkSync(transformer); }
   });
 
   test('returns null for a missing key and empty template for a non-GGUF file', () => {

@@ -132,3 +132,30 @@ export function getGgufChatTemplate(filePath) {
 export function supportsThinkingToggle(filePath) {
   return /enable_thinking/.test(getGgufChatTemplate(filePath));
 }
+
+// Cache of architectures by "path:mtimeMs".
+const _archCache = new Map();
+
+// The model's `general.architecture` (e.g. "qwen3", "lfm2moe"), or '' if absent.
+export function getGgufArchitecture(filePath) {
+  let key = filePath;
+  try {
+    const st = fs.statSync(filePath);
+    key = `${filePath}:${st.mtimeMs}`;
+  } catch { /* fall through */ }
+  if (_archCache.has(key)) return _archCache.get(key);
+  const arch = (readGgufString(filePath, 'general.architecture') || '').toLowerCase();
+  _archCache.set(key, arch);
+  return arch;
+}
+
+// Recurrent / hybrid (state-space, gated-delta, RWKV, …) architectures. For these,
+// llama.cpp's KV-state save/restore (`llama_state_seq_save_file`) — which oRKLLM's
+// prefix cache relies on — is unsupported or pathologically slow: on LFM2.5-MoE a
+// cached multi-turn request collapsed to ~17 s/token (≈200×). The prefix cache is
+// disabled for these models (see routes.js); plain prefill is fast.
+const RECURRENT_ARCH_RE = /mamba|rwkv|lfm2|jamba|falcon[-_]?h1?|plamo2|nemotron[-_]?h|hybrid|recurrent/;
+export function isRecurrentArch(filePath) {
+  const arch = getGgufArchitecture(filePath);
+  return arch !== '' && RECURRENT_ARCH_RE.test(arch);
+}

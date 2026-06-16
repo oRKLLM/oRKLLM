@@ -413,13 +413,22 @@
                       Advanced
                     </v-expansion-panel-title>
                     <v-expansion-panel-text class="pa-0">
-                      <!-- Hidden for models with no non-thinking mode (e.g. LFM2.5-MoE always reasons) -->
-                      <div v-if="settingsTarget?.thinkingToggle !== false" class="d-flex align-center justify-space-between py-2">
+                      <!-- Shown for all models; disabled (forced on) for models with no
+                           non-thinking mode (e.g. LFM2.5-MoE always reasons). -->
+                      <div class="d-flex align-center justify-space-between py-2">
                         <div>
                           <div class="text-body-2">Enable Thinking</div>
-                          <div class="text-caption text-grey">Activate reasoning mode (Qwen3 thinking models)</div>
+                          <div class="text-caption text-grey">
+                            {{ settingsTarget?.thinkingToggle === false
+                                ? 'This model always reasons — thinking can’t be disabled'
+                                : 'Activate reasoning mode (Qwen3 thinking models)' }}
+                          </div>
                         </div>
-                        <v-switch v-model="settingsForm.thinking_enabled" color="primary" hide-details density="compact" class="flex-shrink-0 ml-3"></v-switch>
+                        <v-switch
+                          :model-value="settingsTarget?.thinkingToggle === false ? true : settingsForm.thinking_enabled"
+                          @update:model-value="v => settingsForm.thinking_enabled = v"
+                          :disabled="settingsTarget?.thinkingToggle === false"
+                          color="primary" hide-details density="compact" class="flex-shrink-0 ml-3"></v-switch>
                       </div>
                       <div class="d-flex align-center justify-space-between py-2">
                         <div>
@@ -1250,7 +1259,11 @@ export default {
       } catch (e) {}
     },
     async openSettings(model) {
-      this.settingsTarget = model;
+      // The manager list comes from /v1/models (no thinkingToggle); pull that flag
+      // from the library entry so the dialog can disable Enable-Thinking for models
+      // with no non-thinking mode (e.g. LFM2.5-MoE).
+      const lib = (this.library.available || []).find(m => m.id === model.id);
+      this.settingsTarget = { ...model, thinkingToggle: lib?.thinkingToggle };
       const saved = this.modelSettings[model.id] || {};
       this.settingsForm = {
         display_name: saved.display_name || '',

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { MODELS_DIR, parseRuntimeVersion } from '../config.js';
-import { supportsThinkingToggle } from '../gguf.js';
+import { supportsThinkingToggle, isRecurrentArch } from '../gguf.js';
 import pool from '../pool.js';
 import { recordRequest } from '../stats.js';
 import { dbGetModelSettings, dbSetModelSettings, dbGetSetting, dbListEnabledMcpServers } from '../db.js';
@@ -166,7 +166,12 @@ export default async function apiRoutes(fastify, options) {
 
     // Prefix cache: check if we have KV state for all messages except the new user turn
     // Callers can set no_cache:true (e.g. benchmark runs) to force fresh prefill.
-    const cacheEnabled = isCacheEnabled() && !no_cache;
+    // Recurrent/hybrid gguf models (LFM2.5-MoE, Mamba, RWKV, …) are excluded: llama.cpp's
+    // KV-state save/restore is unsupported/pathological for them — a cached multi-turn
+    // request on LFM2.5 collapsed to ~17 s/token (≈200×). Plain prefill stays fast.
+    const isRecurrentModel = model.toLowerCase().endsWith('.gguf')
+      && isRecurrentArch(path.join(MODELS_DIR, model));
+    const cacheEnabled = isCacheEnabled() && !no_cache && !isRecurrentModel;
     let loadCachePath = null;
     let saveCachePath = null;
     let prefixMessages = trimmed;
