@@ -4,7 +4,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { MODELS_DIR, LIBRKLLMRT_PATH, RUNTIMES_DIR, LLAMA_RUNTIME_DIR, parseRuntimeVersion, getNpuCoreCount } from './config.js';
 import { dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings } from './db.js';
-import { applyPerformance, restoreGovernor } from './perf_governor.js';
+import { applyPerformance } from './perf_governor.js';
 import { syncRuntimes, hasRuntime } from './runtime_sync.js';
 import { syncLlamaRuntime, isLlamaRuntimeAvailable } from './llama_sync.js';
 import { eagle3Generate } from './eagle.js';
@@ -468,8 +468,11 @@ class EnginePool {
     }
     slot.activeModel = null;
     slot.isLoaded    = false;
-    // When the last model unloads, drop the performance pin back to the board defaults.
-    if (!this._slots.some((sl) => sl.isLoaded)) restoreGovernor();
+    // Note: we intentionally DON'T restore governors on idle-unload. With
+    // manage_performance on, oRKLLM is an inference appliance — performance is
+    // pinned for the whole service lifetime (applied at startup), not just while
+    // a model is loaded, so the box stays ready and survives reboots. Governors
+    // are restored only when manage_performance is turned off (admin route).
   }
 
   // Public unload — unloads slot 0 (primary), preserves additional slots

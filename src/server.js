@@ -17,6 +17,7 @@ import { getStats } from './stats.js';
 import pool from './pool.js';
 import { MODELS_DIR } from './config.js';
 import { syncRuntimes } from './runtime_sync.js';
+import { applyPerformance } from './perf_governor.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -293,6 +294,10 @@ const start = async () => {
   try {
     await fastify.listen({ port, host });
     fastify.log.info(`oRKLLM server started at http://${host}:${port}`);
+    // Inference appliance: pin CPU+DDR governors to performance at startup when
+    // manage_performance is on, so the box is performance-ready immediately after
+    // a reboot (not only once a model loads). Self-gates on the setting/platform.
+    applyPerformance();
     migrateMisplacedCache();  // fix empty cache_dir path bug from earlier versions
     await autoLoadPinnedModel();
     // Background runtime sync (non-blocking)

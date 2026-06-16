@@ -491,9 +491,11 @@ export default async function adminRoutes(fastify, options) {
     if (typeof mcpInferenceEnabled === 'boolean') dbSetSetting('mcp_inference_enabled', mcpInferenceEnabled ? '1' : '0');
     if (typeof managePerformance === 'boolean') {
       dbSetSetting('manage_performance', managePerformance ? '1' : '0');
-      // Apply immediately if turning on while a model is loaded; restore if turning off.
+      // Pin immediately when turned on (appliance stays at performance for the
+      // whole service lifetime, not just while a model is loaded); restore the
+      // board defaults when turned off.
       const { applyPerformance, restoreGovernor } = await import('../perf_governor.js');
-      if (managePerformance) { if (pool.getStatus().isLoaded) applyPerformance(); }
+      if (managePerformance) applyPerformance();
       else restoreGovernor();
     }
     logAudit(request, 'settings_change', null);
