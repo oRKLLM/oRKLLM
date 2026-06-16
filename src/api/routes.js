@@ -25,6 +25,69 @@ function trimMessages(messages, maxTokens) {
   return [...sys, ...conv];
 }
 
+// Streaming-safe reasoning-block stripper. Some reasoning models (e.g.
+// LiquidAI's LFM2.5) ALWAYS emit a `<think>…</think>` chain-of-thought before
+// the answer and document no way to disable it — so when the user turns
+// "thinking" off we can only hide it on the output side (the same approach
+// llama.cpp / vLLM take by splitting out `reasoning_content`). When `active`,
+// the stripper drops a leading `<think>…</think>` block and emits only the
+// answer that follows; when the output has no leading think block (a
+// non-reasoning model, or one that honoured suppression) it passes through
+// live. `feed()` returns the text safe to emit now; `flush()` returns any
+// remainder at end-of-stream.
+function makeThinkStripper(active) {
+  const OPEN = '<think>';
+  const CLOSE = '</think>';
+  // 'detect' = deciding whether a leading think block exists; 'strip' = inside
+  // reasoning, dropping until </think>; 'pass' = streaming the answer through.
+  let state = active ? 'detect' : 'pass';
+  let buf = '';
+  // After the close tag we drop leading whitespace before the answer; when the
+  // whitespace spans the token that contained </think> into the next token,
+  // keep trimming until real content arrives.
+  let pendingTrim = false;
+  return {
+    feed(text) {
+      if (state === 'pass') {
+        if (pendingTrim) {
+          text = text.replace(/^\s+/, '');
+          if (text === '') return '';
+          pendingTrim = false;
+        }
+        return text;
+      }
+      buf += text;
+      if (state === 'detect') {
+        const lead = buf.replace(/^\s+/, '');
+        if (lead.startsWith(OPEN)) { state = 'strip'; buf = lead; }
+        else if (OPEN.startsWith(lead)) { return ''; }   // still might become <think>
+        else { state = 'pass'; const out = buf; buf = ''; return out; }
+      }
+      if (state === 'strip') {
+        const idx = buf.indexOf(CLOSE);
+        if (idx === -1) return '';
+        state = 'pass';
+        const rest = buf.slice(idx + CLOSE.length).replace(/^\s+/, '');
+        buf = '';
+        pendingTrim = (rest === '');   // close ended the token; trim next leading ws
+        return rest;
+      }
+      return '';
+    },
+    flush() {
+      if (state === 'pass') return '';
+      // 'strip' with no close = truncated reasoning, drop it; ambiguous 'detect'
+      // partial (only whitespace / a `<think>` prefix) = emit what we have.
+      const out = state === 'strip' ? '' : buf;
+      buf = '';
+      state = 'pass';
+      return out;
+    },
+  };
+}
+
+export { makeThinkStripper };
+
 export default async function apiRoutes(fastify, options) {
   
   // GET /v1/models
@@ -140,13 +203,15 @@ export default async function apiRoutes(fastify, options) {
     // Per-model settings overrides from model_settings JSON
     const saved = dbGetModelSettings(model) || {};
 
-    // Thinking (Qwen3 reasoning) control. The rkllm addon honours
-    // `enable_thinking` directly (set below). The llama/gguf addon tokenizes the
-    // prompt verbatim with no chat-template step, so thinking is controlled here
-    // in the prompt: with reasoning OFF (the default), seed the assistant turn
-    // with an empty `<think></think>` block — the Qwen3 convention that
-    // suppresses the reasoning block; with it ON, leave the turn open so the
-    // model emits its own `<think>…</think>`.
+    // Thinking (reasoning) control. The rkllm addon honours `enable_thinking`
+    // directly (set below). For the llama/gguf backend, a closed-`<think>` prompt
+    // seed only works for models trained on the Qwen3 convention; reasoning
+    // models like LiquidAI's LFM2.5 ALWAYS emit a chain-of-thought and document
+    // no off-switch, and the seed actually produces a malformed (orphaned
+    // `</think>`) stream there. So we leave the assistant turn open and instead
+    // strip the reasoning block from the OUTPUT when thinking is off (see
+    // `makeThinkStripper`) — model-agnostic, the way llama.cpp/vLLM separate
+    // `reasoning_content`.
     const isGguf = model.toLowerCase().endsWith('.gguf');
     const suppressThinking = isGguf && !saved.thinking_enabled;
 
@@ -159,7 +224,7 @@ export default async function apiRoutes(fastify, options) {
         else if (msg.role === 'assistant') p += `<|im_start|>assistant\n${msg.content}<|im_end|>\n`;
         else if (msg.role === 'tool') p += `<|im_start|>tool\n${msg.content}<|im_end|>\n`;
       }
-      return p + `<|im_start|>assistant\n` + (suppressThinking ? `<think>\n\n</think>\n\n` : ``);
+      return p + `<|im_start|>assistant\n`;
     }
     const prompt = formatMessages(prefixMessages);
 
@@ -275,7 +340,10 @@ export default async function apiRoutes(fastify, options) {
           return reply.status(500).send({ error: err.message });
         }
         recordRequest(resolved.perf);
-        const finalText = resolved.finalText || '';
+        const rawFinal = resolved.finalText || '';
+        // Hide the reasoning block when thinking is off (same as the direct paths).
+        const stripperMcp = makeThinkStripper(suppressThinking);
+        const finalText = stripperMcp.feed(rawFinal) + stripperMcp.flush();
 
         if (stream) {
           reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
@@ -332,16 +400,19 @@ export default async function apiRoutes(fastify, options) {
 
       await traceInference(traceParams, async (gen) => {
         let streamText = '';
+        const stripper = makeThinkStripper(suppressThinking);
+        const emit = (text) => {
+          if (!text) return;
+          streamText += text;
+          const chunk = {
+            id: completionId, object: 'chat.completion.chunk', created, model,
+            choices: [{ index: 0, delta: { content: text }, finish_reason: null }]
+          };
+          reply.raw.write(`data: ${JSON.stringify(chunk)}\n\n`);
+          scheduleHeartbeat();
+        };
         const onToken = (msg) => {
-          if (msg.text) {
-            streamText += msg.text;
-            const chunk = {
-              id: completionId, object: 'chat.completion.chunk', created, model,
-              choices: [{ index: 0, delta: { content: msg.text }, finish_reason: null }]
-            };
-            reply.raw.write(`data: ${JSON.stringify(chunk)}\n\n`);
-            scheduleHeartbeat();
-          }
+          if (msg.text) emit(stripper.feed(msg.text));
         };
 
         scheduleHeartbeat(); // cover the prefill gap before the first token
@@ -368,6 +439,7 @@ export default async function apiRoutes(fastify, options) {
           } else {
             finalResult = await pool.generate(model, prompt, modelOptions, onToken, cachePaths);
           }
+          emit(stripper.flush()); // release any text held back by the stripper
           recordRequest(finalResult.perf);
           if (cacheEnabled && saveCachePath)
             putCachePath(cacheKey(model, trimmed), saveCachePath, saved.kv_cache_quant ?? null);
@@ -402,8 +474,13 @@ export default async function apiRoutes(fastify, options) {
     } else {
       let accumulatedText = '';
       const onToken = (msg) => { if (msg.text) accumulatedText += msg.text; };
+      const stripReasoning = (t) => {
+        const s = makeThinkStripper(suppressThinking);
+        return s.feed(t) + s.flush();
+      };
 
       try {
+        let visibleText = '';
         const finalResult = await traceInference(traceParams, async (gen) => {
           const cachePaths  = loadCachePath || saveCachePath ? { loadCachePath, saveCachePath } : {};
           const specMode2   = model.endsWith('.gguf') ? null : saved.speculative_mode;
@@ -421,7 +498,8 @@ export default async function apiRoutes(fastify, options) {
           if (cacheEnabled && saveCachePath)
             putCachePath(cacheKey(model, trimmed), saveCachePath, saved.kv_cache_quant ?? null);
 
-          gen.setOutput(accumulatedText, {
+          visibleText = stripReasoning(accumulatedText);
+          gen.setOutput(visibleText, {
             promptTokens:    result.perf?.prefill_tokens,
             completionTokens: result.perf?.generate_tokens,
             prefillMs:       result.perf?.prefill_time_ms,
@@ -433,7 +511,7 @@ export default async function apiRoutes(fastify, options) {
 
         return {
           id: completionId, object: 'chat.completion', created, model,
-          choices: [{ index: 0, message: { role: 'assistant', content: accumulatedText }, finish_reason: 'stop' }],
+          choices: [{ index: 0, message: { role: 'assistant', content: visibleText }, finish_reason: 'stop' }],
           usage: {
             prompt_tokens:     finalResult.perf?.prefill_tokens     || 0,
             completion_tokens: finalResult.perf?.generate_tokens    || 0,
