@@ -149,6 +149,12 @@ struct llama_chat_message { const char * role; const char * content; };
 typedef int32_t (*llama_chat_apply_template_t)(const char *, const struct llama_chat_message *, size_t, bool, char *, int32_t);
 typedef const char * (*llama_model_chat_template_t)(const struct llama_model *, const char *);
 typedef void     (*llama_kv_self_clear_t)(struct llama_context *);
+// Full memory reset (clears KV AND the recurrent/hybrid memory module — LFM2 &
+// other Mamba/Gated-Delta-Net models retain recurrent state that kv_self_clear
+// alone doesn't reset, leaving the context polluted after the first generation).
+typedef struct llama_memory_i * llama_memory_t;
+typedef llama_memory_t (*llama_get_memory_t)(const struct llama_context *);
+typedef void (*llama_memory_clear_t)(llama_memory_t, bool);
 typedef bool     (*llama_state_seq_save_file_t)(struct llama_context *, const char *, llama_seq_id, const llama_token *, size_t);
 typedef size_t   (*llama_state_seq_load_file_t)(struct llama_context *, const char *, llama_seq_id, llama_token *, size_t, size_t *);
 struct llama_sampler_chain_params {
@@ -205,6 +211,15 @@ static llama_token_to_piece_t            fn_tok2piece      = nullptr;
 static llama_batch_get_one_t             fn_batch_one      = nullptr;
 static llama_decode_t                    fn_decode         = nullptr;
 static llama_kv_self_clear_t             fn_kv_clear       = nullptr;
+static llama_get_memory_t                fn_get_memory     = nullptr;
+static llama_memory_clear_t              fn_memory_clear   = nullptr;
+
+// Fully reset the context's memory (KV + recurrent). Prefer llama_memory_clear
+// (resets the recurrent/hybrid module too); fall back to kv_self_clear.
+static void clearCtxMemory() {
+  if (fn_get_memory && fn_memory_clear) fn_memory_clear(fn_get_memory(g_ctx), true);
+  else if (fn_kv_clear) fn_kv_clear(g_ctx);
+}
 static llama_state_seq_save_file_t       fn_state_save     = nullptr;
 static llama_state_seq_load_file_t       fn_state_load     = nullptr;
 static llama_sampler_chain_init_t        fn_schain_init    = nullptr;
@@ -267,6 +282,8 @@ Napi::Value LoadLibrary(const Napi::CallbackInfo& info) {
     LOAD_SYM2(batch_one,     "llama_batch_get_one");
     LOAD_SYM(decode);
     LOAD_SYM2(kv_clear,      "llama_kv_self_clear");
+    LOAD_SYM2(get_memory,    "llama_get_memory");
+    LOAD_SYM2(memory_clear,  "llama_memory_clear");
     LOAD_SYM2(state_save,    "llama_state_seq_save_file");
     LOAD_SYM2(state_load,    "llama_state_seq_load_file");
     LOAD_SYM2(schain_init,   "llama_sampler_chain_init");
@@ -476,9 +493,9 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
         }
     }
 
-    // Clear any leftover KV state from a previous run (e.g. an aborted Eagle-3
-    // GET_LAST_HIDDEN_LAYER attempt that generated and discarded tokens).
-    if (fn_kv_clear) fn_kv_clear(g_ctx);
+    // Clear any leftover state from a previous run (KV + recurrent memory — e.g.
+    // an aborted Eagle-3 attempt, or a hybrid model's lingering recurrent state).
+    clearCtxMemory();
 
     auto *rctx = new RunContext();
     rctx->tsfn  = Napi::ThreadSafeFunction::New(env, cb, "LlamaCallback", 0, 1);
@@ -554,8 +571,8 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
             else if (fn_kv_used) n_past = fn_kv_used(g_ctx);
         } else if (keepHistory && fn_kv_used) {
             n_past = fn_kv_used(g_ctx);
-        } else if (fn_kv_clear) {
-            fn_kv_clear(g_ctx);
+        } else {
+            clearCtxMemory();
         }
 
         auto t0 = std::chrono::high_resolution_clock::now();
@@ -688,7 +705,7 @@ Napi::Value AbortInference(const Napi::CallbackInfo& info) {
 }
 
 Napi::Value ClearKVCache(const Napi::CallbackInfo& info) {
-    if (g_ctx && fn_kv_clear) fn_kv_clear(g_ctx);
+    if (g_ctx) clearCtxMemory();
     return Napi::Number::New(info.Env(), 0);
 }
 

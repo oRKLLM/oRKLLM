@@ -747,6 +747,11 @@ export default {
 .chat-input-bar {
   flex-shrink: 0;
   border-top: 1px solid rgba(139, 92, 246, 0.1);
+  /* Breathing room so the input + send button don't butt against the screen
+     edge (which reads like content is cut off). Extra bottom inset clears a
+     mobile home indicator / notch. */
+  padding: 12px 16px;
+  padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
 }
 
 .bg-slate-page {
