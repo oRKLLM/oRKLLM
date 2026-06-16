@@ -177,3 +177,37 @@ export function getNpuCoreCount() {
   const soc = getPlatform();
   return (soc && NPU_CORES_BY_SOC[soc]) || 1;
 }
+
+let _gpuInfoCache;
+/**
+ * Mali GPU model + shader-core count, read from the kernel's `gpuinfo` node
+ * (e.g. "Mali-G610 4 cores r0p0 0x0A080607"). Returns { model, cores } or null
+ * when not exposed (non-Rockchip / no Mali devfreq node). Cached.
+ */
+export function getGpuInfo() {
+  if (_gpuInfoCache !== undefined) return _gpuInfoCache;
+  _gpuInfoCache = null;
+  try {
+    // The GPU is a devfreq node named by MMIO address (e.g. fb000000.gpu); its
+    // `device/gpuinfo` carries the product string + core count.
+    const base = '/sys/class/devfreq';
+    const gpu = fs.readdirSync(base).find(e => e.includes('gpu'));
+    const candidates = [];
+    if (gpu) candidates.push(`${base}/${gpu}/device/gpuinfo`);
+    try {
+      for (const d of fs.readdirSync('/sys/devices/platform')) {
+        if (d.includes('gpu')) candidates.push(`/sys/devices/platform/${d}/gpuinfo`);
+      }
+    } catch { /* ignore */ }
+    for (const p of candidates) {
+      let raw;
+      try { raw = fs.readFileSync(p, 'utf8').trim(); } catch { continue; }
+      if (!raw) continue;
+      const model = (raw.match(/^(\S+)/) || [])[1] || null;        // "Mali-G610"
+      const cores = parseInt((raw.match(/(\d+)\s*cores?/i) || [])[1], 10);
+      _gpuInfoCache = { model, cores: Number.isFinite(cores) ? cores : null };
+      break;
+    }
+  } catch { /* ignore */ }
+  return _gpuInfoCache;
+}

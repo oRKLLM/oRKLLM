@@ -538,10 +538,13 @@ export default {
         load: this.metrics.npu,
         color: 'primary',
       };
+      // Prefer the real Mali gpuinfo (model + shader-core count); fall back to the SoC map.
+      const gpuInfo = this.status?.gpu;
+      const gpuCores = gpuInfo?.cores;
       const gpu = {
         type: 'GPU',
-        name: platform ? (GPU_BY_SOC[platform] || 'Mali GPU') : 'Mali GPU',
-        detail: null,
+        name: gpuInfo?.model || (platform ? (GPU_BY_SOC[platform] || 'Mali GPU') : 'Mali GPU'),
+        detail: gpuCores ? `${gpuCores} shader core${gpuCores > 1 ? 's' : ''}` : null,
         load: this.metrics.gpu,
         color: 'orange',
       };

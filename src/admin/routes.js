@@ -1,4 +1,4 @@
-import { getCredentials, saveCredentials, verifyCredentials, hashPassword, checkPassword, MODELS_DIR, LIBRKLLMRT_PATH, RUNTIMES_DIR, parseRuntimeVersion, getPlatform, getNpuCoreCount } from '../config.js';
+import { getCredentials, saveCredentials, verifyCredentials, hashPassword, checkPassword, MODELS_DIR, LIBRKLLMRT_PATH, RUNTIMES_DIR, parseRuntimeVersion, getPlatform, getNpuCoreCount, getGpuInfo } from '../config.js';
 import { signCookie, verifyCookie, issueSessionCookie } from '../auth/session.js';
 import { clearAllCache, getCacheStats } from '../cache.js';
 import pool from '../pool.js';
@@ -244,6 +244,7 @@ export default async function adminRoutes(fastify, options) {
     // SoC + NPU core count (single source of truth in config.js)
     status.platform = getPlatform();
     status.npuCores = getNpuCoreCount();
+    status.gpu = getGpuInfo();   // { model, cores } from the Mali gpuinfo node, or null
     status.spvAvailable = isSpvAvailable(); // Eagle-3 'vulkan' draft gated on this
     status.spvTag = installedSpvTag(); // null when not installed
     status.llamaRuntime = getLlamaRuntimeInfo();
