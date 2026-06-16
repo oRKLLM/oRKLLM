@@ -488,7 +488,20 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
                 std::vector<char> buf(8192);
                 int32_t n = fn_chat_apply(tmpl, msgs.data(), msgs.size(), true, buf.data(), (int32_t)buf.size());
                 if (n > (int32_t)buf.size()) { buf.resize(n); n = fn_chat_apply(tmpl, msgs.data(), msgs.size(), true, buf.data(), (int32_t)buf.size()); }
-                if (n > 0) prompt = std::string(buf.data(), (size_t)n);
+                if (n > 0) {
+                    prompt = std::string(buf.data(), (size_t)n);
+                    // Thinking control: reasoning templates (LFM2, Qwen3…) open a
+                    // <think> block in the assistant generation prompt to force
+                    // reasoning. When the model's Thinking setting is OFF, close
+                    // that block immediately (empty) so the model skips reasoning.
+                    bool enableThinking = input.Has("enable_thinking") && input.Get("enable_thinking").As<Napi::Boolean>().Value();
+                    if (!enableThinking) {
+                        size_t tp = prompt.rfind("<think>");
+                        if (tp != std::string::npos && prompt.find("</think>", tp) == std::string::npos) {
+                            prompt += "\n</think>\n\n";
+                        }
+                    }
+                }
             }
         }
     }

@@ -131,6 +131,8 @@ process.on('message', async (msg) => {
           mirostat_eta:      options?.mirostat_eta,
           // Structured messages for llama.cpp chat templating (non-ChatML models).
           messages:          options?.messages,
+          // Thinking toggle — addon closes a reasoning template's <think> when off.
+          enable_thinking:   options?.enable_thinking,
         }, (res) => {
           process.send({ type: 'token', ...res });
         });
