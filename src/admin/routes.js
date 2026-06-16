@@ -747,6 +747,11 @@ export default async function adminRoutes(fastify, options) {
     return { available, base, eagle3 };
   });
 
+  // GET /api/admin/cache-stats — lightweight hot/cold prefix-cache stats for
+  // live observability (the Settings page polls this so the figures update as
+  // inference populates the cache, without a full global-settings fetch).
+  fastify.get('/cache-stats', async () => ({ cacheStats: getCacheStats() }));
+
   // DELETE /api/admin/cache — clear all prefix cache files
   fastify.delete('/cache', async (request, reply) => {
     clearAllCache();

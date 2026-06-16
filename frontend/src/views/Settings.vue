@@ -706,6 +706,7 @@ export default {
     llamaSelectedTag: null,
     llamaSyncing: false,
     cacheStats: null,
+    cacheStatsTimer: null,
     clearingCache: false,
     passwordForm: { current: '', next: '', confirm: '' },
     passwordError: '',
@@ -743,8 +744,22 @@ export default {
     this.fetchSpvReleases();
     this.fetchLlamaRuntime();
     this.fetchLlamaReleases();
+    // Poll prefix-cache stats so the observability figures update live as
+    // inference populates the cache (the page otherwise only fetched on mount).
+    this.cacheStatsTimer = setInterval(() => this.fetchCacheStats(), 4000);
+  },
+  beforeUnmount() {
+    if (this.cacheStatsTimer) { clearInterval(this.cacheStatsTimer); this.cacheStatsTimer = null; }
   },
   methods: {
+    async fetchCacheStats() {
+      try {
+        const res = await fetch('/api/admin/cache-stats');
+        if (!res.ok) return;
+        const data = await res.json();
+        this.cacheStats = data.cacheStats || null;
+      } catch (e) {}
+    },
     async fetchAuth() {
       try {
         const res = await fetch('/api/admin/auth-status');
