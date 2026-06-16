@@ -55,6 +55,17 @@ function extractTarGz(tarGzBuf, destDir) {
       fs.writeFileSync(dest, tar.slice(off, off + size));
       // preserve execute bit for .so files
       if (baseName.endsWith('.so') || baseName.includes('.so.')) fs.chmodSync(dest, 0o755);
+    } else if (typeFlag === '2' && name) {
+      // Symlink entry (e.g. libllama.so -> libllama.so.0 -> libllama.so.0.0.X).
+      // We extract flat, so point the link at the target's basename in this dir.
+      // Skipping these left the unversioned libllama.so stale — the addon dlopens
+      // exactly that name, so the link MUST be (re)created to pick up a new lib.
+      const linkTarget = path.basename(header.slice(157, 257).toString('utf8').replace(/\0.*/, ''));
+      const dest = path.join(destDir, path.basename(name));
+      if (linkTarget) {
+        try { fs.rmSync(dest, { force: true }); } catch {}
+        try { fs.symlinkSync(linkTarget, dest); } catch (e) { console.warn(`[LlamaSync] symlink ${dest} -> ${linkTarget} failed: ${e.message}`); }
+      }
     }
     off += Math.ceil(size / 512) * 512;
   }
