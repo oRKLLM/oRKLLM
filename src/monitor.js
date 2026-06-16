@@ -148,27 +148,11 @@ export async function getSystemMetrics() {
     }
   }
 
-  // 5. GPU Load (Mali — Rockchip SoCs expose utilization under /sys/kernel/debug/mali*)
-  let gpuLoad = 0;
-  if (isLinux) {
-    try {
-      // Mali GPU on RK3576/RK3588: /sys/kernel/debug/mali0/utilization_pp or gpu_utilization
-      const maliPaths = [
-        '/sys/kernel/debug/mali0/gpu_utilization',
-        '/sys/kernel/debug/mali0/utilization_pp',
-        '/sys/class/misc/mali0/device/utilization',
-      ];
-      for (const p of maliPaths) {
-        if (fs.existsSync(p)) {
-          const raw = fs.readFileSync(p, 'utf-8').trim();
-          const m = raw.match(/(\d+)/);
-          if (m) { gpuLoad = parseInt(m[1]); break; }
-        }
-      }
-    } catch (e) {
-      // ignore
-    }
-  }
+  // 5. GPU Load (Mali). On Rockchip the GPU is a devfreq node
+  //    (/sys/class/devfreq/<addr>.gpu/load → "<load>@<freq>Hz", same format as the
+  //    DMC), e.g. fb000000.gpu on RK3588. `readGpuLoad` prefers that and falls back
+  //    to legacy debugfs mali utilization nodes; null when nothing is exposed.
+  let gpuLoad = isLinux ? (readGpuLoad() ?? 0) : 0;
 
   // Mock GPU fallback — low idle load, spikes with CPU
   if (gpuLoad === 0 && !isLinux) {
@@ -340,6 +324,36 @@ function readMappedUsedMem() {
   } catch {
     return 0;
   }
+}
+
+// ── GPU load (Mali) ──────────────────────────────────────────────────────────
+// Rockchip exposes the Mali GPU as a devfreq node whose `load` reads "<load>@<freq>Hz"
+// (same as the DMC). The node is named by its MMIO address, e.g. `fb000000.gpu` on
+// RK3588 — match any devfreq entry containing "gpu". Falls back to legacy debugfs
+// mali utilization nodes. Returns a 0–100 percentage, or null when nothing is exposed.
+function readGpuLoad() {
+  try {
+    const base = '/sys/class/devfreq';
+    let entries = [];
+    try { entries = fs.readdirSync(base); } catch { /* no devfreq */ }
+    const gpu = entries.find(e => e.includes('gpu'));
+    if (gpu) {
+      const raw = readFile(`${base}/${gpu}/load`);          // e.g. "93@1000000000Hz"
+      const m = raw && raw.trim().match(/^(\d+)/);
+      if (m) return clampPct(parseInt(m[1], 10));
+    }
+    for (const p of [
+      '/sys/kernel/debug/mali0/gpu_utilization',
+      '/sys/kernel/debug/mali0/utilization_pp',
+      '/sys/kernel/debug/mali0/dvfs_utilization',
+      '/sys/class/misc/mali0/device/utilization',
+    ]) {
+      const raw = readFile(p);
+      const m = raw && raw.match(/(\d+)/);
+      if (m) return clampPct(parseInt(m[1], 10));
+    }
+  } catch { /* ignore */ }
+  return null;
 }
 
 // ── Memory bandwidth (DDR memory-controller load) ────────────────────────────
