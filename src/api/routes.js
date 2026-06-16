@@ -26,13 +26,14 @@ function trimMessages(messages, maxTokens) {
   return [...sys, ...conv];
 }
 
-// Streaming-safe trimmer for a leading EMPTY `<think></think>` marker. When we
-// disable reasoning on a toggle-capable model (Qwen3+) by seeding a closed think
-// block, the model still emits its own empty `<think>\n\n</think>` marker before
-// the answer. This removes only that empty marker (whitespace-only interior) so
-// "thinking off" yields clean output. It is NOT reasoning stripping: a think
-// block with any real content passes through untouched. `feed()` returns text
-// safe to emit now; `flush()` returns any remainder at end of stream.
+// Streaming-safe trimmer for a leading EMPTY `<think></think>` marker. Reasoning
+// models (Qwen3+) emit an empty `<think>\n\n</think>` marker before the answer
+// whenever they don't actually reason — both when we disable thinking via the
+// prompt seed AND when thinking is on but the query is trivial. That empty marker
+// is pure noise, so we strip it for all gguf output. It is NOT reasoning
+// stripping: a think block with any real content passes through untouched (real
+// chain-of-thought still shows when thinking is on). `feed()` returns text safe
+// to emit now; `flush()` returns any remainder at end of stream.
 function makeEmptyThinkTrimmer(active) {
   if (!active) return { feed: (t) => t, flush: () => '' };
   const OPEN = '<think>', CLOSE = '</think>';
@@ -332,7 +333,7 @@ export default async function apiRoutes(fastify, options) {
           return reply.status(500).send({ error: err.message });
         }
         recordRequest(resolved.perf);
-        const mcpTrim = makeEmptyThinkTrimmer(seedNoThink);
+        const mcpTrim = makeEmptyThinkTrimmer(isGguf);
         const finalText = mcpTrim.feed(resolved.finalText || '') + mcpTrim.flush();
 
         if (stream) {
@@ -390,7 +391,7 @@ export default async function apiRoutes(fastify, options) {
 
       await traceInference(traceParams, async (gen) => {
         let streamText = '';
-        const trimmer = makeEmptyThinkTrimmer(seedNoThink);
+        const trimmer = makeEmptyThinkTrimmer(isGguf);
         const emit = (text) => {
           if (!text) return;
           streamText += text;
@@ -463,7 +464,7 @@ export default async function apiRoutes(fastify, options) {
       let accumulatedText = '';
       const onToken = (msg) => { if (msg.text) accumulatedText += msg.text; };
       const trimEmptyThink = (t) => {
-        const tr = makeEmptyThinkTrimmer(seedNoThink);
+        const tr = makeEmptyThinkTrimmer(isGguf);
         return tr.feed(t) + tr.flush();
       };
 
