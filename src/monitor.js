@@ -75,7 +75,14 @@ export async function getSystemMetrics() {
   try {
     const memData = await si.mem();
     totalMem = memData.total;
-    usedMem = memData.active;
+    // `active` (= MemTotal - MemAvailable) treats ALL page cache as reclaimable,
+    // so a model loaded with mmap (llama.cpp's default — the GGUF file is mapped,
+    // not copied) shows up as cache and is invisible here: a 20 GB-resident model
+    // reads as ~3% used. On Linux we instead read /proc/meminfo and count
+    // file-backed *mapped* pages (the model) as in-use, while leaving generic
+    // unmapped file cache out — so the gauge reflects the loaded model. Falls back
+    // to si's `active` off-Linux or if parsing fails.
+    usedMem = (isLinux ? readMappedUsedMem() : 0) || memData.active;
     swapTotal = memData.swaptotal || 0;
     swapUsed = memData.swapused || 0;
   } catch (e) {
@@ -308,6 +315,31 @@ function readPwmFan() {
     }
   }
   return null;
+}
+
+// ── Memory in use, counting mmap'd model pages ───────────────────────────────
+// Parses /proc/meminfo and returns "used" bytes as anonymous/kernel memory PLUS
+// file-backed mapped pages. llama.cpp mmaps the GGUF, so the model lives in page
+// cache (Cached) and would be excluded by a plain MemTotal-MemAvailable metric;
+// `Mapped` captures those mmap'd pages (the model + shared libs), while generic
+// unmapped file cache (ordinary file reads) stays excluded. Returns 0 on failure
+// so the caller can fall back to systeminformation's `active`.
+function readMappedUsedMem() {
+  try {
+    const txt = fs.readFileSync('/proc/meminfo', 'utf-8');
+    const kb = (name) => {
+      const m = txt.match(new RegExp('^' + name + ':\\s+(\\d+)', 'm'));
+      return m ? parseInt(m[1], 10) * 1024 : 0;
+    };
+    const total = kb('MemTotal');
+    if (!total) return 0;
+    // classic "used" (anon + kernel) = total - free - buffers - cached, then add
+    // back the mmap'd file pages so the loaded model is counted as in-use.
+    const used = total - kb('MemFree') - kb('Buffers') - kb('Cached') + kb('Mapped');
+    return Math.min(total, Math.max(0, used));
+  } catch {
+    return 0;
+  }
 }
 
 // ── Memory bandwidth (DDR memory-controller load) ────────────────────────────
