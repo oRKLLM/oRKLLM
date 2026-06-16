@@ -417,7 +417,9 @@ export default async function adminRoutes(fastify, options) {
         host,
         port,
         libPath: LIBRKLLMRT_PATH,
-        modelsDir: MODELS_DIR
+        modelsDir: MODELS_DIR,
+        platform: getPlatform(),
+        npuCores: getNpuCoreCount(),   // pool size cap (rk3576→2, rk3588→3, else 1)
       },
       settings: {
         idleTimeoutMinutes: parseInt(dbGetSetting('idle_timeout_minutes') ?? '5'),

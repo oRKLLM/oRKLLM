@@ -313,12 +313,16 @@
         <div class="text-caption text-grey mb-3">
           Number of concurrent worker processes, each loading its own model in parallel. With more than
           one worker each model is pinned to its own NPU core, so the maximum is the chipset's core count
-          (<strong>RK3576 = 2, RK3588 = 3</strong>) — the server caps it automatically. A single worker stays
-          unpinned and uses all cores for maximum single-model throughput. Requires server restart to take effect.
+          (<strong>RK3576 = 2, RK3588 = 3</strong>). A single worker stays unpinned and uses all cores for
+          maximum single-model throughput. Requires server restart to take effect.
+          <span v-if="serverInfo.npuCores">
+            Detected: <strong>{{ serverInfo.platform || 'unknown platform' }}</strong>,
+            {{ serverInfo.npuCores }} NPU core{{ serverInfo.npuCores > 1 ? 's' : '' }} (max).
+          </span>
         </div>
         <v-row no-gutters class="align-center mb-4">
           <v-col cols="9">
-            <v-slider v-model="settings.npuPoolSize" :min="1" :max="4" :step="1"
+            <v-slider v-model="settings.npuPoolSize" :min="1" :max="serverInfo.npuCores || 4" :step="1"
               color="primary" density="compact" hide-details></v-slider>
           </v-col>
           <v-col cols="3" class="pl-3">
