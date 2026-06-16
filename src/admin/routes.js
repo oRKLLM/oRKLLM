@@ -7,6 +7,7 @@ import os from 'os';
 import fs from 'fs';
 import path from 'path';
 import { getStats, clearSessionStats, clearAllTimeStats } from '../stats.js';
+import { supportsThinkingToggle } from '../gguf.js';
 import {
   dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings, dbDeleteModelSettings,
   dbCreateUser, dbGetUserById, dbGetUserByUsername, dbGetUserBySubject, dbListUsers, dbUpdateUser, dbUsersEmpty,
@@ -711,8 +712,12 @@ export default async function adminRoutes(fastify, options) {
       for (const e of listFiles(dir)) {
         const rel = prefix ? `${prefix}/${e.name}` : e.name;
         if (e.isDirectory()) scanModels(path.join(dir, e.name), rel);
-        else if (/\.rkllm$/i.test(e.name)) available.push({ id: rel, sizeBytes: sizeOf(path.join(dir, e.name)), runtime: 'rkllm' });
-        else if (/\.gguf$/i.test(e.name))  available.push({ id: rel, sizeBytes: sizeOf(path.join(dir, e.name)), runtime: 'llama' });
+        // thinkingToggle: can the model's reasoning be turned off? rkllm honours
+        // enable_thinking natively; for gguf it depends on the chat template
+        // (Qwen3+ yes, LFM2.5-MoE no). The UI hides the Enable-Thinking setting
+        // when false so it isn't offered where it can't take effect.
+        else if (/\.rkllm$/i.test(e.name)) available.push({ id: rel, sizeBytes: sizeOf(path.join(dir, e.name)), runtime: 'rkllm', thinkingToggle: true });
+        else if (/\.gguf$/i.test(e.name))  available.push({ id: rel, sizeBytes: sizeOf(path.join(dir, e.name)), runtime: 'llama', thinkingToggle: supportsThinkingToggle(path.join(dir, e.name)) });
       }
     })(MODELS_DIR);
 

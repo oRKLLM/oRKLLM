@@ -413,7 +413,8 @@
                       Advanced
                     </v-expansion-panel-title>
                     <v-expansion-panel-text class="pa-0">
-                      <div class="d-flex align-center justify-space-between py-2">
+                      <!-- Hidden for models with no non-thinking mode (e.g. LFM2.5-MoE always reasons) -->
+                      <div v-if="settingsTarget?.thinkingToggle !== false" class="d-flex align-center justify-space-between py-2">
                         <div>
                           <div class="text-body-2">Enable Thinking</div>
                           <div class="text-caption text-grey">Activate reasoning mode (Qwen3 thinking models)</div>
