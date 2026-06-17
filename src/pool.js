@@ -25,9 +25,17 @@ const DEFAULT_MAX_CONTEXT_LEN = 4096;
 // absolute build path that doesn't exist on the target). LD_LIBRARY_PATH is
 // searched before DT_RUNPATH, so this wins. Must be set at fork time (the loader
 // reads it at process start, not per dlopen).
-function workerEnv() {
+function workerEnv({ disableVulkan = false } = {}) {
   const dirs = [LLAMA_RUNTIME_DIR, RUNTIMES_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean);
-  return { ...process.env, LD_LIBRARY_PATH: dirs.join(':') };
+  const env = { ...process.env, LD_LIBRARY_PATH: dirs.join(':') };
+  // Keep the GPU idle unless something explicitly wants it (TurboQuant KV). With
+  // the Vulkan backend present, llama.cpp otherwise offloads the model LAYERS to
+  // the Mali GPU — which splits work off the ork-NPU AND corrupts the recurrent
+  // (Gated Delta Net) multi-turn path → gibberish on the 2nd turn. Disabling it
+  // forces layers back onto the NPU. ggml reads this getenv at backend
+  // registration (process start), so it must be set at fork time.
+  if (disableVulkan) env.GGML_DISABLE_VULKAN = '1';
+  return env;
 }
 
 // Per-worker slot — each holds one loaded model and one worker process.
@@ -420,7 +428,11 @@ class EnginePool {
       // finds its libggml-*.so siblings there even when the prebuilt bundle bakes
       // a CI build path into its RUNPATH (LD_LIBRARY_PATH is searched before
       // DT_RUNPATH). Harmless for the rkllm backend.
-      slot.worker = fork(workerPath, { serialization: 'advanced', env: workerEnv() });
+      // Only let the Vulkan backend load when this model actually wants the GPU
+      // (TurboQuant KV); otherwise keep layers on the ork-NPU (see workerEnv).
+      const usesTurbo = String(options.kv_type_k || '').includes('turbo')
+                     || String(options.kv_type_v || '').includes('turbo');
+      slot.worker = fork(workerPath, { serialization: 'advanced', env: workerEnv({ disableVulkan: !usesTurbo }) });
 
       // Persistent guards so a worker that dies mid-inference can never crash the
       // whole server. Without an 'error' listener, an IPC failure (e.g.
