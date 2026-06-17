@@ -442,10 +442,20 @@ class EnginePool {
         }
       });
 
+      // Scale the load timeout to model size: a large GGUF offloaded to the GPU
+      // stages many GB into (unified) memory and legitimately takes minutes — a
+      // flat 60s fails big models mid-upload (e.g. Gemma-4-26B: 16 GB to Vulkan).
+      // ~45s/GB, 60s floor, 15min cap.
+      let loadTimeoutMs = 60000;
+      try {
+        const gb = fs.statSync(modelPath).size / 1e9;
+        loadTimeoutMs = Math.min(900000, Math.max(60000, Math.round(gb * 45000)));
+      } catch { /* keep default */ }
+      const loadTimeoutS = Math.round(loadTimeoutMs / 1000);
       const loadTimeout = setTimeout(() => {
-        console.error(`[EnginePool] Slot ${slot.id}: load timeout (60s) with ${libPath}`);
-        resolve({ success: false, error: 'Timeout (60s)' });
-      }, 60000);
+        console.error(`[EnginePool] Slot ${slot.id}: load timeout (${loadTimeoutS}s) with ${libPath}`);
+        resolve({ success: false, error: `Timeout (${loadTimeoutS}s)` });
+      }, loadTimeoutMs);
 
       const onMessage = (msg) => {
         if (msg.type !== 'loaded') return;
