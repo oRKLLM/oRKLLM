@@ -233,11 +233,28 @@ class EnginePool {
       options = { ...options, max_context_len: fromSetting || DEFAULT_MAX_CONTEXT_LEN };
     }
 
+    // KV-cache quantization (llama/gguf backend only). type_k/type_v are init-time
+    // context params, so resolve them here (explicit option → per-model setting →
+    // f16) and a change forces a re-init below, just like max_context_len. The
+    // asymmetric policy (K precision >= V; never lead with turbo K) is enforced in
+    // the UI; the addon maps these strings to ggml_type and the runtime ignores
+    // them for the rkllm backend.
+    if (modelName.toLowerCase().endsWith('.gguf')) {
+      const saved = dbGetModelSettings(modelName) || {};
+      options = {
+        ...options,
+        kv_type_k: options.kv_type_k ?? saved.kv_type_k ?? 'f16',
+        kv_type_v: options.kv_type_v ?? saved.kv_type_v ?? 'f16',
+      };
+    }
+
     s.loadingPromise = (async () => {
       // Reuse only if it is the same model AND the same context length — a
       // changed ctx_window must force a re-init (max_context_len is init-time).
       if (s.isLoaded && s.activeModel?.name === modelName &&
-          s.activeModel?.options?.max_context_len === options.max_context_len) {
+          s.activeModel?.options?.max_context_len === options.max_context_len &&
+          s.activeModel?.options?.kv_type_k === options.kv_type_k &&
+          s.activeModel?.options?.kv_type_v === options.kv_type_v) {
         this.resetIdleTimer(s);
         return { status: 0, activeModel: s.activeModel };
       }

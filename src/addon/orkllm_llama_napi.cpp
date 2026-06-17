@@ -322,6 +322,21 @@ Napi::Value LoadLibrary(const Napi::CallbackInfo& info) {
     return Napi::Boolean::New(env, true);
 }
 
+// Map a KV-cache-type option string to its ggml_type enum value. The TurboQuant
+// types (WHT + polar codebook KV compression) are turbo2/3/4 = 42/43/44. Returns
+// -1 for unknown → caller leaves the context default (f16). The asymmetric policy
+// (K >= V precision; never lead with turbo K) is enforced upstream in oRKLLM.
+static int kvTypeFromStr(const std::string& s) {
+    if (s == "f16")    return 1;   // GGML_TYPE_F16
+    if (s == "q4_0")   return 2;   // GGML_TYPE_Q4_0
+    if (s == "q5_1")   return 7;   // GGML_TYPE_Q5_1
+    if (s == "q8_0")   return 8;   // GGML_TYPE_Q8_0
+    if (s == "turbo2") return 42;  // GGML_TYPE_TURBO2_0
+    if (s == "turbo3") return 43;  // GGML_TYPE_TURBO3_0
+    if (s == "turbo4") return 44;  // GGML_TYPE_TURBO4_0
+    return -1;
+}
+
 Napi::Value InitModel(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     if (!g_lib) {
@@ -360,6 +375,19 @@ Napi::Value InitModel(const Napi::CallbackInfo& info) {
     cpar.n_threads_batch = 4;
     cpar.offload_kqv = true;
     cpar.embeddings = true;
+
+    // KV-cache quantization (TurboQuant etc.). type_k/type_v default to F16; only
+    // overridden when a recognized type is passed. Turbo/quantized types require
+    // flash attention, which the runtime auto-enables for them, so flash_attn_type
+    // is left at its default (AUTO).
+    if (opts.Has("kv_type_k") && opts.Get("kv_type_k").IsString()) {
+        int t = kvTypeFromStr(opts.Get("kv_type_k").As<Napi::String>().Utf8Value());
+        if (t >= 0) cpar.type_k = t;
+    }
+    if (opts.Has("kv_type_v") && opts.Get("kv_type_v").IsString()) {
+        int t = kvTypeFromStr(opts.Get("kv_type_v").As<Napi::String>().Utf8Value());
+        if (t >= 0) cpar.type_v = t;
+    }
 
     g_ctx = fn_ctx_init(g_model, cpar);
     if (!g_ctx) {
