@@ -376,16 +376,16 @@
           <v-divider class="mb-4"></v-divider>
 
           <div class="text-subtitle-2 font-weight-medium mb-1">Hot Cache Limit (RAM-speed storage)</div>
-          <div class="text-caption text-grey mb-2">Most-recently-used cache files kept here for lowest latency. Uses fast local SSD or tmpfs.</div>
+          <div class="text-caption text-grey mb-2">Most-recently-used cache files kept here for lowest latency. Uses fast local SSD or tmpfs. Max {{ formatMB(hotCacheMaxMB) }} (50% of {{ serverInfo.ramTotalMB ? formatMB(serverInfo.ramTotalMB) : 'RAM' }}).</div>
           <v-row no-gutters class="align-center mb-4">
-            <v-col cols="9"><v-slider v-model="settings.cacheHotLimitMB" :min="0" :max="8192" :step="128" color="primary" density="compact" hide-details></v-slider></v-col>
+            <v-col cols="9"><v-slider v-model="settings.cacheHotLimitMB" :min="0" :max="hotCacheMaxMB" :step="128" color="primary" density="compact" hide-details></v-slider></v-col>
             <v-col cols="3" class="pl-3"><v-chip size="small" class="font-weight-bold">{{ settings.cacheHotLimitMB === 0 ? 'Disabled' : formatMB(settings.cacheHotLimitMB) }}</v-chip></v-col>
           </v-row>
 
           <div class="text-subtitle-2 font-weight-medium mb-1">Cold Cache Limit (SSD)</div>
-          <div class="text-caption text-grey mb-2">Evicted hot-cache entries are demoted here. Files promoted back to hot on next access.</div>
+          <div class="text-caption text-grey mb-2">Evicted hot-cache entries are demoted here. Files promoted back to hot on next access. Max {{ formatMB(coldCacheMaxMB) }} (80% of {{ serverInfo.diskTotalMB ? formatMB(serverInfo.diskTotalMB) : 'disk' }}).</div>
           <v-row no-gutters class="align-center mb-4">
-            <v-col cols="9"><v-slider v-model="settings.cacheColdLimitMB" :min="0" :max="102400" :step="1024" color="teal" density="compact" hide-details></v-slider></v-col>
+            <v-col cols="9"><v-slider v-model="settings.cacheColdLimitMB" :min="0" :max="coldCacheMaxMB" :step="1024" color="teal" density="compact" hide-details></v-slider></v-col>
             <v-col cols="3" class="pl-3"><v-chip size="small" class="font-weight-bold">{{ settings.cacheColdLimitMB === 0 ? 'Disabled' : formatMB(settings.cacheColdLimitMB) }}</v-chip></v-col>
           </v-row>
 
@@ -738,7 +738,17 @@ export default {
     mcpAllToolsSelected() {
       return this.mcpForm.availableTools.length > 0
         && this.mcpForm.selectedTools.length === this.mcpForm.availableTools.length;
-    }
+    },
+    // Dynamic cache ceilings from detected hardware: hot ≤ 50% RAM, cold ≤ 80% disk.
+    // Round to the slider step; fall back to the old fixed maxes before status loads.
+    hotCacheMaxMB() {
+      const ram = this.serverInfo.ramTotalMB;
+      return ram ? Math.max(128, Math.floor((ram * 0.5) / 128) * 128) : 8192;
+    },
+    coldCacheMaxMB() {
+      const disk = this.serverInfo.diskTotalMB;
+      return disk ? Math.max(1024, Math.floor((disk * 0.8) / 1024) * 1024) : 102400;
+    },
   },
   mounted() {
     this.fetchAuth();
@@ -788,8 +798,10 @@ export default {
         this.settings.repPenalty = s.repPenalty ?? 1.0;
         this.settings.hfToken = s.hfToken ?? '';
         this.settings.cacheEnabled          = s.cacheEnabled ?? false;
-        this.settings.cacheHotLimitMB       = s.cacheHotLimitMB ?? 512;
-        this.settings.cacheColdLimitMB      = s.cacheColdLimitMB ?? 10240;
+        // Clamp to the dynamic ceilings (serverInfo is set just above, so the
+        // hot/cold max computeds are valid) in case a saved value predates them.
+        this.settings.cacheHotLimitMB       = Math.min(s.cacheHotLimitMB ?? 512, this.hotCacheMaxMB);
+        this.settings.cacheColdLimitMB      = Math.min(s.cacheColdLimitMB ?? 10240, this.coldCacheMaxMB);
         this.settings.cacheDir              = s.cacheDir ?? '';
         this.settings.cacheMaxContextTokens = s.cacheMaxContextTokens ?? 8192;
         this.settings.kvCacheQuant          = s.kvCacheQuant ?? 'off';

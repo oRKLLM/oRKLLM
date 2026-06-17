@@ -421,6 +421,16 @@ export default async function adminRoutes(fastify, options) {
         modelsDir: MODELS_DIR,
         platform: getPlatform(),
         npuCores: getNpuCoreCount(),   // pool size cap (rk3576→2, rk3588→3, else 1)
+        // Hardware capacity for the dynamic cache-limit ceilings: hot cache ≤ 50%
+        // RAM, cold cache ≤ 80% of the disk holding the cache.
+        ramTotalMB: Math.floor(os.totalmem() / 1048576),
+        diskTotalMB: (() => {
+          const cacheDir = dbGetSetting('cache_dir') || path.join(os.homedir(), '.config', 'orkllm', 'cache');
+          for (const p of [cacheDir, MODELS_DIR, '/']) {
+            try { const s = fs.statfsSync(p); return Math.floor((s.blocks * s.bsize) / 1048576); } catch { /* next */ }
+          }
+          return null;
+        })(),
       },
       settings: {
         idleTimeoutMinutes: parseInt(dbGetSetting('idle_timeout_minutes') ?? '5'),
