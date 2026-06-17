@@ -176,6 +176,12 @@ export async function syncLlamaRuntime(tag = null) {
     try {
       const { buf } = await downloadBuffer(asset.browser_download_url);
       syncState.bytesDown = buf.length;
+      // Replace, don't merge: extracting over an existing install accumulates stale
+      // .so versions across releases (e.g. ggml 0.15.1 leftovers under a 0.12.0
+      // release), and the soname symlinks can then resolve to a mismatched mix
+      // (libggml-base.so.0→old vs libggml-vulkan.so.0→new) → ABI mismatch / crashes.
+      // The tarball is fully buffered above, so wiping now is safe.
+      try { fs.rmSync(LLAMA_RUNTIME_DIR, { recursive: true, force: true }); } catch {}
       fs.mkdirSync(LLAMA_RUNTIME_DIR, { recursive: true });
       extractTarGz(buf, LLAMA_RUNTIME_DIR);
       // Write tag into manifest if not already there
