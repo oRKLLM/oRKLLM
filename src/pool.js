@@ -249,10 +249,19 @@ class EnginePool {
     // them for the rkllm backend.
     if (modelName.toLowerCase().endsWith('.gguf')) {
       const saved = dbGetModelSettings(modelName) || {};
+      const kvK = options.kv_type_k ?? saved.kv_type_k ?? 'f16';
+      const kvV = options.kv_type_v ?? saved.kv_type_v ?? 'f16';
+      const usesTurbo = String(kvK).includes('turbo') || String(kvV).includes('turbo');
       options = {
         ...options,
-        kv_type_k: options.kv_type_k ?? saved.kv_type_k ?? 'f16',
-        kv_type_v: options.kv_type_v ?? saved.kv_type_v ?? 'f16',
+        kv_type_k: kvK,
+        kv_type_v: kvV,
+        // With TurboQuant KV: scope the Vulkan backend to the KV/turbo ops only
+        // (ggml_vk_set_mode TURBOQUANT) so model layers stay on the NPU and the
+        // recurrent multi-turn decode isn't corrupted, and keep weights off Vulkan
+        // (n_gpu_layers=0 → no per-decode VRAM→RAM copy). Without turbo, Vulkan is
+        // disabled entirely at the worker (see _tryLoadSlot) and layers run on NPU.
+        ...(usesTurbo ? { vk_mode: 'turboquant', n_gpu_layers: 0 } : {}),
       };
     }
 

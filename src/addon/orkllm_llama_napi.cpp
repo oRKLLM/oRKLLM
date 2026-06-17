@@ -240,6 +240,10 @@ static llama_sampler_free_t              fn_samp_free      = nullptr;
 static llama_token_is_eog_t              fn_is_eog         = nullptr;
 static llama_n_ctx_t                     fn_n_ctx          = nullptr;
 static llama_kv_self_used_cells_t        fn_kv_used        = nullptr;
+// Optional ggml-vulkan API (newer runtimes): selectively scope the Vulkan backend
+// to TurboQuant-only / prefill-only ops. nullptr on runtimes that predate it.
+typedef void (*ggml_vk_set_mode_t)(int);
+static ggml_vk_set_mode_t                fn_vk_set_mode    = nullptr;
 static llama_model_n_embd_t              fn_n_embd         = nullptr;
 static llama_get_logits_ith_t            fn_get_logits_ith = nullptr;
 static llama_get_embeddings_ith_t        fn_get_embeddings_ith = nullptr;
@@ -306,6 +310,8 @@ Napi::Value LoadLibrary(const Napi::CallbackInfo& info) {
     LOAD_SYM2(is_eog,        "llama_token_is_eog");
     LOAD_SYM2(n_ctx,         "llama_n_ctx");
     LOAD_SYM2(kv_used,       "llama_kv_self_used_cells");
+    // Optional — present only on runtimes built with the selective-Vulkan API.
+    fn_vk_set_mode = (ggml_vk_set_mode_t)DYNLIB_GETSYM(g_lib, "ggml_vk_set_mode");
     LOAD_SYM2(n_embd,        "llama_model_n_embd");
     LOAD_SYM2(get_logits_ith,"llama_get_logits_ith");
     LOAD_SYM2(get_embeddings_ith, "llama_get_embeddings_ith");
@@ -358,8 +364,23 @@ Napi::Value InitModel(const Napi::CallbackInfo& info) {
     if (g_model)   { fn_model_free(g_model);   g_model = nullptr; }
     g_vocab = nullptr;
 
+    // Selective Vulkan mode (runtime API `ggml_vk_set_mode`; no-op if the runtime
+    // predates it). Set BEFORE model load per the runtime's guidance: TURBOQUANT(1)
+    // restricts Vulkan to TurboQuant KV ops (WHT + turbo types) so model layers
+    // stay on the NPU and decode isn't corrupted; PREFILL(2) keeps only prefill
+    // matmul on Vulkan; ALL(0)/default = everything on Vulkan.
+    if (fn_vk_set_mode && opts.Has("vk_mode") && opts.Get("vk_mode").IsString()) {
+        std::string m = opts.Get("vk_mode").As<Napi::String>().Utf8Value();
+        int mode = (m == "turboquant") ? 1 : (m == "prefill") ? 2 : 0;
+        fn_vk_set_mode(mode);
+    }
+
     auto mpar = fn_model_def_par();
-    mpar.n_gpu_layers = 999; // offload all to NPU/GPU via ggml-ork backend
+    // Default 999 (offload all to the GPU/NPU backend). With TurboQuant KV the
+    // runtime's best practice is n_gpu_layers=0 — keep weights off Vulkan (no
+    // per-decode CPY) while Vulkan handles only the KV ops — so the pool can set
+    // this per-load.
+    mpar.n_gpu_layers = opts.Has("n_gpu_layers") ? opts.Get("n_gpu_layers").As<Napi::Number>().Int32Value() : 999;
     mpar.use_mmap = true;
 
     g_model = fn_model_load(s_modelPath.c_str(), mpar);
