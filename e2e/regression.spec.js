@@ -64,7 +64,7 @@ test('Navbar: shows oRKLLM brand without Console suffix', async ({ page }) => {
 
 test('Navbar: version text is visible on desktop', async ({ page }) => {
   await login(page);
-  const versionText = page.locator('.v-app-bar span.d-none.d-sm-flex');
+  const versionText = page.locator('.v-app-bar a.d-none.d-sm-flex');
   await expect(versionText).toBeVisible();
   const text = await versionText.textContent();
   expect(text).toMatch(/^v\d+\.\d+/);
@@ -74,7 +74,7 @@ test('Navbar: version shown in user drawer on mobile', async ({ page }) => {
   await login(page);
   await page.setViewportSize({ width: 390, height: 844 });
   // Version text hidden in navbar on mobile
-  const navVersion = page.locator('.v-app-bar span.d-none.d-sm-flex');
+  const navVersion = page.locator('.v-app-bar a.d-none.d-sm-flex');
   await expect(navVersion).toBeHidden();
   // Opens in user drawer footer
   await page.locator('.v-app-bar .v-btn:has(.mdi-account)').click();

@@ -16,8 +16,15 @@
         class="font-weight-bold text-h5 text-gradient cursor-pointer"
         @click="$router.push('/')"
       >oRKLLM</span>
-      <!-- Version text hidden on mobile — shown in user drawer instead -->
-      <span class="text-primary d-none d-sm-flex" style="font-size: 0.65rem; line-height: 1; margin-top: 2px; opacity: 0.7;">v{{ appVersion }}</span>
+      <!-- Version text hidden on mobile — shown in user drawer instead. Links to the repo. -->
+      <a
+        href="https://github.com/oRKLLM/oRKLLM"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="text-primary d-none d-sm-flex text-decoration-none"
+        style="font-size: 0.65rem; line-height: 1; margin-top: 2px; opacity: 0.7;"
+        title="View oRKLLM on GitHub"
+      >v{{ appVersion }}</a>
     </v-app-bar-title>
 
     <!-- Desktop/tablet nav buttons — absolutely centred so left (brand) and right (account) widths don't matter -->
