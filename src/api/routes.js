@@ -212,16 +212,6 @@ export default async function apiRoutes(fastify, options) {
     const canToggleThinking = isGguf && supportsThinkingToggle(path.join(MODELS_DIR, model));
     const seedNoThink = canToggleThinking && !saved.thinking_enabled;
 
-    // SSD prefix-cache compression scheme. When the in-context V-cache is TurboQuant,
-    // `llama_state_seq_save_file` already serializes the cache in its native turbo
-    // format, so the saved blob is compressed by that single GPU pass — running the
-    // legacy PolarQuant (kvcache_quant_napi) on top would re-quantize already-turbo
-    // bytes (double GPU work, lossy-on-lossy). Skip it for turbo; the runtime's native
-    // serialization IS the SSD compression.
-    const ssdQuant = (typeof saved.kv_cache_quant === 'string' && saved.kv_cache_quant.startsWith('turbo'))
-      ? null
-      : (saved.kv_cache_quant ?? null);
-
     // Convert (possibly shortened) messages to ChatML format
     function formatMessages(msgs) {
       let p = "";
@@ -446,7 +436,8 @@ export default async function apiRoutes(fastify, options) {
           emit(trimmer.flush()); // release any text held while inspecting the leading think marker
           recordRequest(finalResult.perf);
           if (cacheEnabled && saveCachePath)
-            putCachePath(cacheKey(model, trimmed), saveCachePath, ssdQuant);
+            putCachePath(cacheKey(model, trimmed), saveCachePath,
+              isGguf ? 'llama' : 'rkllm', isGguf ? null : (saved.kv_cache_quant ?? null));
 
           gen.setOutput(streamText, {
             promptTokens:    finalResult.perf?.prefill_tokens,
@@ -500,7 +491,8 @@ export default async function apiRoutes(fastify, options) {
           }
           recordRequest(result.perf);
           if (cacheEnabled && saveCachePath)
-            putCachePath(cacheKey(model, trimmed), saveCachePath, ssdQuant);
+            putCachePath(cacheKey(model, trimmed), saveCachePath,
+              isGguf ? 'llama' : 'rkllm', isGguf ? null : (saved.kv_cache_quant ?? null));
 
           visibleText = trimEmptyThink(accumulatedText);
           gen.setOutput(visibleText, {

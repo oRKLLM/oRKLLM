@@ -249,14 +249,17 @@ class EnginePool {
     // them for the rkllm backend.
     if (modelName.toLowerCase().endsWith('.gguf')) {
       const saved = dbGetModelSettings(modelName) || {};
-      // Unified KV control: the per-model "KV Cache Compression" turbo levels
-      // (turbo2/3/4) drive the in-context V-cache type and force K to q8_0 — the
-      // asymmetric policy (K precision >= V; never lead with turbo K). Explicit
-      // kv_type_* options and any legacy kv_type_* settings still take precedence.
-      const savedTurbo = typeof saved.kv_cache_quant === 'string'
-        && saved.kv_cache_quant.startsWith('turbo') ? saved.kv_cache_quant : null;
-      const kvK = options.kv_type_k ?? saved.kv_type_k ?? (savedTurbo ? 'q8_0' : 'f16');
-      const kvV = options.kv_type_v ?? saved.kv_type_v ?? savedTurbo ?? 'f16';
+      // For the llama backend the per-model "KV Cache Compression" dropdown
+      // (kv_cache_quant) selects the in-context KV V-cache type: 'q8_0' or
+      // 'turbo2/3/4' (anything else → f16). Turbo forces K to q8_0 (asymmetric —
+      // never lead with turbo K); a q8_0 V allows a q8_0 K. Explicit kv_type_*
+      // options and any legacy kv_type_* settings still take precedence.
+      const KV_V_TYPES = ['q8_0', 'turbo2', 'turbo3', 'turbo4'];
+      const kvSel = typeof saved.kv_cache_quant === 'string'
+        && KV_V_TYPES.includes(saved.kv_cache_quant) ? saved.kv_cache_quant : null;
+      const kvV = options.kv_type_v ?? saved.kv_type_v ?? kvSel ?? 'f16';
+      const kvK = options.kv_type_k ?? saved.kv_type_k
+        ?? (String(kvV).includes('turbo') || kvV === 'q8_0' ? 'q8_0' : 'f16');
       const usesTurbo = String(kvK).includes('turbo') || String(kvV).includes('turbo');
       options = {
         ...options,

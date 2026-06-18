@@ -35,6 +35,12 @@ function settings() {
 
 // All possible extensions a cached file might use
 const CACHE_EXTS = ['.rkllmcache', '.llamacache', '.q8cache', '.pq8cache', '.pq4cache'];
+// Native (uncompressed) blobs load directly. The quantised variants are an
+// rkllm-only concern: PolarQuant (kvcache_quant_napi) understands the .rkllmcache
+// blob layout. The llama backend's .llamacache is a llama_state_seq file whose
+// compression is the in-context KV type itself (serialized natively) — it is
+// never PolarQuant'd, so it never needs dequant-on-load.
+const QUANTIZED_EXTS = ['.q8cache', '.pq8cache', '.pq4cache'];
 
 function ensureDir(p) {
   if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
@@ -145,8 +151,9 @@ export async function getCachePath(key) {
 
   if (!found) return null;
 
-  // If quantised, dequantize to a tmp FP16 file for RKLLM to load
-  if (!found.endsWith('.rkllmcache')) {
+  // Quantised variants (rkllm PolarQuant only) dequantize to a tmp FP16 file for
+  // RKLLM to load. Native blobs (.rkllmcache / .llamacache) load directly.
+  if (QUANTIZED_EXTS.some(e => found.endsWith(e))) {
     const tmpDir = path.join(cfg.cacheDir, 'tmp');
     ensureDir(tmpDir);
     const tmpFile = path.join(tmpDir, key + '_deq.rkllmcache');
@@ -167,10 +174,16 @@ export async function getCachePath(key) {
   return found;
 }
 
-export function putCachePath(key, tmpFile, modelQuantOverride) {
+export function putCachePath(key, tmpFile, runtime, modelQuantOverride) {
   const cfg = settings();
   if (!cfg.enabled) return;
   if (!fs.existsSync(tmpFile)) return;
+
+  // Native blob extension is backend-specific: the rkllm addon writes a
+  // reverse-engineered .rkllmcache; the llama backend writes a llama_state_seq
+  // file (.llamacache) whose compression is the in-context KV type. PolarQuant
+  // (below) understands only the rkllm layout and is skipped for llama.
+  const nativeExt = runtime === 'llama' ? '.llamacache' : '.rkllmcache';
 
   const hotDir  = path.join(cfg.cacheDir, 'hot');
   const coldDir = path.join(cfg.cacheDir, 'cold');
@@ -182,7 +195,7 @@ export function putCachePath(key, tmpFile, modelQuantOverride) {
   const destTier = useHot ? 'hot' : 'cold';
   if (useHot) ensureDir(hotDir);
 
-  const fp16Dest = path.join(destDir, key + '.rkllmcache');
+  const fp16Dest = path.join(destDir, key + nativeExt);
   try { fs.renameSync(tmpFile, fp16Dest); }
   catch (e) {
     try { fs.copyFileSync(tmpFile, fp16Dest); fs.unlinkSync(tmpFile); } catch { return; }
@@ -204,12 +217,15 @@ export function putCachePath(key, tmpFile, modelQuantOverride) {
 
   writeLru(cfg.cacheDir, lru);
 
-  // Background quantisation — only start after the file is safely in place
-  // (eviction already ran above, so fp16Dest is either still there or was moved)
-  const scheme = kvCacheQuant(modelQuantOverride);
+  // Background quantisation — rkllm only. The llama prefix cache compresses via the
+  // in-context KV type (serialized natively into the .llamacache by the runtime);
+  // running kvcache_quant_napi on a llama state_seq blob would be wrong (different
+  // layout) and, for turbo, a redundant second GPU pass. Only start after the file
+  // is safely in place (eviction already ran above).
+  const scheme = runtime === 'llama' ? 'off' : kvCacheQuant(modelQuantOverride);
   if (scheme !== 'off' && hasNativeAddon) {
     const actualFile = findCacheFile(destDir, key) || findCacheFile(coldDir, key);
-    if (actualFile && actualFile.endsWith('.rkllmcache')) {
+    if (actualFile && actualFile.endsWith(nativeExt)) {
       const { fn, ext } = QUANT_SCHEMES[scheme];
       const quantDest = actualFile.replace('.rkllmcache', ext);
       fn(actualFile, quantDest)

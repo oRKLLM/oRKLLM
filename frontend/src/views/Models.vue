@@ -472,12 +472,13 @@
                       <div class="text-caption text-grey mb-3">
                         Override the global KV cache compression setting for this model.
                         <template v-if="settingsTarget?.runtime === 'llama'">
-                          <strong>TurboQuant</strong> levels compress the <em>live</em> V-cache on the Mali GPU during
-                          decode (K stays at q8_0 — the asymmetric policy). The on-disk prefix cache is the same
-                          turbo state serialized by the runtime, so the GPU compression runs <em>once</em>, not twice.
+                          Sets the <em>in-context</em> KV V-cache type. <strong>TurboQuant</strong> levels compress it
+                          on the Mali GPU during decode (K stays at q8_0 — the asymmetric policy). The on-disk prefix
+                          cache is that same state serialized natively by the runtime, so the GPU compression runs
+                          <em>once</em>, not twice — the llama path never uses the SSD PolarQuant.
                         </template>
                         <template v-else>
-                          Quantised caches save SSD space; dequantisation (~0.3 ms per MB of context) runs before each cache hit.
+                          Quantises the SSD prefix-cache blob (PolarQuant); dequantisation (~0.3 ms per MB of context) runs before each cache hit.
                         </template>
                       </div>
                       <v-select
@@ -1098,21 +1099,28 @@ export default {
     // appended only for llama models. A turbo selection skips the legacy SSD PolarQuant
     // server-side (the runtime already serializes the cache turbo-compressed).
     kvCacheItems() {
-      const base = [
+      if (this.settingsTarget?.runtime === 'llama') {
+        // llama backend: the dropdown sets the in-context KV V-cache type. The
+        // on-disk prefix cache (.llamacache) is the same state serialized natively
+        // (one GPU pass for turbo) — it never uses the rkllm PolarQuant path.
+        return [
+          { title: 'Use global setting', value: null },
+          { title: 'Off (FP16)', value: 'off' },
+          { title: 'INT8 (q8_0) — live V-cache', value: 'q8_0' },
+          { title: 'TurboQuant ~4.5-bit (turbo4) — live V-cache, GPU', value: 'turbo4' },
+          { title: 'TurboQuant ~3.5-bit (turbo3) — live V-cache, GPU', value: 'turbo3' },
+          { title: 'TurboQuant ~2.7-bit (turbo2) — live V-cache, GPU', value: 'turbo2' },
+        ];
+      }
+      // rkllm backend: SSD prefix-cache (.rkllmcache) blob compression via PolarQuant
+      // (kvcache_quant_napi) — quantises the saved blob, dequantises before each hit.
+      return [
         { title: 'Use global setting', value: null },
         { title: 'Off (FP16)', value: 'off' },
         { title: 'Min-Max INT8 (~44% smaller) — SSD blob, GPU', value: 'q8' },
         { title: 'Polar INT8 (~49% smaller) — SSD blob, GPU', value: 'pq8' },
         { title: 'Polar INT4 (~74% smaller) — SSD blob, GPU', value: 'pq4' },
       ];
-      if (this.settingsTarget?.runtime === 'llama') {
-        base.push(
-          { title: 'TurboQuant ~4.5-bit (turbo4) — live V-cache, GPU', value: 'turbo4' },
-          { title: 'TurboQuant ~3.5-bit (turbo3) — live V-cache, GPU', value: 'turbo3' },
-          { title: 'TurboQuant ~2.7-bit (turbo2) — live V-cache, GPU', value: 'turbo2' },
-        );
-      }
-      return base;
     },
     dlJobsByRepo() {
       const groups = {};
