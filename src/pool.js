@@ -256,6 +256,12 @@ class EnginePool {
         ...options,
         kv_type_k: kvK,
         kv_type_v: kvV,
+        // Default no-mmap for gguf: layers are packed/offloaded to the NPU, so a
+        // mmap'd source would be a full second copy of the weights in RAM (the
+        // OOM logs showed ~22 GB of mapped source alongside the resident copy).
+        // Reading straight into the resident buffers avoids the duplication.
+        // Overridable per-model via the `use_mmap` setting.
+        use_mmap: options.use_mmap ?? saved.use_mmap ?? false,
         // With TurboQuant KV: scope the Vulkan backend to the KV/turbo ops only
         // (ggml_vk_set_mode TURBOQUANT) so model layers stay on the NPU and the
         // recurrent multi-turn decode isn't corrupted, and keep weights off Vulkan
@@ -271,7 +277,8 @@ class EnginePool {
       if (s.isLoaded && s.activeModel?.name === modelName &&
           s.activeModel?.options?.max_context_len === options.max_context_len &&
           s.activeModel?.options?.kv_type_k === options.kv_type_k &&
-          s.activeModel?.options?.kv_type_v === options.kv_type_v) {
+          s.activeModel?.options?.kv_type_v === options.kv_type_v &&
+          s.activeModel?.options?.use_mmap === options.use_mmap) {
         this.resetIdleTimer(s);
         return { status: 0, activeModel: s.activeModel };
       }

@@ -381,7 +381,13 @@ Napi::Value InitModel(const Napi::CallbackInfo& info) {
     // per-decode CPY) while Vulkan handles only the KV ops — so the pool can set
     // this per-load.
     mpar.n_gpu_layers = opts.Has("n_gpu_layers") ? opts.Get("n_gpu_layers").As<Napi::Number>().Int32Value() : 999;
-    mpar.use_mmap = true;
+    // use_mmap: when layers are offloaded/packed to the NPU/GPU, the mmap'd GGUF
+    // source is held in RAM *in addition to* the resident copy — a full duplicate
+    // (the OOM logs showed ~22 GB file-rss of the mapped source alongside the
+    // offloaded weights). Disabling mmap reads weights straight into the resident
+    // buffers with no second copy. Pool defaults this to false for the gguf path.
+    mpar.use_mmap = opts.Has("use_mmap") && opts.Get("use_mmap").IsBoolean()
+                    ? opts.Get("use_mmap").As<Napi::Boolean>().Value() : true;
 
     g_model = fn_model_load(s_modelPath.c_str(), mpar);
     if (!g_model) return Napi::Number::New(env, -1);
