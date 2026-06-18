@@ -471,17 +471,18 @@
                     <v-expansion-panel-text class="pa-0">
                       <div class="text-caption text-grey mb-3">
                         Override the global KV cache compression setting for this model.
-                        Quantised caches save SSD space; dequantisation (~0.3 ms per MB of context) runs before each cache hit.
+                        <template v-if="settingsTarget?.runtime === 'llama'">
+                          <strong>TurboQuant</strong> levels compress the <em>live</em> V-cache on the Mali GPU during
+                          decode (K stays at q8_0 — the asymmetric policy). The on-disk prefix cache is the same
+                          turbo state serialized by the runtime, so the GPU compression runs <em>once</em>, not twice.
+                        </template>
+                        <template v-else>
+                          Quantised caches save SSD space; dequantisation (~0.3 ms per MB of context) runs before each cache hit.
+                        </template>
                       </div>
                       <v-select
                         v-model="settingsForm.kv_cache_quant"
-                        :items="[
-                          { title: 'Use global setting', value: null },
-                          { title: 'Off (FP16)', value: 'off' },
-                          { title: 'Min-Max INT8 (~44% smaller) — GPU accelerated', value: 'q8' },
-                          { title: 'Polar INT8 (~49% smaller) — GPU accelerated', value: 'pq8' },
-                          { title: 'Polar INT4 (~74% smaller) — GPU accelerated', value: 'pq4' },
-                        ]"
+                        :items="kvCacheItems"
                         density="compact" variant="outlined" hide-details class="mb-2"
                       ></v-select>
                     </v-expansion-panel-text>
@@ -1091,6 +1092,28 @@ export default {
     isDark() {
       return this.themeName === 'customDarkTheme';
     },
+    // KV Cache Compression options. The SSD-blob PolarQuant schemes (q8/pq8/pq4) apply
+    // to both backends. The TurboQuant levels set the in-context V-cache type and are
+    // only meaningful for the llama/gguf backend (libllama ggml types), so they're
+    // appended only for llama models. A turbo selection skips the legacy SSD PolarQuant
+    // server-side (the runtime already serializes the cache turbo-compressed).
+    kvCacheItems() {
+      const base = [
+        { title: 'Use global setting', value: null },
+        { title: 'Off (FP16)', value: 'off' },
+        { title: 'Min-Max INT8 (~44% smaller) — SSD blob, GPU', value: 'q8' },
+        { title: 'Polar INT8 (~49% smaller) — SSD blob, GPU', value: 'pq8' },
+        { title: 'Polar INT4 (~74% smaller) — SSD blob, GPU', value: 'pq4' },
+      ];
+      if (this.settingsTarget?.runtime === 'llama') {
+        base.push(
+          { title: 'TurboQuant ~4.5-bit (turbo4) — live V-cache, GPU', value: 'turbo4' },
+          { title: 'TurboQuant ~3.5-bit (turbo3) — live V-cache, GPU', value: 'turbo3' },
+          { title: 'TurboQuant ~2.7-bit (turbo2) — live V-cache, GPU', value: 'turbo2' },
+        );
+      }
+      return base;
+    },
     dlJobsByRepo() {
       const groups = {};
       for (const job of this.dlJobs) {
@@ -1286,6 +1309,7 @@ export default {
         spec_draft_tokens:   saved.spec_draft_tokens   ?? 4,
         eagle3_strategy:     saved.eagle3_strategy     ?? 'cpu',
         eagle3_weights_path: saved.eagle3_weights_path ?? null,
+        kv_cache_quant:      saved.kv_cache_quant      ?? null,
       };
       this.settingsDialog = true;
     },

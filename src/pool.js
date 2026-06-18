@@ -249,8 +249,14 @@ class EnginePool {
     // them for the rkllm backend.
     if (modelName.toLowerCase().endsWith('.gguf')) {
       const saved = dbGetModelSettings(modelName) || {};
-      const kvK = options.kv_type_k ?? saved.kv_type_k ?? 'f16';
-      const kvV = options.kv_type_v ?? saved.kv_type_v ?? 'f16';
+      // Unified KV control: the per-model "KV Cache Compression" turbo levels
+      // (turbo2/3/4) drive the in-context V-cache type and force K to q8_0 — the
+      // asymmetric policy (K precision >= V; never lead with turbo K). Explicit
+      // kv_type_* options and any legacy kv_type_* settings still take precedence.
+      const savedTurbo = typeof saved.kv_cache_quant === 'string'
+        && saved.kv_cache_quant.startsWith('turbo') ? saved.kv_cache_quant : null;
+      const kvK = options.kv_type_k ?? saved.kv_type_k ?? (savedTurbo ? 'q8_0' : 'f16');
+      const kvV = options.kv_type_v ?? saved.kv_type_v ?? savedTurbo ?? 'f16';
       const usesTurbo = String(kvK).includes('turbo') || String(kvV).includes('turbo');
       options = {
         ...options,
