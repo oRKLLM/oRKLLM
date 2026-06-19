@@ -451,7 +451,15 @@ export default async function apiRoutes(fastify, options) {
           emit(trimmer.flush()); // release any text held while inspecting the leading think marker
           recordRequest(finalResult.perf);
           if (cacheEnabled && saveCachePath)
-            putCachePath(cacheKey(model, trimmed), saveCachePath,
+            // Key the saved KV by the conversation INCLUDING the assistant reply we
+            // just generated — that's what the blob's KV actually covers, and it's
+            // the prefix the NEXT turn looks up (its prefixMsgs = all-but-the-new-user
+            // message = […, this assistant turn]). Keying by `trimmed` (which ends at
+            // the user message) made every follow-up turn MISS and re-prefill the whole
+            // conversation on the NPU; including the assistant turn lets turn N+1 resume
+            // from this KV and prefill only its new user message. (streamText = the
+            // exact text streamed to the client, so it matches what the client sends back.)
+            putCachePath(cacheKey(model, [...trimmed, { role: 'assistant', content: streamText }]), saveCachePath,
               isGguf ? 'llama' : 'rkllm', isGguf ? null : (saved.kv_cache_quant ?? null));
 
           gen.setOutput(streamText, {
@@ -506,11 +514,12 @@ export default async function apiRoutes(fastify, options) {
             result = await pool.generate(model, prompt, modelOptions, onToken, cachePaths);
           }
           recordRequest(result.perf);
-          if (cacheEnabled && saveCachePath)
-            putCachePath(cacheKey(model, trimmed), saveCachePath,
-              isGguf ? 'llama' : 'rkllm', isGguf ? null : (saved.kv_cache_quant ?? null));
-
           visibleText = trimEmptyThink(accumulatedText);
+          if (cacheEnabled && saveCachePath)
+            // Same as the streaming path: key by […trimmed, assistant reply] so the
+            // next turn resumes from this KV instead of re-prefilling the whole convo.
+            putCachePath(cacheKey(model, [...trimmed, { role: 'assistant', content: visibleText }]), saveCachePath,
+              isGguf ? 'llama' : 'rkllm', isGguf ? null : (saved.kv_cache_quant ?? null));
           gen.setOutput(visibleText, {
             promptTokens:    result.perf?.prefill_tokens,
             completionTokens: result.perf?.generate_tokens,
