@@ -394,6 +394,20 @@ export default async function apiRoutes(fastify, options) {
       };
       const stopHeartbeat = () => { if (heartbeat) { clearTimeout(heartbeat); heartbeat = null; } };
 
+      // Abort the worker if the client disconnects mid-stream. The Chat "Stop" button
+      // aborts the fetch → the SSE socket closes; without this the worker keeps
+      // decoding against a dead socket until max_new_tokens (or a model unload). Only
+      // act while generation is still running (`genFinished` guards the normal end,
+      // which also fires 'close' when we reply.raw.end()).
+      let genFinished = false;
+      request.raw.on('close', () => {
+        if (genFinished) return;
+        genFinished = true;
+        stopHeartbeat();
+        console.log('[Chat] client disconnected mid-stream — aborting generation');
+        pool.abort().catch(() => {});
+      });
+
       await traceInference(traceParams, async (gen) => {
         let streamText = '';
         const trimmer = makeEmptyThinkTrimmer(isGguf);
@@ -433,6 +447,7 @@ export default async function apiRoutes(fastify, options) {
           } else {
             finalResult = await pool.generate(model, prompt, modelOptions, onToken, cachePaths);
           }
+          genFinished = true; // generation done — the upcoming reply.raw.end() 'close' must not abort
           emit(trimmer.flush()); // release any text held while inspecting the leading think marker
           recordRequest(finalResult.perf);
           if (cacheEnabled && saveCachePath)
@@ -458,6 +473,7 @@ export default async function apiRoutes(fastify, options) {
           reply.raw.write('data: [DONE]\n\n');
           reply.raw.end();
         } catch (err) {
+          genFinished = true; // failed/stopped — don't let the error-path close abort again
           stopHeartbeat();
           reply.raw.write(`data: ${JSON.stringify({ error: { message: err.message, type: 'invalid_request_error' } })}\n\n`);
           reply.raw.end();
