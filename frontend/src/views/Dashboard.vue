@@ -245,6 +245,7 @@
                     <th class="text-left">Device</th>
                     <th class="text-left">Type</th>
                     <th class="text-left">Detail</th>
+                    <th class="text-left">Driver</th>
                     <th class="text-right">Load</th>
                   </tr>
                 </thead>
@@ -255,6 +256,7 @@
                       <v-chip size="x-small" :color="dev.color" variant="tonal">{{ dev.type }}</v-chip>
                     </td>
                     <td class="text-grey">{{ dev.detail || '—' }}</td>
+                    <td class="font-mono text-grey">{{ dev.driver || '—' }}</td>
                     <td class="text-right">
                       <v-chip size="x-small" :color="dev.load > 70 ? 'warning' : 'grey'" variant="tonal">
                         {{ dev.load }}%
@@ -529,12 +531,15 @@ export default {
     acceleratorDevices() {
       const platform = this.status?.platform;
       const npuCores = this.status?.npuCores;
+      const drivers = this.status?.drivers;
+      const fmtDriver = (d) => d ? `${d.name}${d.version ? ' ' + d.version : ''}` : null;
       const GPU_BY_SOC = { rk3576: 'Mali-G52 MC3', rk3588: 'Mali-G610 MP4', rk3588s: 'Mali-G610 MP4' };
       const NPU_BY_SOC = { rk3576: 'Rockchip NPU (RK3576)', rk3588: 'Rockchip NPU (RK3588)', rk3588s: 'Rockchip NPU (RK3588S)' };
       const npu = {
         type: 'NPU',
         name: platform ? (NPU_BY_SOC[platform] || `Rockchip NPU (${platform})`) : 'Rockchip NPU',
         detail: npuCores ? `${npuCores} core${npuCores > 1 ? 's' : ''}` : null,
+        driver: fmtDriver(drivers?.npu),
         load: this.metrics.npu,
         color: 'primary',
       };
@@ -545,6 +550,7 @@ export default {
         type: 'GPU',
         name: gpuInfo?.model || (platform ? (GPU_BY_SOC[platform] || 'Mali GPU') : 'Mali GPU'),
         detail: gpuCores ? `${gpuCores} shader core${gpuCores > 1 ? 's' : ''}` : null,
+        driver: fmtDriver(drivers?.gpu),
         load: this.metrics.gpu,
         color: 'orange',
       };

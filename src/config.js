@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
+import { execSync } from 'child_process';
 import dotenv from 'dotenv';
 import { dbGetCredentials, dbSaveCredentials, dbGetUserByUsername, dbUpdateUser } from './db.js';
 
@@ -210,4 +211,53 @@ export function getGpuInfo() {
     }
   } catch { /* ignore */ }
   return _gpuInfoCache;
+}
+
+let _driversCache;
+// The kernel driver in use + its version for each compute device (NPU, GPU).
+// Board/Linux only — returns null off-board. Cached; drivers don't change at
+// runtime. Surfaced in /api/admin/status as `drivers` and shown in the Dashboard
+// Compute table's Driver column.
+export function getDeviceDrivers() {
+  if (_driversCache !== undefined) return _driversCache;
+  const drivers = { npu: null, gpu: null };
+
+  // NPU: the RKNPU kernel driver, e.g. "RKNPU driver: v0.9.8" (debugfs, root-only —
+  // the service runs as root, so this is readable).
+  try {
+    const raw = fs.readFileSync('/sys/kernel/debug/rknpu/version', 'utf8');
+    const m = raw.match(/([0-9]+\.[0-9]+(?:\.[0-9]+)?)/);
+    if (m) drivers.npu = { name: 'RKNPU', version: m[1] };
+  } catch { /* ignore */ }
+
+  // GPU: the driver bound to the Mali platform device (`mali` proprietary kbase, or
+  // `panfrost` open). The Mali kernel DDK version is only exposed in the boot log
+  // ("Kernel DDK version g25p0-…"), so read it best-effort from dmesg.
+  try {
+    const driverName = (p) => { try { return path.basename(fs.realpathSync(p)); } catch { return null; } };
+    let name = null;
+    try {
+      for (const d of fs.readdirSync('/sys/devices/platform')) {
+        if (d.includes('gpu')) { name = driverName(`/sys/devices/platform/${d}/driver`); if (name) break; }
+      }
+    } catch { /* ignore */ }
+    if (!name) {
+      try {
+        const gpu = fs.readdirSync('/sys/class/devfreq').find(e => e.includes('gpu'));
+        if (gpu) name = driverName(`/sys/class/devfreq/${gpu}/device/driver`);
+      } catch { /* ignore */ }
+    }
+    if (name) {
+      let version = null;
+      try {
+        const log = execSync('dmesg 2>/dev/null', { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+        const m = log.match(/Kernel DDK version\s+(\S+)/);
+        if (m) version = m[1].split('-')[0]; // "g25p0-00eac0" → "g25p0"
+      } catch { /* dmesg restricted/unavailable */ }
+      drivers.gpu = { name, version };
+    }
+  } catch { /* ignore */ }
+
+  _driversCache = (drivers.npu || drivers.gpu) ? drivers : null;
+  return _driversCache;
 }
