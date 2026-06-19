@@ -214,6 +214,7 @@
                     <th class="text-right">Size</th>
                     <th class="text-right">Read</th>
                     <th class="text-right">Write</th>
+                    <th class="text-right">Temp</th>
                     <th class="text-right">TBW</th>
                     <th class="text-center">SMART</th>
                   </tr>
@@ -225,6 +226,10 @@
                     <td class="text-right">{{ formatGb(d.size) }}</td>
                     <td class="text-right text-grey">{{ d.readMBs != null ? fmtRate(d.readMBs) : '—' }}</td>
                     <td class="text-right text-grey">{{ d.writeMBs != null ? fmtRate(d.writeMBs) : '—' }}</td>
+                    <td class="text-right">
+                      <span v-if="d.temperature == null" class="text-grey">—</span>
+                      <span v-else :class="d.temperature >= 85 ? 'text-error' : d.temperature >= 70 ? 'text-warning' : 'text-grey'">{{ d.temperature }}°C</span>
+                    </td>
                     <td class="text-right text-grey">{{ d.tbw != null ? d.tbw + ' TB' : '—' }}</td>
                     <td class="text-center">
                       <v-chip

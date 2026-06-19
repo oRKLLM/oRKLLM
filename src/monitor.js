@@ -7,19 +7,23 @@ import pool from './pool.js';
 
 const execFileAsync = promisify(execFile);
 
-// Read TBW (total bytes written) from smartctl JSON for a device.
-// smartctl exits non-zero on partial success (e.g. some ioctls need root)
+// Read TBW (total bytes written) + drive temperature from smartctl JSON for a
+// device. smartctl exits non-zero on partial success (e.g. some ioctls need root)
 // but still writes valid JSON to stdout — parse it regardless of exit code.
-async function getSmartTbw(device) {
+async function getSmartInfo(device) {
   return new Promise(resolve => {
     execFile('/usr/sbin/smartctl', ['-a', device, '-j'], { timeout: 5000 }, (err, stdout) => {
       try {
         const d = JSON.parse(stdout || '{}');
         const duw = d.nvme_smart_health_information_log?.data_units_written;
         // NVMe data_units_written is in 512 kB units
-        resolve(duw != null ? Math.round(duw * 512000 / 1e9) / 1000 : null);
+        const tbw = duw != null ? Math.round(duw * 512000 / 1e9) / 1000 : null;
+        // `temperature.current` is the standardized field; fall back to the NVMe
+        // health-log temperature. Degrees Celsius.
+        const tempC = d.temperature?.current ?? d.nvme_smart_health_information_log?.temperature ?? null;
+        resolve({ tbw, tempC });
       } catch {
-        resolve(null);
+        resolve({ tbw: null, tempC: null });
       }
     });
   });
@@ -27,7 +31,7 @@ async function getSmartTbw(device) {
 
 // diskLayout + TBW are slow — cache together, refresh every 30 seconds.
 // lastFetch = 0 so the first metrics call fetches immediately.
-let diskCache = [];  // [{ device, type, size, smartStatus, tbw }]
+let diskCache = [];  // [{ device, type, size, smartStatus, tbw, temperature }]
 let diskCacheLastFetch = 0;
 let _prevDiskStats = null;  // { t, dev: { name: { rd, wr } } } for /proc/diskstats deltas
 async function getCachedDisks() {
@@ -35,13 +39,17 @@ async function getCachedDisks() {
   if (now - diskCacheLastFetch > 30000) {
     try {
       const layout = await si.diskLayout();
-      diskCache = await Promise.all(layout.map(async d => ({
-        device: d.device || d.name || '—',
-        type:   d.type   || '—',
-        size:   d.size   || 0,
-        smartStatus: d.smartStatus || 'unknown',
-        tbw: await getSmartTbw(d.device || d.name),
-      })));
+      diskCache = await Promise.all(layout.map(async d => {
+        const smart = await getSmartInfo(d.device || d.name);
+        return {
+          device: d.device || d.name || '—',
+          type:   d.type   || '—',
+          size:   d.size   || 0,
+          smartStatus: d.smartStatus || 'unknown',
+          tbw: smart.tbw,
+          temperature: smart.tempC,
+        };
+      }));
       diskCacheLastFetch = now;
     } catch {}
   }
