@@ -1640,25 +1640,31 @@ export default {
         const data = await this._readJson(res);
         if (!res.ok) { this.dlFileError = data.error || 'Failed to fetch files'; return; }
         if (data.files.length === 0) { this.dlFileError = `No .rkllm or .gguf files found in ${id}.`; return; }
-        // A repo can ship multiple weight files — several GGUF quants (Q4_K_M,
-        // Q5_K_M, Q6_K, Q8_0, …) and/or shards. Auto-downloading all of them
-        // pulls tens of GB of redundant variants, so only auto-download when
-        // there's a single weight file; otherwise show the picker so the user
-        // chooses the quant they want.
+        // Multiple weight files mean one of two different things:
+        //   (a) QUANT VARIANTS to choose between — several GGUF quants (Q4_K_M,
+        //       Q8_0, …) — so show the picker; downloading all would pull tens of
+        //       GB of redundant variants.
+        //   (b) SHARDS of ONE model — e.g. a base model's
+        //       model-00001-of-00002.safetensors, or a single quant split across
+        //       shards — which is one model → download all of them.
+        // Distinguish by a variant key: strip the `-N-of-M` shard suffix and the
+        // extension. >1 distinct key ⇒ real alternatives ⇒ picker; otherwise it's a
+        // single model (lone file or sharded) ⇒ download everything directly.
         const weights = data.files.filter(f => /\.(rkllm|gguf|safetensors|bin|pt|pth)$/i.test(f.name));
-        if (weights.length <= 1) {
-          await Promise.all(data.files.map(f => this.startDownload(f.name)));
-          this.$nextTick(() => {
-            const el = this.$refs.downloadCard?.$el || this.$refs.downloadCard;
-            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          });
-        } else {
-          // Show the file picker (quant chip per GGUF) for the user to choose.
+        const variantKey = (n) => n.replace(/-\d+-of-\d+(?=\.)/i, '').replace(/\.(rkllm|gguf|safetensors|bin|pt|pth)$/i, '');
+        const variants = new Set(weights.map(variantKey));
+        const scrollToDownload = () => this.$nextTick(() => {
+          const el = this.$refs.downloadCard?.$el || this.$refs.downloadCard;
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+        if (variants.size > 1) {
+          // Multiple variants → file picker (quant chip per GGUF) for the user to choose.
           this.dlFiles = data.files;
-          this.$nextTick(() => {
-            const el = this.$refs.downloadCard?.$el || this.$refs.downloadCard;
-            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          });
+          scrollToDownload();
+        } else {
+          // One model (single file or sharded) → download all its files directly.
+          await Promise.all(data.files.map(f => this.startDownload(f.name)));
+          scrollToDownload();
         }
       } catch (e) {
         this.dlFileError = 'Network error: ' + e.message;
