@@ -375,6 +375,13 @@ export default async function apiRoutes(fastify, options) {
         // instead of being released all at once when the response ends.
         'X-Accel-Buffering': 'no'
       });
+      // Flush the 200 + headers to the socket NOW, before the (possibly slow)
+      // cold model load below. writeHead only stages the headers — Node holds
+      // them until the first body write, so without this a reverse proxy waits
+      // on the response header for the whole load and returns a 504 HTML page
+      // (the client then sees "Unexpected token '<'"). flushHeaders sends them
+      // immediately; the 15s heartbeat then covers the silent load/prefill gap.
+      reply.raw.flushHeaders();
 
       // SSE heartbeat: a long prefill (a gguf prompt can take 30s+ before the
       // first token) or any pause sends no bytes, so a reverse proxy with a read

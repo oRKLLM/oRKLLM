@@ -173,8 +173,21 @@ export async function sendMessage(queuedText = null, alreadyInChat = false) {
     });
 
     if (!res.ok) {
-      const data = await res.json();
-      assistantMsg.content = `Error: ${data.error || 'Request failed'}`;
+      // The error body may not be JSON: a reverse proxy (nginx) returns an HTML
+      // 502/504 page when the upstream is still cold-loading a large model or
+      // restarting — parsing that as JSON throws "Unexpected token '<'". Read as
+      // text and only then attempt JSON, falling back to a status-aware hint.
+      const raw = await res.text().catch(() => '');
+      let msg;
+      try {
+        const data = JSON.parse(raw);
+        msg = (typeof data.error === 'object' ? data.error?.message : data.error) || 'Request failed';
+      } catch {
+        msg = (res.status === 502 || res.status === 504)
+          ? `the model may still be loading (HTTP ${res.status}) — try again in a moment`
+          : `server error (HTTP ${res.status})`;
+      }
+      assistantMsg.content = `Error: ${msg}`;
       chatState.generating = false;
       return;
     }
@@ -198,6 +211,9 @@ export async function sendMessage(queuedText = null, alreadyInChat = false) {
         if (dataStr === '[DONE]') continue;
         try {
           const obj = JSON.parse(dataStr);
+          if (obj.error) {
+            assistantMsg.content += `\n[Error: ${typeof obj.error === 'object' ? obj.error.message : obj.error}]`;
+          }
           if (obj.choices?.[0]?.delta?.content) {
             assistantMsg.content += obj.choices[0].delta.content;
           }
