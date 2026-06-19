@@ -59,28 +59,6 @@ if (!fs.existsSync(LLAMA_RUNTIME_DIR)) {
   fs.mkdirSync(LLAMA_RUNTIME_DIR, { recursive: true });
 }
 
-// Vulkan SPIR-V shader mirror (Eagle-3 'vulkan' draft strategy). Same
-// distribution model as the runtime mirror: GitHub releases on oRKLLM/llama.cpp,
-// each attaching a ggml-vulkan-spirv-<tag>.tar.gz of the compiled .spv modules.
-// Override with ORKLLM_SPV_MIRRORS=owner/repo,owner2/repo2.
-export const SPV_MIRRORS = (
-  process.env.ORKLLM_SPV_MIRRORS ||
-  'oRKLLM/llama.cpp'
-).split(',').map(s => s.trim()).filter(Boolean);
-
-// Directory where the extracted .spv modules + manifest live.
-export const SPV_DIR = process.env.ORKLLM_SPV_DIR ||
-  (process.env.ORKLLM_DB_PATH
-    ? path.join(path.dirname(process.env.ORKLLM_DB_PATH), 'spv')
-    : path.join(CONFIG_DIR, 'spv'));
-if (!fs.existsSync(SPV_DIR)) {
-  fs.mkdirSync(SPV_DIR, { recursive: true });
-}
-// Make the shader directory discoverable to the native addon's Vulkan loader
-// (it reads ORKLLM_SPV_DIR). Set here so every process that imports config —
-// the server and each forked worker — exposes it to the C++ side.
-process.env.ORKLLM_SPV_DIR = SPV_DIR;
-
 // Parse rkllm runtime version from a model filename, e.g. "model-1.2.3.rkllm" → "1.2.3"
 export function parseRuntimeVersion(filename) {
   // Supports both new convention: ...-v1.2.3-RKLLM.rkllm

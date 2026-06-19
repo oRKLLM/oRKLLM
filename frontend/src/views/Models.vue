@@ -557,7 +557,7 @@
                           :items="[
                             {title:'CPU placeholder (validates pipeline, no trained head required)',value:'cpu'},
                             {title:'NPU — .rkllm head on a spare NPU core (multi-core chips)',value:'npu'},
-                            {title: spvAvailable ? 'Vulkan Mali GPU — .gguf head on the GPU' : 'Vulkan Mali GPU — install Vulkan shaders in Settings first', value:'vulkan', props:{ disabled: !spvAvailable }},
+                            {title:'Vulkan Mali GPU — .gguf head on the GPU', value:'vulkan'},
                           ]"
                           label="Draft head compute"
                           density="compact" variant="outlined" hide-details class="mb-3"
@@ -1104,7 +1104,6 @@ export default {
     searchPlatformOnly: true,
     searchEagle3Only: false,
     detectedPlatform: null,
-    spvAvailable: false,
     searchLoading: false,
     searchLoadingMore: false,
     searchResults: [],
@@ -1301,7 +1300,6 @@ export default {
         if (!res.ok) return;
         const data = await res.json();
         this.detectedPlatform = data.platform ?? null;
-        this.spvAvailable = !!data.spvAvailable;
       } catch (e) {}
     },
     async fetchAllModelSettings() {

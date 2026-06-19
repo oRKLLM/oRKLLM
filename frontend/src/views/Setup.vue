@@ -103,7 +103,7 @@ export default {
     confirmPassword: '',
     loading: false,
     errorMessage: '',
-    autoDownloadRuntimes: true,
+    autoDownloadRuntimes: false,
   }),
   methods: {
     async submitSetup() {

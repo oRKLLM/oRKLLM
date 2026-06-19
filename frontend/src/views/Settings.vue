@@ -144,70 +144,6 @@
         </div>
       </v-card>
 
-      <!-- Vulkan Shaders (Eagle-3) -->
-      <v-card class="glass-card pa-5 mb-5">
-        <div class="section-heading mb-4">
-          <v-icon color="primary" size="18" class="mr-2">mdi-expansion-card-variant</v-icon>
-          llama.cpp Vulkan Shaders
-        </div>
-        <div class="d-flex align-center justify-space-between mb-3">
-          <div>
-            <div class="text-subtitle-2 font-weight-medium mb-1">Auto-download Vulkan SPIR-V shaders</div>
-            <div class="text-caption text-grey">
-              The Mali GPU compute kernels (SPIR-V) are built and distributed by the
-              <a href="https://github.com/ggml-org/llama.cpp" target="_blank" class="text-primary">llama.cpp project (ggml-org/llama.cpp)</a>
-              — their <code>ggml-vulkan</code> backend shaders, MIT-licensed. oRKLLM mirrors them at
-              <a href="https://github.com/oRKLLM/llama.cpp" target="_blank" class="text-primary">oRKLLM/llama.cpp</a>
-              and fetches them on-demand; full credit to the llama.cpp / ggml authors. oRKLLM uses them for the
-              Eagle-3 <strong>Vulkan</strong> draft strategy — until installed, that option is disabled. ARM64 (board) only.
-            </div>
-          </div>
-          <v-switch :model-value="settings.autoDownloadSpv" @update:model-value="onToggleAutoSpv" color="primary" hide-details density="compact" class="ml-4 flex-shrink-0"></v-switch>
-        </div>
-        <v-divider class="my-3"></v-divider>
-        <div class="d-flex align-center gap-3 flex-wrap">
-          <v-chip size="small" :color="spv.available ? 'success' : 'grey'" variant="tonal">
-            <v-icon start size="14">{{ spv.available ? 'mdi-check-circle' : 'mdi-close-circle' }}</v-icon>
-            {{ spv.available ? `Installed: ${spv.tag || '?'} — ${spv.files.length} module(s)` : 'Not installed' }}
-          </v-chip>
-          <v-select
-            v-model="spvSelectedTag"
-            :items="spvReleases.map(r => ({ title: r.tag === spv.tag ? `${r.tag} (installed)` : r.tag, value: r.tag }))"
-            label="Release" placeholder="latest"
-            density="compact" variant="outlined" hide-details
-            style="min-width: 180px; max-width: 260px;"
-            :no-data-text="'No releases found on the mirror yet'"
-          ></v-select>
-          <v-btn size="small" variant="tonal" color="primary" :loading="spvSyncing"
-            :disabled="!!spvSelectedTag && spvSelectedTag === spv.tag"
-            prepend-icon="mdi-download" @click="downloadSpv">
-            {{ !spvSelectedTag ? 'Download latest' : (spvSelectedTag === spv.tag ? 'Installed' : (spv.available ? 'Switch to this release' : 'Download')) }}
-          </v-btn>
-        </div>
-      </v-card>
-
-      <!-- llama.cpp license acceptance (gates shader download / auto-download) -->
-      <v-dialog v-model="spvLicense.open" max-width="660" persistent scrollable>
-        <v-card class="glass-card">
-          <v-card-title class="pa-5 pb-2 text-h6 font-weight-bold d-flex align-center">
-            <v-icon start color="primary">mdi-license</v-icon>
-            llama.cpp License
-          </v-card-title>
-          <v-card-text class="pa-5 pt-2">
-            <div class="text-caption text-grey mb-3">
-              These Vulkan shaders are produced and licensed by the
-              <a href="https://github.com/ggml-org/llama.cpp" target="_blank" class="text-primary">llama.cpp project (ggml-org/llama.cpp)</a>{{ spvLicense.source ? `, mirrored at ${spvLicense.source}` : '' }}.
-              Please read and accept their license to continue. Scroll to the bottom to enable <strong>Accept</strong>.
-            </div>
-            <pre ref="spvLicenseBox" class="spv-license-box" @scroll="onLicenseScroll">{{ spvLicense.text || 'Loading license…' }}</pre>
-          </v-card-text>
-          <v-card-actions class="pa-5 pt-0 justify-end gap-2">
-            <v-btn variant="text" color="grey" @click="declineLicense">Decline</v-btn>
-            <v-btn variant="flat" color="primary" :disabled="!spvLicense.scrolledToBottom" @click="acceptLicense">Accept</v-btn>
-          </v-card-actions>
-        </v-card>
-      </v-dialog>
-
       <!-- Authentication -->
       <v-card class="glass-card pa-5 mb-5">
         <div class="section-heading mb-4">
@@ -693,18 +629,12 @@ export default {
       cacheMaxContextTokens: 8192,
       kvCacheQuant: 'off',
       trustedProxy: '',
-      autoDownloadRuntimes: true,
-      savedAutoDownloadRuntimes: true,
-      autoDownloadSpv: false,
+      autoDownloadRuntimes: false,
+      savedAutoDownloadRuntimes: false,
       autoDownloadLlamaRuntime: false,
       mcpInferenceEnabled: false,
       managePerformance: true,
     },
-    spv: { available: false, tag: null, files: [], licenseAccepted: false },
-    spvReleases: [],
-    spvSelectedTag: null,
-    spvSyncing: false,
-    spvLicense: { open: false, text: '', source: null, scrolledToBottom: false },
     llamaRuntime: { available: false, tag: null, llamaVersion: null, orkDriverVersion: null },
     llamaReleases: [],
     llamaSelectedTag: null,
@@ -754,8 +684,6 @@ export default {
     this.fetchAuth();
     this.fetchSettings();
     this.fetchMcpServers();
-    this.fetchSpv();
-    this.fetchSpvReleases();
     this.fetchLlamaRuntime();
     this.fetchLlamaReleases();
     // Poll prefix-cache stats so the observability figures update live as
@@ -806,9 +734,8 @@ export default {
         this.settings.cacheMaxContextTokens = s.cacheMaxContextTokens ?? 8192;
         this.settings.kvCacheQuant          = s.kvCacheQuant ?? 'off';
         this.settings.trustedProxy          = s.trustedProxy ?? '';
-        this.settings.autoDownloadRuntimes  = s.autoDownloadRuntimes ?? true;
+        this.settings.autoDownloadRuntimes  = s.autoDownloadRuntimes ?? false;
         this.savedAutoDownloadRuntimes       = this.settings.autoDownloadRuntimes;
-        this.settings.autoDownloadSpv           = s.autoDownloadSpv ?? false;
         this.settings.autoDownloadLlamaRuntime  = s.autoDownloadLlamaRuntime ?? false;
         this.settings.mcpInferenceEnabled   = s.mcpInferenceEnabled ?? false;
         this.settings.managePerformance     = s.managePerformance ?? true;
@@ -816,23 +743,6 @@ export default {
       } catch (e) {}
     },
 
-    // ── Vulkan SPIR-V shaders ─────────────────────────────────────────────
-    async fetchSpv() {
-      try {
-        const res = await fetch('/api/admin/spv');
-        if (res.ok) {
-          const d = await res.json();
-          this.spv = { available: d.available, tag: d.tag, files: d.files || [], licenseAccepted: !!d.licenseAccepted };
-          if (!this.spvSelectedTag && d.tag) this.spvSelectedTag = d.tag;
-        }
-      } catch (e) {}
-    },
-    async fetchSpvReleases() {
-      try {
-        const res = await fetch('/api/admin/spv/releases');
-        if (res.ok) this.spvReleases = (await res.json()).releases || [];
-      } catch (e) {}
-    },
     async fetchLlamaRuntime() {
       try {
         const res = await fetch('/api/admin/llama-runtime');
@@ -877,69 +787,6 @@ export default {
         await fetch('/api/admin/llama-runtime/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tag: this.llamaSelectedTag || null, force: true }) });
         setTimeout(() => { this.fetchLlamaRuntime(); this.llamaSyncing = false; }, 3000);
       } catch (e) { this.llamaSyncing = false; }
-    },
-
-    // Show the upstream license; resolves true only once the admin scrolls + accepts.
-    async ensureSpvLicense() {
-      if (this.spv.licenseAccepted) return true;
-      this.spvLicense.text = '';
-      this.spvLicense.scrolledToBottom = false;
-      this.spvLicense.open = true;
-      try {
-        const d = await (await fetch('/api/admin/spv/license')).json();
-        this.spvLicense.text = d.text || 'License unavailable.';
-        this.spvLicense.source = d.source || null;
-      } catch (e) { this.spvLicense.text = 'License unavailable.'; }
-      // If the text fits without scrolling, enable Accept immediately.
-      this.$nextTick(() => {
-        const b = this.$refs.spvLicenseBox;
-        if (b && b.scrollHeight <= b.clientHeight + 4) this.spvLicense.scrolledToBottom = true;
-      });
-      return new Promise(resolve => { this._licenseResolve = resolve; });
-    },
-    onLicenseScroll(e) {
-      const el = e.target;
-      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 8) this.spvLicense.scrolledToBottom = true;
-    },
-    async acceptLicense() {
-      try { await fetch('/api/admin/spv/accept-license', { method: 'POST' }); } catch (e) {}
-      this.spv.licenseAccepted = true;
-      this.spvLicense.open = false;
-      if (this._licenseResolve) { this._licenseResolve(true); this._licenseResolve = null; }
-    },
-    declineLicense() {
-      this.spvLicense.open = false;
-      if (this._licenseResolve) { this._licenseResolve(false); this._licenseResolve = null; }
-    },
-    async onToggleAutoSpv(val) {
-      if (val) {
-        const ok = await this.ensureSpvLicense();
-        this.settings.autoDownloadSpv = ok; // declined → stays off
-      } else {
-        this.settings.autoDownloadSpv = false;
-      }
-    },
-    async downloadSpv() {
-      if (!(await this.ensureSpvLicense())) return; // must accept the license first
-      this.spvSyncing = true;
-      try {
-        const body = JSON.stringify({ tag: this.spvSelectedTag || undefined });
-        const res = await fetch('/api/admin/spv/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
-        if (!res.ok) { this.notify('Failed to start shader download', 'error'); return; }
-        this.notify(`Downloading Vulkan shaders${this.spvSelectedTag ? ` (${this.spvSelectedTag})` : ''}…`, 'info');
-        // Poll for completion (the sync runs in the background).
-        for (let i = 0; i < 60; i++) {
-          await new Promise(r => setTimeout(r, 1500));
-          const s = await (await fetch('/api/admin/spv')).json();
-          if (!s.syncState?.active) {
-            this.spv = { available: s.available, tag: s.tag, files: s.files || [] };
-            if (s.tag) this.spvSelectedTag = s.tag;
-            this.notify(s.available ? `Vulkan shaders installed (${s.tag})` : 'Shaders not available (ARM64 board only / mirror has no release)', s.available ? 'success' : 'warning');
-            break;
-          }
-        }
-      } catch (e) { this.notify('Network error', 'error'); }
-      finally { this.spvSyncing = false; }
     },
 
     // ── MCP servers ─────────────────────────────────────────────────────────
@@ -1318,20 +1165,6 @@ export default {
 }
 
 .gap-3 { gap: 12px; }
-
-.spv-license-box {
-  max-height: 340px;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: 'Fira Code', 'Courier New', monospace;
-  font-size: 11.5px;
-  line-height: 1.5;
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(139, 92, 246, 0.15);
-  border-radius: 8px;
-  padding: 12px;
-}
 
 .mcp-tool-list {
   max-height: 220px;

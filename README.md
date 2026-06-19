@@ -206,8 +206,6 @@ npm run dev:server
 | `ORKLLM_TRUSTED_PROXY` | *(unset)* | `true` (all), a single IP/CIDR, or comma-separated IPs/CIDRs to trust `X-Forwarded-*` headers |
 | `ORKLLM_RUNTIMES_DIR` | `~/.config/orkllm/runtimes` | Directory of versioned `librkllmrt-aarch64-vX.Y.Z.so` files for automatic runtime matching |
 | `ORKLLM_RUNTIME_MIRRORS` | `oRKLLM/rkllm-runtimes,mafischer/rkllm-runtimes` | Comma-separated list of GitHub repo slugs tried in order when downloading runtime `.so` files — first mirror that has the version wins |
-| `ORKLLM_SPV_DIR` | `~/.config/orkllm/spv` | Directory for the extracted Vulkan SPIR-V shaders (Eagle-3 GPU draft); exposed to the native Vulkan loader |
-| `ORKLLM_SPV_MIRRORS` | `oRKLLM/llama.cpp` | Comma-separated GitHub repo slugs for the prebuilt `ggml-vulkan-spirv-<tag>.tar.gz` shader releases |
 | `ORKLLM_LLAMA_RUNTIME_DIR` | `~/.config/orkllm/llama-runtime` | Directory for the `libllama.so` + ggml-ork bundle (llama/GGUF backend) |
 | `ORKLLM_LLAMA_RUNTIME_MIRRORS` | `oRKLLM/llama.cpp-rockchip` | Comma-separated GitHub repo slugs for downloading the llama runtime bundle |
 
@@ -373,4 +371,3 @@ These are fast-forward pushes — no checkout, no merge commit. `beta` is a 48-h
 * **[jundot/oMLX](https://github.com/jundot/omlx)**: Inspired the dashboard layout, metrics design, single-model lifecycle, and OpenAI compatibility structures.
 * **Rockchip**: SDKs and runtime libraries (`librkllmrt.so`) powering localized NPU inference.
 * **[SafeAILab/EAGLE](https://github.com/SafeAILab/EAGLE)** & **[Tencent/AngelSlim](https://github.com/Tencent/AngelSlim)**: the EAGLE-3 speculative-decoding method and the open draft-head weights that oRKLLM's `vulkan` draft strategy serves. oRKLLM implements the draft forward pass from scratch in its own SPIR-V compute shaders.
-* **[ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)** (MIT): oRKLLM retains an optional fetcher (`spv_sync.js`, `ORKLLM_SPV_*`) for the project's prebuilt `ggml-vulkan` SPIR-V shaders. This path is no longer on the Eagle-3 critical path (the native shaders above replaced it) but remains available; full credit to the llama.cpp / ggml authors, whose license is shown and must be accepted before download.

@@ -304,12 +304,6 @@ const start = async () => {
     if (dbGetSetting('auto_download_runtimes') === '1') {
       syncRuntimes().catch(e => fastify.log.error(`[RuntimeSync] ${e.message}`));
     }
-    // Background Vulkan SPIR-V shader sync (non-blocking, opt-in)
-    if (dbGetSetting('auto_download_spv') === '1') {
-      import('./spv_sync.js')
-        .then(m => m.syncSpv())
-        .catch(e => fastify.log.error(`[SpvSync] ${e.message}`));
-    }
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);

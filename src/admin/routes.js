@@ -16,7 +16,6 @@ import {
   dbCreateBenchRun, dbListBenchRuns, dbDeleteBenchRun, dbClearBenchRuns,
 } from '../db.js';
 import { v4 as uuidv4 } from 'uuid';
-import { isSpvAvailable, installedSpvTag } from '../spv_sync.js';
 import { isLlamaRuntimeAvailable, getLlamaRuntimeInfo, getLlamaReleases, syncLlamaRuntime, getLlamaSyncState } from '../llama_sync.js';
 import { getDramStatus, getCpuStatus } from '../monitor.js';
 import { getState as getPerfState } from '../perf_governor.js';
@@ -246,8 +245,6 @@ export default async function adminRoutes(fastify, options) {
     status.npuCores = getNpuCoreCount();
     status.gpu = getGpuInfo();   // { model, cores } from the Mali gpuinfo node, or null
     status.drivers = getDeviceDrivers();   // { npu:{name,version}, gpu:{name,version} } or null
-    status.spvAvailable = isSpvAvailable(); // Eagle-3 'vulkan' draft gated on this
-    status.spvTag = installedSpvTag(); // null when not installed
     status.llamaRuntime = getLlamaRuntimeInfo();
     const dram = getDramStatus(); // null off-board; { governor, curFreqMhz, maxFreqMhz, throttled }
     status.dram = dram ? { ...dram, management: getPerfState() } : null;
@@ -451,7 +448,6 @@ export default async function adminRoutes(fastify, options) {
         trustedProxy: dbGetSetting('trusted_proxy') ?? '',
         pinnedModel: dbGetSetting('pinned_model') ?? '',
         autoDownloadRuntimes: dbGetSetting('auto_download_runtimes') === '1',
-        autoDownloadSpv: dbGetSetting('auto_download_spv') === '1',
         autoDownloadLlamaRuntime: dbGetSetting('auto_download_llama_runtime') === '1',
         npuPoolSize: parseInt(dbGetSetting('npu_pool_size') ?? '1'),
         langfuseEnabled:    dbGetSetting('langfuse_enabled')    === '1',
@@ -470,7 +466,7 @@ export default async function adminRoutes(fastify, options) {
     const { idleTimeoutMinutes, temperature, topP, topK, maxNewTokens, repPenalty, hfToken,
             cacheEnabled, cacheHotLimitMB, cacheColdLimitMB, cacheDir, cacheMaxContextTokens,
             kvCacheQuant,
-            localAuthDisabled, trustedProxy, autoDownloadRuntimes, autoDownloadSpv, autoDownloadLlamaRuntime, npuPoolSize,
+            localAuthDisabled, trustedProxy, autoDownloadRuntimes, autoDownloadLlamaRuntime, npuPoolSize,
             langfuseEnabled, langfuseBaseUrl, langfusePublicKey, langfuseSecretKey,
             mcpInferenceEnabled, managePerformance,
           } = request.body || {};
@@ -494,7 +490,6 @@ export default async function adminRoutes(fastify, options) {
     if (typeof localAuthDisabled === 'boolean') dbSetSetting('local_auth_disabled', localAuthDisabled ? '1' : '0');
     if (typeof trustedProxy === 'string') dbSetSetting('trusted_proxy', trustedProxy);
     if (typeof autoDownloadRuntimes === 'boolean') dbSetSetting('auto_download_runtimes', autoDownloadRuntimes ? '1' : '0');
-    if (typeof autoDownloadSpv === 'boolean') dbSetSetting('auto_download_spv', autoDownloadSpv ? '1' : '0');
     if (typeof autoDownloadLlamaRuntime === 'boolean') dbSetSetting('auto_download_llama_runtime', autoDownloadLlamaRuntime ? '1' : '0');
     if (typeof npuPoolSize === 'number' && npuPoolSize >= 1 && npuPoolSize <= 8)
       dbSetSetting('npu_pool_size', String(npuPoolSize));
@@ -558,57 +553,6 @@ export default async function adminRoutes(fastify, options) {
     syncLlamaRuntime(tag || null, { force: force !== false })
       .catch(e => console.error('[LlamaSync] Manual sync failed:', e.message));
     return { success: true, message: 'Llama runtime sync started in background' };
-  });
-
-  // ── Vulkan SPIR-V shaders (Eagle-3 'vulkan' draft) ────────────────────────
-  // GET /api/admin/spv — install state + live sync progress
-  fastify.get('/spv', async () => {
-    const { isSpvAvailable, listSpvFiles, installedSpvTag, getSpvSyncState } = await import('../spv_sync.js');
-    return {
-      spvDir: process.env.ORKLLM_SPV_DIR,
-      available: isSpvAvailable(),
-      tag: installedSpvTag(),
-      files: listSpvFiles(),
-      syncState: getSpvSyncState(),
-      licenseAccepted: dbGetSetting('spv_license_accepted') === '1',
-    };
-  });
-
-  // GET /api/admin/spv/license — upstream LICENSE text (shown in the accept modal)
-  let _spvLicense = null;
-  fastify.get('/spv/license', async () => {
-    if (_spvLicense) return _spvLicense;
-    const { SPV_MIRRORS } = await import('../config.js');
-    for (const slug of SPV_MIRRORS) {
-      try {
-        const res = await fetch(`https://api.github.com/repos/${slug}/contents/LICENSE`,
-          { headers: { 'User-Agent': 'oRKLLM', 'Accept': 'application/vnd.github.raw' } });
-        if (res.ok) { _spvLicense = { source: slug, text: await res.text() }; return _spvLicense; }
-      } catch (e) { /* try next */ }
-    }
-    return { source: null, text: 'License text unavailable. See https://github.com/ggml-org/llama.cpp/blob/master/LICENSE (MIT).' };
-  });
-
-  // POST /api/admin/spv/accept-license — record that the admin accepted the upstream license
-  fastify.post('/spv/accept-license', async (request) => {
-    dbSetSetting('spv_license_accepted', '1');
-    logAudit(request, 'spv_license_accept', null);
-    return { success: true };
-  });
-
-  // GET /api/admin/spv/releases — available shader release tags from the mirror
-  fastify.get('/spv/releases', async () => {
-    const { getReleases } = await import('../spv_sync.js');
-    return { releases: await getReleases() };
-  });
-
-  // POST /api/admin/spv/sync { tag? } — install a specific tag (or latest) in the background
-  fastify.post('/spv/sync', async (request) => {
-    const tag = request.body?.tag || null;
-    const { syncSpv } = await import('../spv_sync.js');
-    syncSpv(tag).catch(e => console.error('[SpvSync] Manual sync failed:', e.message));
-    logAudit(request, 'spv_sync', tag);
-    return { success: true, message: `Vulkan shader sync started${tag ? ` (${tag})` : ''}` };
   });
 
   // ── Tailscale (optional, runtime-detected) ────────────────────────────────
@@ -694,7 +638,7 @@ export default async function adminRoutes(fastify, options) {
 
   // GET /api/admin/eagle3-heads — Eagle-3 draft heads in MODELS_DIR, any format.
   // (/v1/models lists only servable .rkllm models; a Vulkan head is .gguf — the
-  // format the ggml-vulkan .spv kernels consume — so the Eagle-3 config picker
+  // format the native Vulkan draft shaders consume — so the Eagle-3 config picker
   // uses this instead.) format: 'npu' (.rkllm) | 'vulkan' (.gguf). A bf16
   // .safetensors is the training intermediate and is also surfaced (tagged
   // 'vulkan') so a head pending GGUF conversion is still visible.
