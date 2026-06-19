@@ -195,6 +195,13 @@ static struct llama_context      *g_ctx     = nullptr;
 static struct llama_sampler      *g_sampler = nullptr;
 static std::atomic<bool>          g_abort{false};
 
+// Abort callback wired into llama_context_params. llama_decode invokes this
+// between graph splits, so setting g_abort interrupts an in-flight decode —
+// crucially the PREFILL, which for a short prompt is a single blocking
+// llama_decode call (g_abort is otherwise only checked between batches/tokens,
+// so without this, Stop has no effect during a long prefill). Returns true=abort.
+static bool ork_abort_cb(void * /*data*/) { return g_abort.load(); }
+
 // Resolved function pointers
 static llama_backend_init_t              fn_backend_init   = nullptr;
 static llama_backend_free_t              fn_backend_free   = nullptr;
@@ -402,6 +409,11 @@ Napi::Value InitModel(const Napi::CallbackInfo& info) {
     cpar.n_threads_batch = 4;
     cpar.offload_kqv = true;
     cpar.embeddings = true;
+    // Let g_abort interrupt an in-flight llama_decode (esp. a long single-batch
+    // prefill) — so the Chat "Stop" / client-disconnect abort takes effect promptly
+    // instead of waiting for the whole decode call to return.
+    cpar.abort_callback      = (void *) ork_abort_cb;
+    cpar.abort_callback_data = nullptr;
 
     // KV-cache quantization (TurboQuant etc.). type_k/type_v default to F16; only
     // overridden when a recognized type is passed. Turbo/quantized types require
