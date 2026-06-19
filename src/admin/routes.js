@@ -535,7 +535,30 @@ export default async function adminRoutes(fastify, options) {
       ...getLlamaRuntimeInfo(),
       syncState: getLlamaSyncState(),
       autoDownload: dbGetSetting('auto_download_llama_runtime') === '1',
+      licenseAccepted: dbGetSetting('llama_license_accepted') === '1',
     };
+  });
+
+  // GET /api/admin/llama-runtime/license — upstream LICENSE text (shown in the accept modal)
+  let _llamaLicense = null;
+  fastify.get('/llama-runtime/license', async () => {
+    if (_llamaLicense) return _llamaLicense;
+    const { LLAMA_RUNTIME_MIRRORS } = await import('../config.js');
+    for (const slug of LLAMA_RUNTIME_MIRRORS) {
+      try {
+        const res = await fetch(`https://api.github.com/repos/${slug}/contents/LICENSE`,
+          { headers: { 'User-Agent': 'oRKLLM', 'Accept': 'application/vnd.github.raw' } });
+        if (res.ok) { _llamaLicense = { source: slug, text: await res.text() }; return _llamaLicense; }
+      } catch (e) { /* try next */ }
+    }
+    return { source: null, text: 'License text unavailable. See https://github.com/ggml-org/llama.cpp/blob/master/LICENSE (MIT).' };
+  });
+
+  // POST /api/admin/llama-runtime/accept-license — record that the admin accepted the upstream license
+  fastify.post('/llama-runtime/accept-license', async (request) => {
+    dbSetSetting('llama_license_accepted', '1');
+    logAudit(request, 'llama_license_accept', null);
+    return { success: true };
   });
 
   // GET /api/admin/llama-runtime/releases — available tags from the mirror
@@ -546,6 +569,11 @@ export default async function adminRoutes(fastify, options) {
 
   // POST /api/admin/llama-runtime/sync — download or update the llama runtime bundle
   fastify.post('/llama-runtime/sync', async (request, reply) => {
+    // The llama.cpp runtime bundle is MIT-licensed upstream software; require an
+    // explicit license acceptance before fetching it.
+    if (dbGetSetting('llama_license_accepted') !== '1') {
+      return reply.status(422).send({ error: 'llama.cpp runtime license not accepted', code: 'LICENSE_NOT_ACCEPTED' });
+    }
     const { tag, force } = request.body || {};
     // A manual sync is an explicit user action, so default to force=true — this
     // re-fetches even when the installed tag matches (handles re-released/overwritten

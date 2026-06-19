@@ -144,6 +144,28 @@
         </div>
       </v-card>
 
+      <!-- llama.cpp license acceptance (gates llama runtime download / auto-download) -->
+      <v-dialog v-model="llamaLicense.open" max-width="660" persistent scrollable>
+        <v-card class="glass-card">
+          <v-card-title class="pa-5 pb-2 text-h6 font-weight-bold d-flex align-center">
+            <v-icon start color="teal">mdi-license</v-icon>
+            llama.cpp License
+          </v-card-title>
+          <v-card-text class="pa-5 pt-2">
+            <div class="text-caption text-grey mb-3">
+              The llama runtime is built from the
+              <a href="https://github.com/ggml-org/llama.cpp" target="_blank" class="text-primary">llama.cpp project (ggml-org/llama.cpp)</a>{{ llamaLicense.source ? `, mirrored at ${llamaLicense.source}` : '' }}.
+              Please read and accept their license to continue. Scroll to the bottom to enable <strong>Accept</strong>.
+            </div>
+            <pre ref="llamaLicenseBox" class="license-box" @scroll="onLlamaLicenseScroll">{{ llamaLicense.text || 'Loading license…' }}</pre>
+          </v-card-text>
+          <v-card-actions class="pa-5 pt-0 justify-end gap-2">
+            <v-btn variant="text" color="grey" @click="declineLlamaLicense">Decline</v-btn>
+            <v-btn variant="flat" color="teal" :disabled="!llamaLicense.scrolledToBottom" @click="acceptLlamaLicense">Accept</v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
+
       <!-- Authentication -->
       <v-card class="glass-card pa-5 mb-5">
         <div class="section-heading mb-4">
@@ -635,10 +657,11 @@ export default {
       mcpInferenceEnabled: false,
       managePerformance: true,
     },
-    llamaRuntime: { available: false, tag: null, llamaVersion: null, orkDriverVersion: null },
+    llamaRuntime: { available: false, tag: null, llamaVersion: null, orkDriverVersion: null, licenseAccepted: false },
     llamaReleases: [],
     llamaSelectedTag: null,
     llamaSyncing: false,
+    llamaLicense: { open: false, text: '', source: null, scrolledToBottom: false },
     cacheStats: null,
     cacheStatsTimer: null,
     clearingCache: false,
@@ -748,7 +771,7 @@ export default {
         const res = await fetch('/api/admin/llama-runtime');
         if (res.ok) {
           const d = await res.json();
-          this.llamaRuntime = { available: d.available, tag: d.tag, llamaVersion: d.llamaVersion, orkDriverVersion: d.orkDriverVersion };
+          this.llamaRuntime = { available: d.available, tag: d.tag, llamaVersion: d.llamaVersion, orkDriverVersion: d.orkDriverVersion, licenseAccepted: !!d.licenseAccepted };
           if (!this.llamaSelectedTag && d.tag) this.llamaSelectedTag = d.tag;
         }
       } catch (e) {}
@@ -767,8 +790,45 @@ export default {
       } catch (e) {}
     },
     async onToggleAutoLlama(val) {
+      if (val) {
+        // Enabling auto-download requires accepting the upstream llama.cpp license.
+        const ok = await this.ensureLlamaLicense();
+        if (!ok) { this.settings.autoDownloadLlamaRuntime = false; return; } // declined → stays off
+      }
       this.settings.autoDownloadLlamaRuntime = val;
       try { await fetch('/api/admin/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ autoDownloadLlamaRuntime: val }) }); } catch (e) {}
+    },
+    // Show the upstream license; resolves true only once the admin scrolls + accepts.
+    async ensureLlamaLicense() {
+      if (this.llamaRuntime.licenseAccepted) return true;
+      this.llamaLicense.text = '';
+      this.llamaLicense.scrolledToBottom = false;
+      this.llamaLicense.open = true;
+      try {
+        const d = await (await fetch('/api/admin/llama-runtime/license')).json();
+        this.llamaLicense.text = d.text || 'License unavailable.';
+        this.llamaLicense.source = d.source || null;
+      } catch (e) { this.llamaLicense.text = 'License unavailable.'; }
+      // If the text fits without scrolling, enable Accept immediately.
+      this.$nextTick(() => {
+        const b = this.$refs.llamaLicenseBox;
+        if (b && b.scrollHeight <= b.clientHeight + 4) this.llamaLicense.scrolledToBottom = true;
+      });
+      return new Promise(resolve => { this._llamaLicenseResolve = resolve; });
+    },
+    onLlamaLicenseScroll(e) {
+      const el = e.target;
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 8) this.llamaLicense.scrolledToBottom = true;
+    },
+    async acceptLlamaLicense() {
+      try { await fetch('/api/admin/llama-runtime/accept-license', { method: 'POST' }); } catch (e) {}
+      this.llamaRuntime.licenseAccepted = true;
+      this.llamaLicense.open = false;
+      if (this._llamaLicenseResolve) { this._llamaLicenseResolve(true); this._llamaLicenseResolve = null; }
+    },
+    declineLlamaLicense() {
+      this.llamaLicense.open = false;
+      if (this._llamaLicenseResolve) { this._llamaLicenseResolve(false); this._llamaLicenseResolve = null; }
     },
     // Picker label: mark the installed tag, flag when its bytes differ from the
     // release (a re-released/overwritten tag → update available), and the newest.
@@ -780,11 +840,23 @@ export default {
       return r.tag + (i === 0 ? ' (latest)' : '');
     },
     async downloadLlama() {
+      if (!(await this.ensureLlamaLicense())) return; // must accept the license first
       this.llamaSyncing = true;
       try {
         // force:true so an explicit sync re-fetches even at the same tag (handles a
         // re-released/overwritten release); the backend also auto-detects via sha256.
-        await fetch('/api/admin/llama-runtime/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tag: this.llamaSelectedTag || null, force: true }) });
+        const res = await fetch('/api/admin/llama-runtime/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tag: this.llamaSelectedTag || null, force: true }) });
+        if (res.status === 422) {
+          // License not accepted server-side (shouldn't happen if ensureLlamaLicense ran). Re-prompt.
+          let code = '';
+          try { code = (await res.json()).code; } catch (e) {}
+          this.llamaSyncing = false;
+          if (code === 'LICENSE_NOT_ACCEPTED') {
+            this.llamaRuntime.licenseAccepted = false;
+            if (await this.ensureLlamaLicense()) this.downloadLlama();
+          }
+          return;
+        }
         setTimeout(() => { this.fetchLlamaRuntime(); this.llamaSyncing = false; }, 3000);
       } catch (e) { this.llamaSyncing = false; }
     },
@@ -1165,6 +1237,20 @@ export default {
 }
 
 .gap-3 { gap: 12px; }
+
+.license-box {
+  max-height: 340px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'Fira Code', 'Courier New', monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(139, 92, 246, 0.15);
+  border-radius: 8px;
+  padding: 12px;
+}
 
 .mcp-tool-list {
   max-height: 220px;

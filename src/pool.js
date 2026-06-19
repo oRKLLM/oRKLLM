@@ -361,7 +361,11 @@ class EnginePool {
         // RUNTIME_MISSING; the latter must report the actual error so the user
         // isn't told to install a runtime that's already there.
         if (!isLlamaRuntimeAvailable()) {
-          if (dbGetSetting('auto_download_llama_runtime') === '1') {
+          // Only auto-download when the upstream llama.cpp (MIT) license has been
+          // accepted by an admin. Without acceptance, skip the fetch and fall
+          // through to the runtime-missing error path below.
+          if (dbGetSetting('auto_download_llama_runtime') === '1' &&
+              dbGetSetting('llama_license_accepted') === '1') {
             console.log(`[EnginePool] Llama runtime missing — triggering sync`);
             await syncLlamaRuntime();
             const result2 = await this._tryLoadSlot(s, modelName, modelPath, slotOptions, libPath, 'llama');
@@ -374,6 +378,10 @@ class EnginePool {
               return { status: 0, activeModel: s.activeModel };
             }
             if (s.worker) { s.worker.kill(); s.worker = null; }
+          } else if (dbGetSetting('auto_download_llama_runtime') === '1') {
+            console.warn('[EnginePool] Llama runtime missing and auto-download enabled, but the ' +
+              'llama.cpp license has not been accepted — skipping auto-download. ' +
+              'Accept it in Settings → Llama Runtime.');
           }
           if (s.worker) { s.worker.kill(); s.worker = null; }
           throw Object.assign(
