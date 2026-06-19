@@ -162,15 +162,13 @@
               </v-col>
 
               <v-col cols="4" class="py-2">
-                <v-progress-circular :model-value="metrics.swap" :size="80" :width="7" :color="metricsRaw.swapTotal ? 'blue-grey-lighten-1' : 'grey'" class="font-weight-bold mb-1">
-                  <span v-if="!metricsRaw.swapTotal" class="text-caption font-weight-bold text-grey">none</span>
-                  <span v-else-if="!telemetryUnits" class="text-caption font-weight-bold">{{ metrics.swap }}%</span>
-                  <span v-else class="font-weight-bold" style="font-size: 0.62rem; line-height: 1.2; text-align: center;">
-                    {{ formatGb(metricsRaw.swapUsed) }}<br>
-                    <span class="text-grey" style="font-size: 0.55rem;">/ {{ formatGb(metricsRaw.swapTotal) }}</span>
+                <v-progress-circular :model-value="diskReadRing" :size="80" :width="7" color="light-green" class="font-weight-bold mb-1">
+                  <span class="font-weight-bold" style="font-size: 0.62rem; line-height: 1.2; text-align: center;">
+                    {{ fmtRate(metrics.diskRead) }}<br>
+                    <span class="text-grey" style="font-size: 0.55rem;">read</span>
                   </span>
                 </v-progress-circular>
-                <div class="text-caption text-grey">Swap</div>
+                <div class="text-caption text-grey">Disk Read</div>
               </v-col>
 
               <!-- Storage + thermal row: Disk, Temp, Fan (Temp & Fan colocated) -->
@@ -214,6 +212,8 @@
                     <th class="text-left">Device</th>
                     <th class="text-left">Type</th>
                     <th class="text-right">Size</th>
+                    <th class="text-right">Read</th>
+                    <th class="text-right">Write</th>
                     <th class="text-right">TBW</th>
                     <th class="text-center">SMART</th>
                   </tr>
@@ -223,6 +223,8 @@
                     <td class="font-mono">{{ d.device }}</td>
                     <td>{{ d.type }}</td>
                     <td class="text-right">{{ formatGb(d.size) }}</td>
+                    <td class="text-right text-grey">{{ d.readMBs != null ? fmtRate(d.readMBs) : '—' }}</td>
+                    <td class="text-right text-grey">{{ d.writeMBs != null ? fmtRate(d.writeMBs) : '—' }}</td>
                     <td class="text-right text-grey">{{ d.tbw != null ? d.tbw + ' TB' : '—' }}</td>
                     <td class="text-center">
                       <v-chip
@@ -479,7 +481,8 @@ export default {
   components: { AppNav },
   data: () => ({
     user: { username: 'admin', role: 'admin', authProvider: 'local' },
-    metrics: { cpu: 0, npu: 0, gpu: 0, ram: 0, disk: 0, temp: 0, fan: 0, memBw: 0, swap: 0 },
+    metrics: { cpu: 0, npu: 0, gpu: 0, ram: 0, disk: 0, temp: 0, fan: 0, memBw: 0, swap: 0, diskRead: 0, diskWrite: 0 },
+    diskReadMax: 1,  // rolling peak read MB/s — scales the Disk Read gauge ring (self-calibrating)
     metricsRaw: {
       ramUsed: 0, ramTotal: 0, diskUsed: 0, diskTotal: 0,
       fanAvailable: false, fanRpm: null,
@@ -556,6 +559,11 @@ export default {
       };
       return [npu, gpu];
     },
+    // Disk-read gauge ring, scaled to the session peak (self-calibrating, since a
+    // disk has no meaningful fixed max throughput to scale against).
+    diskReadRing() {
+      return this.diskReadMax > 0 ? Math.min(100, (this.metrics.diskRead / this.diskReadMax) * 100) : 0;
+    },
   },
   mounted() {
     this.fetchAuth();
@@ -623,6 +631,13 @@ export default {
       if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(1) + ' GB';
       if (bytes >= 1048576) return (bytes / 1048576).toFixed(0) + ' MB';
       return (bytes / 1024).toFixed(0) + ' KB';
+    },
+    // Format a throughput in MB/s, rolling up to GB/s past 1000.
+    fmtRate(mbs) {
+      const v = Number(mbs) || 0;
+      if (v >= 1000) return (v / 1000).toFixed(1) + ' GB/s';
+      if (v >= 100) return Math.round(v) + ' MB/s';
+      return v.toFixed(1) + ' MB/s';
     },
     copyToClipboard(text) {
       navigator.clipboard.writeText(text).then(() => {
@@ -718,6 +733,10 @@ export default {
           this.metrics.swap = data.swap?.percentage ?? 0;
           this.metricsRaw.swapUsed = data.swap?.used ?? 0;
           this.metricsRaw.swapTotal = data.swap?.total ?? 0;
+          // Live disk throughput (aggregate MB/s); ring scales to the session peak.
+          this.metrics.diskRead = data.diskRead ?? 0;
+          this.metrics.diskWrite = data.diskWrite ?? 0;
+          if (this.metrics.diskRead > this.diskReadMax) this.diskReadMax = this.metrics.diskRead;
           if (data.stats) {
             this.stats = data.stats;
           }

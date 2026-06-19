@@ -29,6 +29,7 @@ async function getSmartTbw(device) {
 // lastFetch = 0 so the first metrics call fetches immediately.
 let diskCache = [];  // [{ device, type, size, smartStatus, tbw }]
 let diskCacheLastFetch = 0;
+let _prevDiskStats = null;  // { t, dev: { name: { rd, wr } } } for /proc/diskstats deltas
 async function getCachedDisks() {
   const now = Date.now();
   if (now - diskCacheLastFetch > 30000) {
@@ -176,13 +177,23 @@ export async function getSystemMetrics() {
     // ignore
   }
 
-  // 7. Disk layout with SMART status + TBW (cached, refreshed every 30s)
+  // 7. Disk layout with SMART status + TBW (cached, refreshed every 30s),
+  //    annotated with live per-device read/write throughput from /proc/diskstats.
   let disks = [];
   try {
     disks = await getCachedDisks();
   } catch (e) {
     // ignore
   }
+  const diskIO = isLinux ? readDiskIO() : mockDiskIO();
+  const ioByName = diskIO?.perDevice || {};
+  // Don't mutate the cached disk objects — map to fresh ones with IO attached,
+  // matching diskstats by the device basename (si gives e.g. "/dev/nvme0n1").
+  disks = disks.map((d) => {
+    const name = String(d.device || '').replace(/^\/dev\//, '');
+    const io = ioByName[name] || null;
+    return { ...d, readMBs: io ? io.readMBs : null, writeMBs: io ? io.writeMBs : null };
+  });
 
   // 8. CPU fan speed. Boards vary wildly: a tach fan exposes RPM via hwmon
   //    fan*_input; a PWM fan exposes only a duty value (pwm1, 0–255) or a
@@ -219,6 +230,8 @@ export async function getSystemMetrics() {
       percentage: diskPercentage,
     },
     disks,
+    diskRead: diskIO?.totalReadMBs ?? 0,    // aggregate live read MB/s (whole disks)
+    diskWrite: diskIO?.totalWriteMBs ?? 0,  // aggregate live write MB/s
     fan,
     memBw,
   };
@@ -376,6 +389,54 @@ function readMemBandwidth() {
     // ignore
   }
   return null;
+}
+
+// ── Disk I/O throughput ──────────────────────────────────────────────────────
+// Live read/write bandwidth per block device from /proc/diskstats deltas (sectors
+// are 512 B). This is the *actual* MB/s moving right now — unlike the bus/link
+// speed (theoretical) or SMART (no throughput field), disks don't self-report a
+// max, so a delta sample is the only meaningful "speed". Whole-disk devices feed
+// the aggregate (partitions excluded to avoid double-counting). Needs two samples;
+// returns null on the first tick. Linux only.
+function readDiskIO() {
+  const raw = readFile('/proc/diskstats');
+  if (!raw) return null;
+  const now = Date.now();
+  const cur = {};
+  for (const line of raw.split('\n')) {
+    const p = line.trim().split(/\s+/);
+    if (p.length < 10) continue;
+    const name = p[2];
+    const rd = parseInt(p[5], 10);   // sectors read
+    const wr = parseInt(p[9], 10);   // sectors written
+    if (!Number.isFinite(rd) || !Number.isFinite(wr)) continue;
+    cur[name] = { rd, wr };
+  }
+  const prev = _prevDiskStats;
+  _prevDiskStats = { t: now, dev: cur };
+  if (!prev) return null;
+  const dt = (now - prev.t) / 1000;
+  if (dt <= 0) return null;
+  const round1 = (x) => Math.round(x * 10) / 10;
+  const isWholeDisk = (n) => /^(sd[a-z]+|nvme\d+n\d+|mmcblk\d+|vd[a-z]+|hd[a-z]+)$/.test(n);
+  const perDevice = {};
+  let totalRead = 0, totalWrite = 0;
+  for (const [name, c] of Object.entries(cur)) {
+    const pd = prev.dev[name];
+    if (!pd) continue;
+    const readMBs = Math.max(0, (c.rd - pd.rd) * 512 / dt / 1e6);
+    const writeMBs = Math.max(0, (c.wr - pd.wr) * 512 / dt / 1e6);
+    perDevice[name] = { readMBs: round1(readMBs), writeMBs: round1(writeMBs) };
+    if (isWholeDisk(name)) { totalRead += readMBs; totalWrite += writeMBs; }
+  }
+  return { perDevice, totalReadMBs: round1(totalRead), totalWriteMBs: round1(totalWrite) };
+}
+
+function mockDiskIO() {
+  // Light idle churn so the macOS dev dashboard shows a live-looking gauge.
+  const r = Math.round(Math.random() * 40 * 10) / 10;
+  const w = Math.round(Math.random() * 15 * 10) / 10;
+  return { perDevice: {}, totalReadMBs: r, totalWriteMBs: w };
 }
 
 // ── DRAM DVFS governor / throttle check ──────────────────────────────────────
