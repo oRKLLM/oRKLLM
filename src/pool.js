@@ -1055,6 +1055,13 @@ class EnginePool {
       isLoaded:      primary.isLoaded,
       model:         primary.activeModel?.name  ?? null,
       isMock:        primary.activeModel?.isMock ?? false,
+      // True while ANY slot is mid-generation. The source of truth for the chat
+      // UI's Stop button: an SSE stream can drop (a buffering proxy swallowing
+      // the client disconnect, a page refresh, a network blip) while the worker
+      // keeps decoding, so the client must recover `generating` from here on
+      // chat load / conversation open rather than trusting its local flag.
+      generating:    this._slots.some(s => !!s.activeGeneration),
+      generatingModel: this._slots.find(s => s.activeGeneration)?.activeModel?.name ?? null,
       options:       primary.activeModel?.options ?? null,
       activeRuntime: primary.activeModel?.backend ?? null,
       // Current idle-unload timeout (independent of whether a model is loaded),

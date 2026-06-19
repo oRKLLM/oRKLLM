@@ -29,6 +29,32 @@ export const chatState = reactive({
 
 let abortController = null;
 let beaconRegistered = false;
+// True only while THIS client is actively consuming an SSE stream. While true,
+// the local `generating` flag is authoritative and backend syncs are ignored.
+// While false, the backend's status is the source of truth — so the Stop button
+// can recover after an SSE drop (a buffering proxy swallowing the client
+// disconnect, a page refresh, a route change, a network blip) where the worker
+// is still decoding but the local flag was lost or wrongly cleared.
+let localStreamActive = false;
+
+// Adopt the backend's generation state into chatState.generating, unless this
+// client owns a live stream (then the local flag wins).
+export function adoptBackendGenerating(isGenerating) {
+  if (localStreamActive) return;
+  chatState.generating = !!isGenerating;
+}
+
+// Pull the live backend status and adopt its generating flag. Used when opening
+// a conversation and to recover after a network error ends the local stream.
+export async function syncGeneratingFromBackend() {
+  if (localStreamActive) return;
+  try {
+    const res = await fetch('/api/admin/status');
+    if (!res.ok) return;
+    const data = await res.json();
+    adoptBackendGenerating(data.generating);
+  } catch (e) {}
+}
 
 // Save partial response on a genuine page unload (tab close / full reload),
 // where the in-flight fetch is torn down along with the JS context. Route
@@ -68,6 +94,9 @@ export async function loadConversation(id) {
     const { messages } = await res.json();
     chatState.chatHistory = messages.map(m => ({ role: m.role, content: m.content }));
     chatState.activeConversationId = id;
+    // Opening a chat: trust the backend for whether a generation is in flight,
+    // not the (possibly stale) local flag — so the Stop button is correct.
+    await syncGeneratingFromBackend();
   } catch (e) {}
 }
 
@@ -145,6 +174,7 @@ export async function sendMessage(queuedText = null, alreadyInChat = false) {
   const assistantMsg = chatState.chatHistory[chatState.chatHistory.length - 1];
 
   abortController = new AbortController();
+  let networkError = false;
 
   const messages = [];
   if (chatState.systemPrompt.trim()) {
@@ -195,6 +225,7 @@ export async function sendMessage(queuedText = null, alreadyInChat = false) {
     const reader = res.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
+    localStreamActive = true; // this client now owns the generating flag
 
     while (true) {
       const { value, done } = await reader.read();
@@ -223,11 +254,13 @@ export async function sendMessage(queuedText = null, alreadyInChat = false) {
     }
   } catch (err) {
     if (err.name !== 'AbortError') {
+      networkError = true;
       assistantMsg.content += `\n[Error: ${err.message}]`;
     } else {
       assistantMsg.content += '\n[Generation stopped]';
     }
   } finally {
+    localStreamActive = false; // release the flag; backend is authoritative again
     // Persist completed assistant response
     if (assistantMsg.content) {
       await persistMessage('assistant', assistantMsg.content);
@@ -236,6 +269,11 @@ export async function sendMessage(queuedText = null, alreadyInChat = false) {
     }
     chatState.generating = false;
     abortController = null;
+    // A network error dropped our SSE, but a buffering proxy may have swallowed
+    // the disconnect so the worker is still decoding. Recover the real state
+    // from the backend: if it's still generating, the Stop button reappears so
+    // the user can abort the orphaned run (instead of being stuck with no Stop).
+    if (networkError) syncGeneratingFromBackend();
     if (chatState.messageQueue.length > 0) {
       const { text: next, inChat } = chatState.messageQueue.shift();
       Promise.resolve().then(() => sendMessage(next, inChat));
@@ -245,7 +283,12 @@ export async function sendMessage(queuedText = null, alreadyInChat = false) {
 
 export function abortGeneration() {
   if (abortController) {
-    abortController.abort();
+    abortController.abort(); // local stream: its finally clears `generating`
+  } else {
+    // No local stream (a recovered/orphaned generation after a refresh or SSE
+    // drop): there's no finally to clear the flag, so clear it optimistically —
+    // the /abort below stops the worker.
+    chatState.generating = false;
   }
   // Aborting the fetch only closes the client→proxy connection; a buffering reverse
   // proxy (nginx) may not propagate that to the upstream, so the server never sees

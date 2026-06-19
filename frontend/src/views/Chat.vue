@@ -340,6 +340,7 @@ import {
   newChat as newChatStore,
   sendMessage as sendMsg,
   abortGeneration as abortGen,
+  adoptBackendGenerating,
 } from '../chat.js';
 
 // Delimiters wrapping the auto-injected MCP tool-instructions block so the
@@ -464,6 +465,10 @@ export default {
         const res = await fetch('/api/admin/status');
         const data = await res.json();
         this.status = data;
+        // Recover the generating flag from the backend on chat load / refresh:
+        // an SSE drop (proxy, refresh, navigation) can leave the local flag wrong
+        // while the worker is still decoding — the backend is the source of truth.
+        adoptBackendGenerating(data.generating);
         if (data.isLoaded && data.model) {
           chatState.selectedModel = data.model;
           chatState.activeModel = data.model;
