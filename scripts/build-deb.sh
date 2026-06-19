@@ -44,7 +44,7 @@ Depends: nodejs (>= 18.0.0), smartmontools, libgomp1, libvulkan1, mesa-vulkan-dr
 Suggests: tailscale
 Section: net
 Priority: optional
-Homepage: https://github.com/mafischer/oRKLLM
+Homepage: https://github.com/oRKLLM/oRKLLM
 Description: OpenAI-compatible LLM inference server for Rockchip NPU
  oRKLLM is a high-performance local LLM inference server designed for
  Rockchip NPU-powered platforms (RK3576, RK3588). Provides an OpenAI-

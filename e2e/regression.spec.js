@@ -266,7 +266,7 @@ test('User menu: Contribute button links to GitHub', async ({ page }) => {
   await expect(contributeLink).toBeVisible();
   // v-list-item with href renders as the <a> element itself
   const href = await contributeLink.getAttribute('href');
-  expect(href).toContain('github.com/mafischer/oRKLLM');
+  expect(href).toContain('github.com/oRKLLM/oRKLLM');
 });
 
 test('No browser alert() popups — notifications use Vuetify snackbar', async ({ page }) => {

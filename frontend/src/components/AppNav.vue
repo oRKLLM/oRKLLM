@@ -113,7 +113,7 @@
       <v-list-item
         prepend-icon="mdi-github"
         title="Contribute"
-        href="https://github.com/mafischer/oRKLLM"
+        href="https://github.com/oRKLLM/oRKLLM"
         target="_blank"
         rel="noopener"
       ></v-list-item>

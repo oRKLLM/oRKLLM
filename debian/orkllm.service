@@ -1,6 +1,6 @@
 [Unit]
 Description=oRKLLM - OpenAI-compatible LLM inference for Rockchip NPU
-Documentation=https://github.com/mafischer/oRKLLM
+Documentation=https://github.com/oRKLLM/oRKLLM
 After=network.target
 
 [Service]
