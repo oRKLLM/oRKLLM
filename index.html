@@ -16,18 +16,18 @@
   </style>
 </head>
 <body>
-  <h1><a href="https://github.com/mafischer/oRKLLM" style="color:inherit;text-decoration:none;">oRKLLM</a></h1>
+  <h1><a href="https://github.com/oRKLLM/oRKLLM" style="color:inherit;text-decoration:none;">oRKLLM</a></h1>
   <p class="subtitle">OpenAI-compatible LLM inference for Rockchip NPU</p>
   <span class="badge">APT Repository · Ubuntu / Armbian · arm64</span>
 
   <h2>Install via APT</h2>
   <pre><code># 1. Trust the signing key
-curl -fsSL https://mafischer.github.io/oRKLLM/orkllm.gpg \
+curl -fsSL https://orkllm.github.io/oRKLLM/orkllm.gpg \
   | sudo gpg --dearmor -o /usr/share/keyrings/orkllm.gpg
 
 # 2. Add the repository
 echo "deb [arch=arm64 signed-by=/usr/share/keyrings/orkllm.gpg] \
-  https://mafischer.github.io/oRKLLM stable main" \
+  https://orkllm.github.io/oRKLLM stable main" \
   | sudo tee /etc/apt/sources.list.d/orkllm.list
 
 # 3. Install
@@ -41,8 +41,8 @@ journalctl -u orkllm -f          # Live logs</code></pre>
 
   <h2>Links</h2>
   <ul>
-    <li><a href="https://github.com/mafischer/oRKLLM">GitHub Repository</a></li>
-    <li><a href="https://github.com/mafischer/oRKLLM/releases">Releases</a></li>
+    <li><a href="https://github.com/oRKLLM/oRKLLM">GitHub Repository</a></li>
+    <li><a href="https://github.com/oRKLLM/oRKLLM/releases">Releases</a></li>
     <li><a href="orkllm.gpg">GPG Signing Key</a></li>
   </ul>
 </body>
