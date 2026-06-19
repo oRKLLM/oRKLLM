@@ -9,6 +9,12 @@ EnvironmentFile=-/etc/orkllm/orkllm.conf
 Environment=ORKLLM_MODELS_DIR=/var/lib/orkllm/models
 Environment=ORKLLM_DB_PATH=/var/lib/orkllm/orkllm.db
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Defense-in-depth for the node-sqlite3-wasm fallback (Node < 22.5): a hard crash or
+# power-cut can leave a stale `<db>.lock` mkdir-lock that crash-loops migrations.
+# systemd guarantees a single instance, so any lock present before start is stale.
+# db.js also clears this in-app; this is a belt-and-suspenders net that runs first.
+# The leading `-` makes systemd ignore a missing path so startup never fails on it.
+ExecStartPre=-/bin/rm -rf /var/lib/orkllm/orkllm.db.lock
 ExecStart=/usr/bin/node /usr/lib/orkllm/src/server.js
 WorkingDirectory=/usr/lib/orkllm
 Restart=on-failure

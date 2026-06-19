@@ -31,10 +31,12 @@ if (!fs.existsSync(dbDir)) {
 // recompile. (The N-API addons in src/addon/ still compile per-arch, but they
 // are ABI-stable across Node majors.)
 let DatabaseSyncClass;
+let usingWasmBackend = false;
 try {
   const sqlite = await import('node:sqlite');
   DatabaseSyncClass = sqlite.DatabaseSync;
 } catch (e) {
+  usingWasmBackend = true;
   try {
     // node-sqlite3-wasm is CommonJS — under dynamic import() its module.exports
     // lands on `.default` (named exports are not statically detected).
@@ -250,7 +252,30 @@ function initDb(dbInstance) {
   return dbInstance;
 }
 
+// node-sqlite3-wasm (the Node < 22.5 fallback) can't use OS fcntl locks from a
+// WASM VFS, so it guards the DB with an atomic mkdir lock at `<db>.lock`. A clean
+// process exit removes it; a hard kill or power-cut leaves it behind, and the next
+// start then fails migrations with "database is locked", crash-looping the service.
+// This DB is opened only by the main server process (the inference worker imports
+// none of db/cache/stats), and systemd guarantees a single instance — so any lock
+// dir present at our startup is, by definition, stale. Remove it before opening.
+// (node:sqlite on Node >= 22.5 uses OS locks released on death, so no .lock dir
+// exists there — guarded by usingWasmBackend.)
+function clearStaleWasmLock() {
+  if (!usingWasmBackend) return;
+  const lockPath = DB_FILE + '.lock';
+  try {
+    if (fs.existsSync(lockPath)) {
+      fs.rmSync(lockPath, { recursive: true, force: true });
+      console.warn(`[Database] Removed stale lock ${lockPath} (left by an unclean prior exit)`);
+    }
+  } catch (e) {
+    console.warn(`[Database] Could not clear stale lock ${lockPath}: ${e.message}`);
+  }
+}
+
 console.log(`[Database] Initializing SQLite database at: ${DB_FILE}`);
+clearStaleWasmLock();
 let db = initDb(new DatabaseSyncClass(DB_FILE));
 
 // SQLITE_READONLY_DBMOVED (errcode 1032): the DB file was replaced while open
