@@ -8,6 +8,17 @@ on:
       - alpha
   workflow_dispatch:
 
+# Serialize releases per branch. Without this, rapid pushes start overlapping
+# Release runs that race on the semantic-release git tag + the gh-pages APT
+# force-push — the symptom: tags/.debs computed against a stale "last release"
+# so some versions never tag and some .debs never reach the apt repo (observed:
+# alpha.140 tagged but its .deb missing, cc9e319/51129b5 never tagged at all).
+# cancel-in-progress:false queues runs instead of cancelling, so a publish in
+# flight always finishes before the next starts.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   issues: write
