@@ -231,4 +231,9 @@ export function abortGeneration() {
   if (abortController) {
     abortController.abort();
   }
+  // Aborting the fetch only closes the client→proxy connection; a buffering reverse
+  // proxy (nginx) may not propagate that to the upstream, so the server never sees
+  // the socket close and keeps decoding. Hit an explicit endpoint so the worker is
+  // aborted regardless of how the stream is proxied. Fire-and-forget.
+  fetch('/api/admin/abort', { method: 'POST' }).catch(() => {});
 }

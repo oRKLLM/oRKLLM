@@ -305,6 +305,17 @@ export default async function adminRoutes(fastify, options) {
     return reply.status(202).send({ accepted: true, model });
   });
 
+  // POST /api/admin/abort — stop the in-flight generation. The Chat "Stop" button
+  // calls this directly (not just aborting the fetch) because a buffering reverse
+  // proxy may not propagate the client's SSE disconnect to the upstream, so the
+  // request.raw 'close' handler in routes.js can't be relied on. pool.abort() sends
+  // {type:'abort'} to the active worker → abort_inference → g_abort breaks the
+  // decode loop.
+  fastify.post('/abort', async () => {
+    await pool.abort();
+    return { success: true };
+  });
+
   // POST /api/admin/unload
   fastify.post('/unload', async (request, reply) => {
     try {
