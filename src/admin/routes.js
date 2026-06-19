@@ -722,27 +722,37 @@ export default async function adminRoutes(fastify, options) {
       }
     })(MODELS_DIR);
 
-    // Classify each repo subdirectory that holds safetensors as base vs Eagle-3.
-    for (const e of listFiles(MODELS_DIR)) {
-      if (!e.isDirectory()) continue;
-      const dir = path.join(MODELS_DIR, e.name);
-      const names = listFiles(dir).filter(f => f.isFile()).map(f => f.name);
-      if (!names.some(n => /\.safetensors$/i.test(n))) continue;  // .rkllm-only → covered above
-      const cfg = readJson(path.join(dir, 'config.json'));
+    // Classify each repo directory that holds safetensors as base vs Eagle-3.
+    // Downloads nest under {owner}/{repo}/… so we walk (bounded depth) and treat
+    // any directory that DIRECTLY contains a .safetensors file as a repo dir; its
+    // path relative to MODELS_DIR (e.g. "unsloth/Qwen3-1.7B") is the identifier,
+    // preserving the owner prefix. The walk stops descending once it finds a repo
+    // dir, so the old flat layout (repo at the top level) still classifies.
+    const repoDirs = [];
+    (function findRepoDirs(dir, rel = '', depth = 0) {
+      if (depth > 3) return;
+      const entries = listFiles(dir);
+      const names = entries.filter(f => f.isFile()).map(f => f.name);
+      if (names.some(n => /\.safetensors$/i.test(n))) { if (rel) repoDirs.push({ rel, abs: dir, names }); return; }
+      for (const e of entries) if (e.isDirectory()) findRepoDirs(path.join(dir, e.name), rel ? `${rel}/${e.name}` : e.name, depth + 1);
+    })(MODELS_DIR);
+
+    for (const { rel, abs, names } of repoDirs) {
+      const cfg = readJson(path.join(abs, 'config.json'));
       const arch = cfg?.architectures?.[0] || '';
-      const isEagle = /eagle3/i.test(arch) || /eagle-?3/i.test(e.name);
+      const isEagle = /eagle3/i.test(arch) || /eagle-?3/i.test(rel);
       if (isEagle) {
         const head = names.find(n => /\.rkllm$/i.test(n)) || names.find(n => /\.safetensors$/i.test(n) && n !== 'embeddings.safetensors') || names.find(n => /\.gguf$/i.test(n));
         eagle3.push({
-          dir: e.name,
-          headFile: head ? `${e.name}/${head}` : null,
+          dir: rel,
+          headFile: head ? `${rel}/${head}` : null,
           format: head && /\.rkllm$/i.test(head) ? 'npu' : 'vulkan',
           hasConfig: !!cfg,
           targetModelType: cfg?.target_model_type || null,
           embeddingsPresent: names.includes('embeddings.safetensors'),
         });
       } else {
-        base.push({ dir: e.name, arch: arch || null, hasEmbeddings: localBaseHasEmbeddings(dir) });
+        base.push({ dir: rel, arch: arch || null, hasEmbeddings: localBaseHasEmbeddings(abs) });
       }
     }
     return { available, base, eagle3 };
@@ -1107,9 +1117,17 @@ export default async function adminRoutes(fastify, options) {
       return reply.status(400).send({ error: 'Only .rkllm, .gguf, .safetensors, .bin, .pt, .pth or .json files allowed' });
 
     const id = uuidv4();
-    // Save as {MODELS_DIR}/{repoName}/{filename} to avoid collisions across repos
-    const repoName = repoId.split('/').pop();
-    const repoDir = path.join(MODELS_DIR, repoName);
+    // Save as {MODELS_DIR}/{owner}/{repo}/{filename}. Keeping the owner in the
+    // path (a) prevents collisions between same-named repos from different owners
+    // — e.g. unsloth/LFM2.5-8B-A1B-GGUF and LiquidAI/LFM2.5-8B-A1B-GGUF both
+    // reduce to "LFM2.5-8B-A1B-GGUF" and would otherwise share one directory —
+    // and (b) surfaces the owner prefix on the Models page, since the model scan
+    // uses each file's path relative to MODELS_DIR as its id. Sanitize every
+    // segment so a crafted repoId can't escape MODELS_DIR.
+    const safeSeg = (s) => (String(s).replace(/[^\w.-]/g, '_').replace(/^\.+/, '_') || '_');
+    const segs = repoId.split('/').filter(Boolean).map(safeSeg);
+    const repoRel = segs.length > 1 ? path.join(segs[0], segs.slice(1).join('_')) : (segs[0] || '_');
+    const repoDir = path.join(MODELS_DIR, repoRel);
     if (!fs.existsSync(repoDir)) fs.mkdirSync(repoDir, { recursive: true });
     const destPath = path.join(repoDir, path.basename(filename));
     const hfToken = tokenOverride || (dbGetSetting('hf_token') ?? '');
