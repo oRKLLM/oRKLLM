@@ -25,7 +25,18 @@ const DEFAULT_MAX_CONTEXT_LEN = 4096;
 // absolute build path that doesn't exist on the target). LD_LIBRARY_PATH is
 // searched before DT_RUNPATH, so this wins. Must be set at fork time (the loader
 // reads it at process start, not per dlopen).
-function workerEnv({ disableVulkan = false } = {}) {
+// Approximate a GGUF's weight bit-width from its filename quant tag, to pick the
+// NPU execution precision under 'auto'. The ork NPU runs INT4 (W4A4) or INT8
+// (W8A8); a >=5-bit file rounds up to INT8 so it isn't silently downcast to 4-bit.
+function ggufQuantBits(name) {
+  const n = String(name).toUpperCase();
+  if (/F32/.test(n)) return 32;
+  if (/BF16|FP16|F16/.test(n)) return 16;
+  const m = n.match(/I?Q(\d)/); // Q8_0, Q6_K, Q5_K_M, Q4_K_M, IQ4_XS, IQ3_M, IQ2_…
+  return m ? parseInt(m[1], 10) : 4; // unknown → assume 4-bit (the common case)
+}
+
+function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null } = {}) {
   const dirs = [LLAMA_RUNTIME_DIR, RUNTIMES_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean);
   const env = { ...process.env, LD_LIBRARY_PATH: dirs.join(':') };
   // Keep the GPU idle unless something explicitly wants it (TurboQuant KV). With
@@ -35,6 +46,12 @@ function workerEnv({ disableVulkan = false } = {}) {
   // forces layers back onto the NPU. ggml reads this getenv at backend
   // registration (process start), so it must be set at fork time.
   if (disableVulkan) env.GGML_DISABLE_VULKAN = '1';
+  // ggml-ork NPU controls, also read at backend init: ORK_QUANT selects the NPU
+  // execution precision (8 = W8A8, 4 = W4A4; unset = the runtime's default, now
+  // pure INT4), ORK_HYBRID=1 re-enables the FFN/attn-only layer-wise hybrid loader
+  // (the native-INT4 runtime defaults hybrid off). Must be set at fork time.
+  if (orkQuant) env.ORK_QUANT = String(orkQuant);
+  if (orkHybrid) env.ORK_HYBRID = '1';
   return env;
 }
 
@@ -261,10 +278,22 @@ class EnginePool {
       const kvK = options.kv_type_k ?? saved.kv_type_k
         ?? (String(kvV).includes('turbo') || kvV === 'q8_0' ? 'q8_0' : 'f16');
       const usesTurbo = String(kvK).includes('turbo') || String(kvV).includes('turbo');
+      // NPU execution precision (ORK_QUANT) + hybrid offload (ORK_HYBRID), applied
+      // to the worker env at fork (ggml-ork reads them at backend init). The native
+      // runtime defaults to pure INT4 (W4A4); under 'auto' we raise a >=5-bit GGUF
+      // to INT8 so a Q8/Q6/F16 file isn't silently downcast. 'int4'/'int8' force it.
+      const npuQuant = options.npu_quant ?? saved.npu_quant ?? 'auto';
+      const orkQuant = npuQuant === 'int8' ? '8'
+        : npuQuant === 'int4' ? '4'
+        : (npuQuant === 'auto' && ggufQuantBits(modelName) >= 5) ? '8'
+        : null; // null → inherit the runtime default (INT4)
+      const orkHybrid = (options.npu_hybrid ?? saved.npu_hybrid ?? false) ? '1' : null;
       options = {
         ...options,
         kv_type_k: kvK,
         kv_type_v: kvV,
+        ork_quant: orkQuant,
+        ork_hybrid: orkHybrid,
         // Default no-mmap for gguf: layers are packed/offloaded to the NPU, so a
         // mmap'd source would be a full second copy of the weights in RAM (the
         // OOM logs showed ~22 GB of mapped source alongside the resident copy).
@@ -287,6 +316,8 @@ class EnginePool {
           s.activeModel?.options?.max_context_len === options.max_context_len &&
           s.activeModel?.options?.kv_type_k === options.kv_type_k &&
           s.activeModel?.options?.kv_type_v === options.kv_type_v &&
+          s.activeModel?.options?.ork_quant === options.ork_quant &&
+          s.activeModel?.options?.ork_hybrid === options.ork_hybrid &&
           s.activeModel?.options?.use_mmap === options.use_mmap) {
         this.resetIdleTimer(s);
         return { status: 0, activeModel: s.activeModel };
@@ -457,7 +488,11 @@ class EnginePool {
       // (TurboQuant KV); otherwise keep layers on the ork-NPU (see workerEnv).
       const usesTurbo = String(options.kv_type_k || '').includes('turbo')
                      || String(options.kv_type_v || '').includes('turbo');
-      slot.worker = fork(workerPath, { serialization: 'advanced', env: workerEnv({ disableVulkan: !usesTurbo }) });
+      slot.worker = fork(workerPath, { serialization: 'advanced', env: workerEnv({
+        disableVulkan: !usesTurbo,
+        orkQuant: options.ork_quant,
+        orkHybrid: options.ork_hybrid,
+      }) });
 
       // Persistent guards so a worker that dies mid-inference can never crash the
       // whole server. Without an 'error' listener, an IPC failure (e.g.

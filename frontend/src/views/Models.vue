@@ -489,6 +489,37 @@
                     </v-expansion-panel-text>
                   </v-expansion-panel>
 
+                  <!-- NPU Execution (llama/gguf only) -->
+                  <v-expansion-panel v-if="settingsTarget?.runtime === 'llama'">
+                    <v-expansion-panel-title class="text-subtitle-2 font-weight-bold py-2 px-0">
+                      NPU Execution
+                    </v-expansion-panel-title>
+                    <v-expansion-panel-text class="pa-0">
+                      <div class="text-caption text-grey mb-3">
+                        How the ggml-ork NPU backend runs the model's matmuls. <strong>Auto</strong> matches the
+                        file's quant (≥5-bit → INT8, otherwise INT4). The native runtime defaults to pure INT4;
+                        force INT8 to keep a Q8/Q6/F16 model at full precision.
+                      </div>
+                      <v-select
+                        v-model="settingsForm.npu_quant"
+                        :items="[
+                          { title: 'Auto (match the model quant)', value: 'auto' },
+                          { title: 'INT4 — W4A4 (fastest, native multi-M)', value: 'int4' },
+                          { title: 'INT8 — W8A8 (higher precision)', value: 'int8' },
+                        ]"
+                        label="Execution precision (ORK_QUANT)"
+                        density="compact" variant="outlined" hide-details class="mb-3"
+                      ></v-select>
+                      <div class="d-flex align-center justify-space-between">
+                        <div class="text-caption">
+                          Hybrid offload (FFN/attn only)
+                          <div class="text-caption text-grey">Keep norms/other ops off the NPU (ORK_HYBRID). Off = pure NPU loading.</div>
+                        </div>
+                        <v-switch v-model="settingsForm.npu_hybrid" color="primary" hide-details density="compact" class="flex-shrink-0 ml-3"></v-switch>
+                      </div>
+                    </v-expansion-panel-text>
+                  </v-expansion-panel>
+
                   <!-- Speculative Decoding -->
                   <v-expansion-panel>
                     <v-expansion-panel-title class="text-subtitle-2 font-weight-bold py-2 px-0">
@@ -1046,6 +1077,8 @@ export default {
       eagle3_strategy:      'cpu',
       eagle3_weights_path:  null,
       kv_cache_quant:       null,
+      npu_quant:            'auto',
+      npu_hybrid:           false,
     },
 
     // Delete confirm
@@ -1318,6 +1351,8 @@ export default {
         eagle3_strategy:     saved.eagle3_strategy     ?? 'cpu',
         eagle3_weights_path: saved.eagle3_weights_path ?? null,
         kv_cache_quant:      saved.kv_cache_quant      ?? null,
+        npu_quant:           saved.npu_quant           ?? 'auto',
+        npu_hybrid:          saved.npu_hybrid          ?? false,
       };
       this.settingsDialog = true;
     },
