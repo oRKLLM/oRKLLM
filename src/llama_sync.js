@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import https from 'https';
 import zlib from 'zlib';
+import crypto from 'crypto';
 import { LLAMA_RUNTIME_DIR, LLAMA_RUNTIME_MIRRORS } from './config.js';
 
 function mirrorApi(slug) {
@@ -106,28 +107,44 @@ export function getLlamaRuntimeInfo() {
   }
 }
 
+// Parse the upstream llama.cpp build number from an `-ork` tag (e.g. "b9724-ork" →
+// 9724). Tags track upstream build numbers, so a higher number = newer code — the
+// reliable "latest" signal. Asset/publish timestamps are NOT: the fork's CI rebuilds
+// the whole tag range concurrently and the uploads finish out of order.
+function tagBuildNum(tag) {
+  const m = /b(\d+)/.exec(String(tag || ''));
+  return m ? parseInt(m[1], 10) : -1;
+}
+
 export async function getLlamaReleases() {
   const isARM64Linux = process.platform === 'linux' && process.arch === 'arm64';
   if (!isARM64Linux) return [];
 
   for (const slug of LLAMA_RUNTIME_MIRRORS) {
     try {
-      // llama.cpp pushes builds constantly, so only surface the newest handful
-      // for the picker (GitHub returns newest-first). syncLlamaRuntime fetches a
-      // wider window, so any listed tag still resolves.
+      // llama.cpp pushes builds constantly, so only surface the newest handful for
+      // the picker — ordered by tag build number (highest = latest code), NOT by
+      // GitHub's array/publish order, which is unreliable when concurrent CI builds
+      // upload out of order. syncLlamaRuntime fetches a wider window, so any listed
+      // tag still resolves.
       const res = await httpsGet(mirrorApi(slug) + '?per_page=20');
       if (res.status !== 200) continue;
       const releases = JSON.parse(res.body.toString());
       return releases
         .filter(r => r.assets?.some(a => a.name.endsWith('.tar.gz')))
-        .map(r => ({ tag: r.tag_name, publishedAt: r.published_at }))
+        .map(r => {
+          const asset = r.assets.find(a => a.name.endsWith('.tar.gz'));
+          return { tag: r.tag_name, publishedAt: r.published_at,
+                   assetDigest: asset?.digest ?? null, assetSize: asset?.size ?? null };
+        })
+        .sort((a, b) => tagBuildNum(b.tag) - tagBuildNum(a.tag))
         .slice(0, 10);
     } catch { /* try next */ }
   }
   return [];
 }
 
-export async function syncLlamaRuntime(tag = null) {
+export async function syncLlamaRuntime(tag = null, { force = false } = {}) {
   const isARM64Linux = process.platform === 'linux' && process.arch === 'arm64';
   if (!isARM64Linux) {
     console.log('[LlamaSync] Skipping — not ARM64 Linux');
@@ -152,18 +169,30 @@ export async function syncLlamaRuntime(tag = null) {
       continue;
     }
 
+    // "latest" = highest tag build number (NOT releases[0] / publish order, which is
+    // unreliable when concurrent CI builds upload out of order).
     const release = tag
       ? releases.find(r => r.tag_name === tag)
-      : releases[0]; // latest
+      : releases
+          .filter(r => r.assets?.some(a => a.name.endsWith('.tar.gz')))
+          .sort((a, b) => tagBuildNum(b.tag_name) - tagBuildNum(a.tag_name))[0];
     if (!release) continue;
 
     const asset = release.assets?.find(a => a.name.endsWith('.tar.gz'));
     if (!asset) continue;
 
-    // Already have this tag?
+    // Up to date? Compare the release asset against what's installed by **content**
+    // (GitHub's sha256 `digest`, or size if absent), not just the tag — a re-released /
+    // overwritten tag keeps the same name but ships new bytes, so a tag match alone
+    // can't tell them apart. Differing digest/size ⇒ a real update ⇒ re-fetch even at
+    // the same tag. `force` overrides regardless (explicit user sync).
     const info = getLlamaRuntimeInfo();
-    if (info.tag === release.tag_name && isLlamaRuntimeAvailable()) {
-      console.log(`[LlamaSync] Already at ${release.tag_name}`);
+    const remoteDigest = asset.digest || null;   // "sha256:…" from GitHub (may be absent)
+    const sameAsset = remoteDigest
+      ? info.assetSha === remoteDigest
+      : (info.assetSize != null && info.assetSize === asset.size);
+    if (!force && info.tag === release.tag_name && sameAsset && isLlamaRuntimeAvailable()) {
+      console.log(`[LlamaSync] Already at ${release.tag_name} (asset unchanged)`);
       return;
     }
 
@@ -184,11 +213,17 @@ export async function syncLlamaRuntime(tag = null) {
       try { fs.rmSync(LLAMA_RUNTIME_DIR, { recursive: true, force: true }); } catch {}
       fs.mkdirSync(LLAMA_RUNTIME_DIR, { recursive: true });
       extractTarGz(buf, LLAMA_RUNTIME_DIR);
-      // Write tag into manifest if not already there
+      // Write the tag + the installed asset's identity (sha256 of the exact bytes we
+      // fetched, its size, and name) into the manifest. The sha256 is what lets a
+      // later sync definitively detect an update — including a re-released/overwritten
+      // tag — by comparing against the release asset's digest, independent of tag/time.
       const manifestPath = path.join(LLAMA_RUNTIME_DIR, 'manifest.json');
       let manifest = {};
       try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch {}
       manifest.tag = release.tag_name;
+      manifest.assetName = asset.name;
+      manifest.assetSize = buf.length;
+      manifest.assetSha  = 'sha256:' + crypto.createHash('sha256').update(buf).digest('hex');
       fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
       console.log(`[LlamaSync] Installed llama runtime ${release.tag_name} to ${LLAMA_RUNTIME_DIR}`);
       return;

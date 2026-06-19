@@ -551,8 +551,12 @@ export default async function adminRoutes(fastify, options) {
 
   // POST /api/admin/llama-runtime/sync — download or update the llama runtime bundle
   fastify.post('/llama-runtime/sync', async (request, reply) => {
-    const { tag } = request.body || {};
-    syncLlamaRuntime(tag || null).catch(e => console.error('[LlamaSync] Manual sync failed:', e.message));
+    const { tag, force } = request.body || {};
+    // A manual sync is an explicit user action, so default to force=true — this
+    // re-fetches even when the installed tag matches (handles re-released/overwritten
+    // tags). Pass force:false to keep the skip-if-present behaviour.
+    syncLlamaRuntime(tag || null, { force: force !== false })
+      .catch(e => console.error('[LlamaSync] Manual sync failed:', e.message));
     return { success: true, message: 'Llama runtime sync started in background' };
   });
 

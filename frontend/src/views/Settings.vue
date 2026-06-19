@@ -131,7 +131,7 @@
           </v-chip>
           <v-select
             v-model="llamaSelectedTag"
-            :items="llamaReleases.map((r, i) => ({ title: r.tag + (r.tag === llamaRuntime.tag ? ' (installed)' : i === 0 ? ' (latest)' : ''), value: r.tag }))"
+            :items="llamaReleases.map((r, i) => ({ title: llamaReleaseLabel(r, i), value: r.tag }))"
             label="Release" placeholder="latest"
             density="compact" variant="outlined" hide-details
             style="min-width: 180px; max-width: 260px;"
@@ -860,10 +860,21 @@ export default {
       this.settings.autoDownloadLlamaRuntime = val;
       try { await fetch('/api/admin/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ autoDownloadLlamaRuntime: val }) }); } catch (e) {}
     },
+    // Picker label: mark the installed tag, flag when its bytes differ from the
+    // release (a re-released/overwritten tag → update available), and the newest.
+    llamaReleaseLabel(r, i) {
+      if (r.tag === this.llamaRuntime.tag) {
+        const stale = r.assetDigest && this.llamaRuntime.assetSha && r.assetDigest !== this.llamaRuntime.assetSha;
+        return r.tag + (stale ? ' (installed — update available)' : ' (installed)');
+      }
+      return r.tag + (i === 0 ? ' (latest)' : '');
+    },
     async downloadLlama() {
       this.llamaSyncing = true;
       try {
-        await fetch('/api/admin/llama-runtime/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tag: this.llamaSelectedTag || null }) });
+        // force:true so an explicit sync re-fetches even at the same tag (handles a
+        // re-released/overwritten release); the backend also auto-detects via sha256.
+        await fetch('/api/admin/llama-runtime/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tag: this.llamaSelectedTag || null, force: true }) });
         setTimeout(() => { this.fetchLlamaRuntime(); this.llamaSyncing = false; }, 3000);
       } catch (e) { this.llamaSyncing = false; }
     },
