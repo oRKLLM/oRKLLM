@@ -7,9 +7,9 @@ import pool from './pool.js';
 
 const execFileAsync = promisify(execFile);
 
-// Read TBW (total bytes written) + drive temperature from smartctl JSON for a
-// device. smartctl exits non-zero on partial success (e.g. some ioctls need root)
-// but still writes valid JSON to stdout — parse it regardless of exit code.
+// Read TBW (total bytes written) + device temperature (°C) from smartctl JSON.
+// smartctl exits non-zero on partial success (e.g. some ioctls need root) but
+// still writes valid JSON to stdout — parse it regardless of exit code.
 async function getSmartInfo(device) {
   return new Promise(resolve => {
     execFile('/usr/sbin/smartctl', ['-a', device, '-j'], { timeout: 5000 }, (err, stdout) => {
@@ -18,10 +18,10 @@ async function getSmartInfo(device) {
         const duw = d.nvme_smart_health_information_log?.data_units_written;
         // NVMe data_units_written is in 512 kB units
         const tbw = duw != null ? Math.round(duw * 512000 / 1e9) / 1000 : null;
-        // `temperature.current` is the standardized field; fall back to the NVMe
-        // health-log temperature. Degrees Celsius.
-        const tempC = d.temperature?.current ?? d.nvme_smart_health_information_log?.temperature ?? null;
-        resolve({ tbw, tempC });
+        // Temperature: smartctl normalizes to temperature.current for ATA/NVMe;
+        // NVMe also exposes it in the health log. Both in °C.
+        const t = d.temperature?.current ?? d.nvme_smart_health_information_log?.temperature ?? null;
+        resolve({ tbw, tempC: typeof t === 'number' ? t : null });
       } catch {
         resolve({ tbw: null, tempC: null });
       }
@@ -31,7 +31,7 @@ async function getSmartInfo(device) {
 
 // diskLayout + TBW are slow — cache together, refresh every 30 seconds.
 // lastFetch = 0 so the first metrics call fetches immediately.
-let diskCache = [];  // [{ device, type, size, smartStatus, tbw, temperature }]
+let diskCache = [];  // [{ device, type, size, smartStatus, tbw }]
 let diskCacheLastFetch = 0;
 let _prevDiskStats = null;  // { t, dev: { name: { rd, wr } } } for /proc/diskstats deltas
 async function getCachedDisks() {
@@ -40,14 +40,14 @@ async function getCachedDisks() {
     try {
       const layout = await si.diskLayout();
       diskCache = await Promise.all(layout.map(async d => {
-        const smart = await getSmartInfo(d.device || d.name);
+        const info = await getSmartInfo(d.device || d.name);
         return {
           device: d.device || d.name || '—',
           type:   d.type   || '—',
           size:   d.size   || 0,
           smartStatus: d.smartStatus || 'unknown',
-          tbw: smart.tbw,
-          temperature: smart.tempC,
+          tbw: info.tbw,
+          tempC: info.tempC,
         };
       }));
       diskCacheLastFetch = now;
@@ -240,6 +240,11 @@ export async function getSystemMetrics() {
     disks,
     diskRead: diskIO?.totalReadMBs ?? 0,    // aggregate live read MB/s (whole disks)
     diskWrite: diskIO?.totalWriteMBs ?? 0,  // aggregate live write MB/s
+    // Hottest disk temperature (°C) from SMART, or null if no disk reports it.
+    diskTemp: (() => {
+      const ts = disks.map(d => d.tempC).filter(t => typeof t === 'number');
+      return ts.length ? Math.max(...ts) : null;
+    })(),
     fan,
     memBw,
   };

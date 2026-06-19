@@ -138,7 +138,7 @@
                 <div class="text-caption text-grey">GPU</div>
               </v-col>
 
-              <!-- Memory row: RAM usage, RAM bandwidth, Swap (colocated) -->
+              <!-- Memory row: RAM usage, RAM bandwidth, Swap -->
               <v-col cols="4" class="py-2">
                 <v-progress-circular :model-value="metrics.ram" :size="80" :width="7" color="teal" class="font-weight-bold mb-1">
                   <span v-if="!telemetryUnits" class="text-caption font-weight-bold">{{ metrics.ram }}%</span>
@@ -162,16 +162,18 @@
               </v-col>
 
               <v-col cols="4" class="py-2">
-                <v-progress-circular :model-value="diskReadRing" :size="80" :width="7" color="light-green" class="font-weight-bold mb-1">
-                  <span class="font-weight-bold" style="font-size: 0.62rem; line-height: 1.2; text-align: center;">
-                    {{ fmtRate(metrics.diskRead) }}<br>
-                    <span class="text-grey" style="font-size: 0.55rem;">read</span>
+                <v-progress-circular :model-value="metrics.swap" :size="80" :width="7" :color="metricsRaw.swapTotal ? 'blue-grey-lighten-1' : 'grey'" class="font-weight-bold mb-1">
+                  <span v-if="!metricsRaw.swapTotal" class="text-caption font-weight-bold text-grey">none</span>
+                  <span v-else-if="!telemetryUnits" class="text-caption font-weight-bold">{{ metrics.swap }}%</span>
+                  <span v-else class="font-weight-bold" style="font-size: 0.62rem; line-height: 1.2; text-align: center;">
+                    {{ formatGb(metricsRaw.swapUsed) }}<br>
+                    <span class="text-grey" style="font-size: 0.55rem;">/ {{ formatGb(metricsRaw.swapTotal) }}</span>
                   </span>
                 </v-progress-circular>
-                <div class="text-caption text-grey">Disk Read</div>
+                <div class="text-caption text-grey">Swap</div>
               </v-col>
 
-              <!-- Storage + thermal row: Disk, Temp, Fan (Temp & Fan colocated) -->
+              <!-- Disk I/O row: utilization, live read, live write -->
               <v-col cols="4" class="py-2">
                 <v-progress-circular :model-value="metrics.disk" :size="80" :width="7" color="amber" class="font-weight-bold mb-1">
                   <span v-if="!telemetryUnits" class="text-caption font-weight-bold">{{ metrics.disk }}%</span>
@@ -181,6 +183,35 @@
                   </span>
                 </v-progress-circular>
                 <div class="text-caption text-grey">Disk</div>
+              </v-col>
+
+              <v-col cols="4" class="py-2">
+                <v-progress-circular :model-value="diskReadRing" :size="80" :width="7" color="light-green" class="font-weight-bold mb-1">
+                  <span class="font-weight-bold" style="font-size: 0.62rem; line-height: 1.2; text-align: center;">
+                    {{ fmtRate(metrics.diskRead) }}<br>
+                    <span class="text-grey" style="font-size: 0.55rem;">read</span>
+                  </span>
+                </v-progress-circular>
+                <div class="text-caption text-grey">Disk Read</div>
+              </v-col>
+
+              <v-col cols="4" class="py-2">
+                <v-progress-circular :model-value="diskWriteRing" :size="80" :width="7" color="deep-orange-lighten-1" class="font-weight-bold mb-1">
+                  <span class="font-weight-bold" style="font-size: 0.62rem; line-height: 1.2; text-align: center;">
+                    {{ fmtRate(metrics.diskWrite) }}<br>
+                    <span class="text-grey" style="font-size: 0.55rem;">write</span>
+                  </span>
+                </v-progress-circular>
+                <div class="text-caption text-grey">Disk Write</div>
+              </v-col>
+
+              <!-- Thermal row: disk temp, SoC temp, fan -->
+              <v-col cols="4" class="py-2">
+                <v-progress-circular :model-value="metrics.diskTemp || 0" :size="80" :width="7" :color="metricsRaw.diskTempAvailable ? 'pink-lighten-1' : 'grey'" class="font-weight-bold mb-1">
+                  <span v-if="!metricsRaw.diskTempAvailable" class="text-caption font-weight-bold text-grey">N/A</span>
+                  <span v-else class="text-caption font-weight-bold">{{ metrics.diskTemp }}°C</span>
+                </v-progress-circular>
+                <div class="text-caption text-grey">Disk Temp</div>
               </v-col>
 
               <v-col cols="4" class="py-2">
@@ -214,7 +245,6 @@
                     <th class="text-right">Size</th>
                     <th class="text-right">Read</th>
                     <th class="text-right">Write</th>
-                    <th class="text-right">Temp</th>
                     <th class="text-right">TBW</th>
                     <th class="text-center">SMART</th>
                   </tr>
@@ -226,10 +256,6 @@
                     <td class="text-right">{{ formatGb(d.size) }}</td>
                     <td class="text-right text-grey">{{ d.readMBs != null ? fmtRate(d.readMBs) : '—' }}</td>
                     <td class="text-right text-grey">{{ d.writeMBs != null ? fmtRate(d.writeMBs) : '—' }}</td>
-                    <td class="text-right">
-                      <span v-if="d.temperature == null" class="text-grey">—</span>
-                      <span v-else :class="d.temperature >= 85 ? 'text-error' : d.temperature >= 70 ? 'text-warning' : 'text-grey'">{{ d.temperature }}°C</span>
-                    </td>
                     <td class="text-right text-grey">{{ d.tbw != null ? d.tbw + ' TB' : '—' }}</td>
                     <td class="text-center">
                       <v-chip
@@ -486,13 +512,15 @@ export default {
   components: { AppNav },
   data: () => ({
     user: { username: 'admin', role: 'admin', authProvider: 'local' },
-    metrics: { cpu: 0, npu: 0, gpu: 0, ram: 0, disk: 0, temp: 0, fan: 0, memBw: 0, swap: 0, diskRead: 0, diskWrite: 0 },
-    diskReadMax: 1,  // rolling peak read MB/s — scales the Disk Read gauge ring (self-calibrating)
+    metrics: { cpu: 0, npu: 0, gpu: 0, ram: 0, disk: 0, temp: 0, fan: 0, memBw: 0, swap: 0, diskRead: 0, diskWrite: 0, diskTemp: 0 },
+    diskReadMax: 1,   // rolling peak read MB/s — self-calibrates the Disk Read gauge ring
+    diskWriteMax: 1,  // rolling peak write MB/s — self-calibrates the Disk Write gauge ring
     metricsRaw: {
       ramUsed: 0, ramTotal: 0, diskUsed: 0, diskTotal: 0,
       fanAvailable: false, fanRpm: null,
       memBwAvailable: false, memBwFreqMhz: null,
       swapUsed: 0, swapTotal: 0,
+      diskTempAvailable: false,
     },
     disks: [],
     telemetryUnits: false,
@@ -568,6 +596,9 @@ export default {
     // disk has no meaningful fixed max throughput to scale against).
     diskReadRing() {
       return this.diskReadMax > 0 ? Math.min(100, (this.metrics.diskRead / this.diskReadMax) * 100) : 0;
+    },
+    diskWriteRing() {
+      return this.diskWriteMax > 0 ? Math.min(100, (this.metrics.diskWrite / this.diskWriteMax) * 100) : 0;
     },
   },
   mounted() {
@@ -738,10 +769,14 @@ export default {
           this.metrics.swap = data.swap?.percentage ?? 0;
           this.metricsRaw.swapUsed = data.swap?.used ?? 0;
           this.metricsRaw.swapTotal = data.swap?.total ?? 0;
-          // Live disk throughput (aggregate MB/s); ring scales to the session peak.
+          // Live disk throughput (aggregate MB/s); each ring scales to its session peak.
           this.metrics.diskRead = data.diskRead ?? 0;
           this.metrics.diskWrite = data.diskWrite ?? 0;
           if (this.metrics.diskRead > this.diskReadMax) this.diskReadMax = this.metrics.diskRead;
+          if (this.metrics.diskWrite > this.diskWriteMax) this.diskWriteMax = this.metrics.diskWrite;
+          // Disk temperature (°C from SMART); null when no disk reports it.
+          this.metricsRaw.diskTempAvailable = data.diskTemp != null;
+          this.metrics.diskTemp = data.diskTemp ?? 0;
           if (data.stats) {
             this.stats = data.stats;
           }
