@@ -652,7 +652,20 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
         int n_past = 0;
         if (!loadCachePath.empty() && fn_state_load) {
             size_t tokens_loaded = 0;
-            fn_state_load(g_ctx, loadCachePath.c_str(), 0, nullptr, 0, &tokens_loaded);
+            size_t capacity = 0;
+            std::FILE* f = std::fopen(loadCachePath.c_str(), "rb");
+            if (f) {
+                if (std::fseek(f, 8, SEEK_SET) == 0) {
+                    uint32_t n_tokens = 0;
+                    if (std::fread(&n_tokens, sizeof(n_tokens), 1, f) == 1) {
+                        capacity = n_tokens;
+                    }
+                }
+                std::fclose(f);
+            }
+            if (capacity == 0) capacity = 8192; // fallback
+            std::vector<llama_token> tokens_loaded_buf(capacity);
+            fn_state_load(g_ctx, loadCachePath.c_str(), 0, tokens_loaded_buf.data(), tokens_loaded_buf.size(), &tokens_loaded);
             if (tokens_loaded > 0) n_past = tokens_loaded;
             else if (fn_kv_used) n_past = fn_kv_used(g_ctx);
         } else if (keepHistory && fn_kv_used) {
