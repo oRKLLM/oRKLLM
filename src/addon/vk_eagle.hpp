@@ -201,7 +201,8 @@ private:
             create_pipelines();
             create_descriptor_pool();
             ready_ = true;
-        } catch (const std::exception&) {
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "[Eagle-3] VkEagleDraftHead::init failed: %s\n", e.what());
             cleanup();
         }
     }
