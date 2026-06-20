@@ -21,6 +21,8 @@ import { getDramStatus, getCpuStatus } from '../monitor.js';
 import { getState as getPerfState } from '../perf_governor.js';
 import { fetchBaseEmbeddings, extractLocalEmbeddings, localBaseHasEmbeddings } from '../hf_embeddings.js';
 import { convertPtToSafetensors } from '../pt_to_safetensors.js';
+import { activeStreams } from '../streams.js';
+
 
 function getNetworkAddresses() {
   const interfaces = os.networkInterfaces();
@@ -250,6 +252,7 @@ export default async function adminRoutes(fastify, options) {
     status.dram = dram ? { ...dram, management: getPerfState() } : null;
     const cpuFreq = getCpuStatus(); // perf-cluster CPU governor/clock (prefill is CPU-op bound)
     status.cpuFreq = cpuFreq ? { ...cpuFreq, management: getPerfState() } : null;
+    status.activeStreams = Array.from(activeStreams.keys());
     return status;
   });
 

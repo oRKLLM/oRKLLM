@@ -23,9 +23,17 @@ test.afterAll(() => {
 
 async function login(page) {
   await page.goto('/login');
-  await page.locator('input[type="text"]').fill(ADMIN_USER);
-  await page.locator('input[type="password"]').fill(ADMIN_PASS);
-  await page.click('button:has-text("Sign In")');
+  await page.waitForTimeout(500); // let any redirects settle
+  if (page.url().includes('/setup')) {
+    await page.locator('input[type="text"]').fill(ADMIN_USER);
+    await page.locator('input[type="password"]').first().fill(ADMIN_PASS);
+    await page.locator('input[type="password"]').nth(1).fill(ADMIN_PASS);
+    await page.click('button:has-text("Initialize Server")');
+  } else {
+    await page.locator('input[type="text"]').fill(ADMIN_USER);
+    await page.locator('input[type="password"]').fill(ADMIN_PASS);
+    await page.click('button:has-text("Sign In")');
+  }
   await expect(page).toHaveURL(/http:\/\/127.0.0.1:18000\/?$/, { timeout: 8000 });
 }
 

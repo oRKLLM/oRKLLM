@@ -45,6 +45,9 @@ export default {
 html, body {
   margin: 0;
   padding: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
   background-color: rgb(var(--v-theme-background)) !important;
   font-family: 'Roboto', sans-serif;
 }

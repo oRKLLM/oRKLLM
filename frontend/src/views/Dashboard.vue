@@ -324,7 +324,7 @@
               <div>
                 <div class="text-caption text-grey mb-1">OpenAI API Endpoint</div>
                 <div class="d-flex align-center bg-slate-page rounded pa-2 border">
-                  <span class="text-caption text-truncate font-mono select-all">http://{{ selectedHost }}:{{ port }}/v1</span>
+                  <span class="text-caption text-truncate font-mono select-all" style="min-width: 0;">http://{{ selectedHost }}:{{ port }}/v1</span>
                   <v-spacer></v-spacer>
                   <v-btn icon size="x-small" variant="text" color="primary" @click="copyToClipboard(`http://${selectedHost}:${port}/v1`)">
                     <v-icon size="16">mdi-content-copy</v-icon>
@@ -334,7 +334,7 @@
               <div>
                 <div class="text-caption text-grey mb-1">Base HTTP Server</div>
                 <div class="d-flex align-center bg-slate-page rounded pa-2 border">
-                  <span class="text-caption text-truncate font-mono select-all">http://{{ selectedHost }}:{{ port }}</span>
+                  <span class="text-caption text-truncate font-mono select-all" style="min-width: 0;">http://{{ selectedHost }}:{{ port }}</span>
                   <v-spacer></v-spacer>
                   <v-btn icon size="x-small" variant="text" color="primary" @click="copyToClipboard(`http://${selectedHost}:${port}`)">
                     <v-icon size="16">mdi-content-copy</v-icon>

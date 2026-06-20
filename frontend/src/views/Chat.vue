@@ -473,6 +473,14 @@ export default {
           chatState.selectedModel = data.model;
           chatState.activeModel = data.model;
           await fetchConvs(data.model);
+
+          // Restore last-active conversation if available in localStorage
+          if (typeof localStorage !== 'undefined') {
+            const lastConvId = localStorage.getItem('orkllm-active-conversation-id');
+            if (lastConvId && chatState.activeConversationId !== lastConvId) {
+              await loadConv(lastConvId);
+            }
+          }
         }
       } catch (e) {}
     },

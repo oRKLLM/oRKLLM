@@ -9,6 +9,8 @@ import { cacheKey, getCachePath, putCachePath, tmpCachePath, isCacheEnabled, get
 import { traceInference } from '../langfuse.js';
 import { getAggregatedTools } from '../mcp.js';
 import { resolveWithTools } from '../mcp_inference.js';
+import { activeStreams } from '../streams.js';
+
 
 
 // Rough token estimate: ~4 chars per token
@@ -143,6 +145,7 @@ export default async function apiRoutes(fastify, options) {
       max_tokens = 512,
       mcp_tools = undefined,
       no_cache = false,
+      conversation_id = undefined,
     } = request.body || {};
 
     // Per-request MCP tool selection (sent by the Chat page's tool picker).
@@ -401,6 +404,33 @@ export default async function apiRoutes(fastify, options) {
       };
       const stopHeartbeat = () => { if (heartbeat) { clearTimeout(heartbeat); heartbeat = null; } };
 
+      let session = null;
+      if (conversation_id) {
+        const existing = activeStreams.get(conversation_id);
+        if (existing) {
+          if (existing.abortTimer) clearTimeout(existing.abortTimer);
+          for (const c of existing.clients) {
+            try { c.end(); } catch {}
+          }
+          existing.clients.clear();
+          activeStreams.delete(conversation_id);
+        }
+        session = {
+          conversationId: conversation_id,
+          model,
+          created,
+          chunks: [],
+          clients: new Set(),
+          finished: false,
+          perf: null,
+          specDecode: null,
+          error: null,
+          abortTimer: null
+        };
+        activeStreams.set(conversation_id, session);
+        session.clients.add(reply.raw);
+      }
+
       // Abort the worker if the client disconnects mid-stream. The Chat "Stop" button
       // aborts the fetch → the SSE socket closes; without this the worker keeps
       // decoding against a dead socket until max_new_tokens (or a model unload). Only
@@ -409,10 +439,27 @@ export default async function apiRoutes(fastify, options) {
       let genFinished = false;
       request.raw.on('close', () => {
         if (genFinished) return;
-        genFinished = true;
         stopHeartbeat();
-        console.log('[Chat] client disconnected mid-stream — aborting generation');
-        pool.abort().catch(() => {});
+
+        if (session) {
+          session.clients.delete(reply.raw);
+          console.log(`[Chat] client disconnected from session ${conversation_id}`);
+
+          if (session.clients.size === 0) {
+            console.log(`[Chat] no clients connected to session ${conversation_id} — starting abort timer`);
+            session.abortTimer = setTimeout(() => {
+              if (genFinished) return;
+              genFinished = true;
+              console.log(`[Chat] abort timer expired for session ${conversation_id} — aborting generation`);
+              pool.abort().catch(() => {});
+              activeStreams.delete(conversation_id);
+            }, 15000); // 15 seconds grace period
+          }
+        } else {
+          genFinished = true;
+          console.log('[Chat] client disconnected mid-stream (no session) — aborting generation');
+          pool.abort().catch(() => {});
+        }
       });
 
       await traceInference(traceParams, async (gen) => {
@@ -425,7 +472,19 @@ export default async function apiRoutes(fastify, options) {
             id: completionId, object: 'chat.completion.chunk', created, model,
             choices: [{ index: 0, delta: { content: text }, finish_reason: null }]
           };
-          reply.raw.write(`data: ${JSON.stringify(chunk)}\n\n`);
+          if (session) {
+            session.chunks.push(chunk);
+            if (reply.raw.writable && !reply.raw.destroyed) {
+              try { reply.raw.write(`data: ${JSON.stringify(chunk)}\n\n`); } catch {}
+            }
+            for (const client of session.clients) {
+              if (client !== reply.raw) {
+                try { client.write(`data: ${JSON.stringify(chunk)}\n\n`); } catch {}
+              }
+            }
+          } else {
+            reply.raw.write(`data: ${JSON.stringify(chunk)}\n\n`);
+          }
           scheduleHeartbeat();
         };
         const onToken = (msg) => { if (msg.text) emit(trimmer.feed(msg.text)); };
@@ -484,14 +543,63 @@ export default async function apiRoutes(fastify, options) {
             specDecode
           };
           stopHeartbeat();
-          reply.raw.write(`data: ${JSON.stringify(stopChunk)}\n\n`);
-          reply.raw.write('data: [DONE]\n\n');
-          reply.raw.end();
+
+          if (session) {
+            session.chunks.push(stopChunk);
+            session.finished = true;
+            session.perf = finalResult.perf;
+            session.specDecode = specDecode;
+            if (reply.raw.writable && !reply.raw.destroyed) {
+              try {
+                reply.raw.write(`data: ${JSON.stringify(stopChunk)}\n\n`);
+                reply.raw.write('data: [DONE]\n\n');
+                reply.raw.end();
+              } catch {}
+            }
+            for (const client of session.clients) {
+              if (client !== reply.raw) {
+                try {
+                  client.write(`data: ${JSON.stringify(stopChunk)}\n\n`);
+                  client.write('data: [DONE]\n\n');
+                  client.end();
+                } catch {}
+              }
+            }
+            session.clients.clear();
+            activeStreams.delete(conversation_id);
+          } else {
+            reply.raw.write(`data: ${JSON.stringify(stopChunk)}\n\n`);
+            reply.raw.write('data: [DONE]\n\n');
+            reply.raw.end();
+          }
         } catch (err) {
           genFinished = true; // failed/stopped — don't let the error-path close abort again
           stopHeartbeat();
-          reply.raw.write(`data: ${JSON.stringify({ error: { message: err.message, type: 'invalid_request_error' } })}\n\n`);
-          reply.raw.end();
+          const errChunk = { error: { message: err.message, type: 'invalid_request_error' } };
+          if (session) {
+            session.chunks.push(errChunk);
+            session.finished = true;
+            session.error = err;
+            if (reply.raw.writable && !reply.raw.destroyed) {
+              try {
+                reply.raw.write(`data: ${JSON.stringify(errChunk)}\n\n`);
+                reply.raw.end();
+              } catch {}
+            }
+            for (const client of session.clients) {
+              if (client !== reply.raw) {
+                try {
+                  client.write(`data: ${JSON.stringify(errChunk)}\n\n`);
+                  client.end();
+                } catch {}
+              }
+            }
+            session.clients.clear();
+            activeStreams.delete(conversation_id);
+          } else {
+            reply.raw.write(`data: ${JSON.stringify(errChunk)}\n\n`);
+            reply.raw.end();
+          }
           throw err;
         }
       }).catch(() => {});
