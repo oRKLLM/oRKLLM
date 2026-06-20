@@ -101,7 +101,12 @@ public:
     std::vector<int32_t> forward(const float* hidden, uint32_t embd_size,
                                  uint32_t num_tokens, uint32_t k,
                                  int32_t last_token_id, uint32_t ctx_len) {
-        if (!ready_ || embd_size != EMBD || num_tokens == 0) return {};
+        if (!ready_ || num_tokens == 0) return {};
+        if (embd_size != EMBD) {
+            std::fprintf(stderr, "[Eagle-3] forward failed: embedding size mismatch (model has %u, draft head has %u)\n",
+                         embd_size, EMBD);
+            return {};
+        }
         try { return run_draft(hidden, num_tokens, k, last_token_id, ctx_len); }
         catch (const std::exception& e) {
             std::fprintf(stderr, "[Eagle-3] forward failed: %s\n", e.what());
@@ -626,17 +631,29 @@ private:
         size_t data_start = 0;
         auto t = parse_safetensors_header(f, data_start);
 
-        auto need = [&](const char* k) -> TensorInfo& {
+        auto need = [&](const std::string& k) -> TensorInfo& {
             auto it = t.find(k);
-            if (it == t.end()) throw std::runtime_error(std::string("missing tensor: ") + k);
-            return it->second;
+            if (it != t.end()) return it->second;
+
+            // If the key starts with "midlayer.", try stripping it
+            if (k.rfind("midlayer.", 0) == 0) {
+                std::string fallback = k.substr(9); // "midlayer." length is 9
+                it = t.find(fallback);
+                if (it != t.end()) return it->second;
+            } else {
+                // If it doesn't start with "midlayer.", try adding it
+                std::string fallback = "midlayer." + k;
+                it = t.find(fallback);
+                if (it != t.end()) return it->second;
+            }
+            throw std::runtime_error("missing tensor: " + k);
         };
 
         // ── Derive model dimensions from the head's tensor shapes ──────────────
         // (no hard-coding to one head; safetensors weights are [out, in]).
-        auto dim = [&](const char* k, int axis) -> uint32_t {
+        auto dim = [&](const std::string& k, int axis) -> uint32_t {
             TensorInfo& ti = need(k);
-            if ((int)ti.shape.size() <= axis) throw std::runtime_error(std::string(k) + ": unexpected rank");
+            if ((int)ti.shape.size() <= axis) throw std::runtime_error(k + ": unexpected rank");
             return (uint32_t)ti.shape[axis];
         };
         EMBD        = dim("fc.weight", 0);                              // fc: [EMBD, 3*EMBD]
