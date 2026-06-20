@@ -156,4 +156,5 @@ export function abortBenchmark() {
   }
   benchState.running = false;
   benchState.benchOutput += '\n[Benchmark aborted]';
+  fetch('/api/admin/abort', { method: 'POST' }).catch(() => {});
 }
