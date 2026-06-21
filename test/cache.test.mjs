@@ -40,8 +40,8 @@ describe('KV Prefix Cache Mirroring', () => {
     putCachePath(key, tmpFile, 'rkllm', 'off');
 
     // Verify file exists in both hot and cold directories (mirroring)
-    const hotFile = path.join(tempCacheDir, 'hot', `${key}.rkllmcache`);
-    const coldFile = path.join(tempCacheDir, 'cold', `${key}.rkllmcache`);
+    const hotFile = path.join(tempCacheDir, 'hot', 'rkllm', `${key}.rkllmcache`);
+    const coldFile = path.join(tempCacheDir, 'cold', 'rkllm', `${key}.rkllmcache`);
 
     assert.ok(fs.existsSync(hotFile), 'File should exist in hot cache');
     assert.ok(fs.existsSync(coldFile), 'File should be mirrored to cold cache');
@@ -67,8 +67,8 @@ describe('KV Prefix Cache Mirroring', () => {
 
     putCachePath(key, tmpFile, 'rkllm', 'off');
 
-    const hotFile = path.join(tempCacheDir, 'hot', `${key}.rkllmcache`);
-    const coldFile = path.join(tempCacheDir, 'cold', `${key}.rkllmcache`);
+    const hotFile = path.join(tempCacheDir, 'hot', 'rkllm', `${key}.rkllmcache`);
+    const coldFile = path.join(tempCacheDir, 'cold', 'rkllm', `${key}.rkllmcache`);
 
     assert.ok(fs.existsSync(hotFile), 'File should exist in hot cache');
     assert.ok(!fs.existsSync(coldFile), 'Mirroring should be skipped due to insufficient space');
@@ -93,8 +93,8 @@ describe('KV Prefix Cache Mirroring', () => {
 
     putCachePath(key, tmpFile, 'rkllm', 'off');
 
-    const initialHotFile = path.join(tempCacheDir, 'hot', `${key}.rkllmcache`);
-    const initialColdFile = path.join(tempCacheDir, 'cold', `${key}.rkllmcache`);
+    const initialHotFile = path.join(tempCacheDir, 'hot', 'rkllm', `${key}.rkllmcache`);
+    const initialColdFile = path.join(tempCacheDir, 'cold', 'rkllm', `${key}.rkllmcache`);
     assert.ok(!fs.existsSync(initialHotFile), 'Should not exist in hot cache initially');
     assert.ok(fs.existsSync(initialColdFile), 'Should exist in cold cache initially');
 
@@ -102,11 +102,11 @@ describe('KV Prefix Cache Mirroring', () => {
     dbSetSetting('cache_hot_limit_mb', '50');
 
     // Retrieve via getCachePath (promotes cold -> hot)
-    const foundPath = await getCachePath(key);
+    const foundPath = await getCachePath(key, 'rkllm');
     assert.ok(foundPath, 'Should find cache path');
 
-    const hotFile = path.join(tempCacheDir, 'hot', `${key}.rkllmcache`);
-    const coldFile = path.join(tempCacheDir, 'cold', `${key}.rkllmcache`);
+    const hotFile = path.join(tempCacheDir, 'hot', 'rkllm', `${key}.rkllmcache`);
+    const coldFile = path.join(tempCacheDir, 'cold', 'rkllm', `${key}.rkllmcache`);
 
     assert.ok(fs.existsSync(hotFile), 'Should exist in hot cache after promotion');
     assert.ok(fs.existsSync(coldFile), 'Should remain/be mirrored in cold cache after promotion');
@@ -129,13 +129,13 @@ describe('KV Prefix Cache Mirroring', () => {
 
     putCachePath(key, tmpFile, 'rkllm', 'off');
 
-    const hotFile = path.join(tempCacheDir, 'hot', `${key}.rkllmcache`);
-    const coldFile = path.join(tempCacheDir, 'cold', `${key}.rkllmcache`);
+    const hotFile = path.join(tempCacheDir, 'hot', 'rkllm', `${key}.rkllmcache`);
+    const coldFile = path.join(tempCacheDir, 'cold', 'rkllm', `${key}.rkllmcache`);
     assert.ok(!fs.existsSync(hotFile), 'Should not exist in hot cache');
     assert.ok(fs.existsSync(coldFile), 'Should exist in cold cache');
 
     // Retrieve via getCachePath
-    const foundPath = await getCachePath(key);
+    const foundPath = await getCachePath(key, 'rkllm');
     assert.equal(foundPath, coldFile, 'Should return cold cache path directly');
     assert.ok(!fs.existsSync(hotFile), 'Should still not exist in hot cache');
     assert.ok(fs.existsSync(coldFile), 'Should still exist in cold cache');
@@ -171,8 +171,8 @@ describe('KV Prefix Cache Mirroring', () => {
     // Cold cache entries should have evicted coldkey1 and kept coldkey2
     assert.equal(stats.cold.entries, 1);
     
-    const coldFile1 = path.join(tempCacheDir, 'cold', `${key1}.rkllmcache`);
-    const coldFile2 = path.join(tempCacheDir, 'cold', `${key2}.rkllmcache`);
+    const coldFile1 = path.join(tempCacheDir, 'cold', 'rkllm', `${key1}.rkllmcache`);
+    const coldFile2 = path.join(tempCacheDir, 'cold', 'rkllm', `${key2}.rkllmcache`);
     assert.ok(!fs.existsSync(coldFile1), 'coldkey1 should be evicted');
     assert.ok(fs.existsSync(coldFile2), 'coldkey2 should remain');
   });
@@ -191,8 +191,8 @@ describe('KV Prefix Cache Mirroring', () => {
     fs.writeFileSync(tmpFile, 'h'.repeat(1500 * 1024)); // 1.5 MB
     putCachePath(key, tmpFile, 'rkllm', 'off');
 
-    const hotFile = path.join(tempCacheDir, 'hot', `${key}.rkllmcache`);
-    const coldFile = path.join(tempCacheDir, 'cold', `${key}.rkllmcache`);
+    const hotFile = path.join(tempCacheDir, 'hot', 'rkllm', `${key}.rkllmcache`);
+    const coldFile = path.join(tempCacheDir, 'cold', 'rkllm', `${key}.rkllmcache`);
     assert.ok(!fs.existsSync(hotFile));
     assert.ok(fs.existsSync(coldFile));
 
@@ -200,12 +200,73 @@ describe('KV Prefix Cache Mirroring', () => {
     dbSetSetting('cache_hot_limit_mb', '1');
 
     // Retrieve via getCachePath (it will attempt to promote, but file is 1.5MB which is > 1MB, so it immediately evicts from hot)
-    const foundPath = await getCachePath(key);
+    const foundPath = await getCachePath(key, 'rkllm');
     
     // It should seamlessly return the coldFile path and not crash or return a non-existent hotFile path
     assert.equal(foundPath, coldFile, 'Should fall back to cold cache path');
     assert.ok(!fs.existsSync(hotFile), 'Should not exist in hot cache because it was evicted');
     assert.ok(fs.existsSync(coldFile), 'Should still exist in cold cache');
+  });
+
+  test('supports model runtime-specific directory isolation', async () => {
+    clearAllCache();
+    const rkllmKey = 'rkllm_test_isolated';
+    const llamaKey = 'llama_test_isolated';
+
+    // Write RKLLM cache
+    const tmpRkllm = path.join(tempCacheDir, 'tmp_rkllm.rkllmcache');
+    fs.writeFileSync(tmpRkllm, 'rkllm data'.padEnd(100 * 1024, 'x'));
+    putCachePath(rkllmKey, tmpRkllm, 'rkllm', 'off');
+
+    // Write LLAMA cache
+    const tmpLlama = path.join(tempCacheDir, 'tmp_llama.llamacache');
+    fs.writeFileSync(tmpLlama, 'llama GGUF data'.padEnd(100 * 1024, 'y'));
+    putCachePath(llamaKey, tmpLlama, 'llama', 'off');
+
+    const hotRkllm = path.join(tempCacheDir, 'hot', 'rkllm', `${rkllmKey}.rkllmcache`);
+    const coldRkllm = path.join(tempCacheDir, 'cold', 'rkllm', `${rkllmKey}.rkllmcache`);
+    const hotLlama = path.join(tempCacheDir, 'hot', 'llama', `${llamaKey}.llamacache`);
+    const coldLlama = path.join(tempCacheDir, 'cold', 'llama', `${llamaKey}.llamacache`);
+
+    assert.ok(fs.existsSync(hotRkllm), 'RKLLM file should exist in hot/rkllm');
+    assert.ok(fs.existsSync(coldRkllm), 'RKLLM file should be mirrored in cold/rkllm');
+    assert.ok(fs.existsSync(hotLlama), 'LLAMA file should exist in hot/llama');
+    assert.ok(fs.existsSync(coldLlama), 'LLAMA file should be mirrored in cold/llama');
+
+    // Check sizes separately
+    const stats = getCacheStats();
+    assert.ok(stats.hot.sizeMB > 0);
+    assert.ok(stats.cold.sizeMB > 0);
+  });
+
+  test('successfully reads and migrates legacy cache files from roots to runtime subdirectories', async () => {
+    clearAllCache();
+    const legacyKey = 'legacykey123';
+
+    // Simulate an existing legacy file inside legacy hot root directory
+    const legacyHotDir = path.join(tempCacheDir, 'hot');
+    if (!fs.existsSync(legacyHotDir)) fs.mkdirSync(legacyHotDir, { recursive: true });
+    const legacyHotPath = path.join(legacyHotDir, `${legacyKey}.rkllmcache`);
+    fs.writeFileSync(legacyHotPath, 'legacy cache data');
+
+    // Also simulate an entry in the LRU for the legacy file
+    const lru = { hot: { [legacyKey]: Date.now() }, cold: {} };
+    fs.writeFileSync(path.join(tempCacheDir, 'lru.json'), JSON.stringify(lru), 'utf8');
+
+    // Query getCachePath - should find, promote, and migrate the legacy file
+    const resolvedPath = await getCachePath(legacyKey, 'rkllm');
+    
+    const newHotPath = path.join(tempCacheDir, 'hot', 'rkllm', `${legacyKey}.rkllmcache`);
+    const newColdPath = path.join(tempCacheDir, 'cold', 'rkllm', `${legacyKey}.rkllmcache`);
+
+    assert.equal(resolvedPath, newHotPath, 'Should return the migrated hot path');
+    assert.ok(fs.existsSync(newHotPath), 'File should be migrated to hot/rkllm');
+    assert.ok(fs.existsSync(newColdPath), 'File should be mirrored to cold/rkllm during hot promotion/eviction workflow');
+    assert.ok(!fs.existsSync(legacyHotPath), 'Legacy file in root hot/ should be deleted after migration');
+
+    const stats = getCacheStats();
+    assert.equal(stats.hot.entries, 1);
+    assert.equal(stats.cold.entries, 1);
   });
 });
 

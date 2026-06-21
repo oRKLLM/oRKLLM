@@ -65,8 +65,20 @@ function writeLru(cacheDir, lru) {
 function dirSizeMB(dir) {
   if (!fs.existsSync(dir)) return 0;
   let total = 0;
-  for (const f of fs.readdirSync(dir)) {
-    try { total += fs.statSync(path.join(dir, f)).size; } catch {}
+  const items = [dir];
+  while (items.length > 0) {
+    const current = items.pop();
+    try {
+      const stat = fs.statSync(current);
+      if (stat.isDirectory()) {
+        const children = fs.readdirSync(current);
+        for (const child of children) {
+          items.push(path.join(current, child));
+        }
+      } else if (stat.isFile()) {
+        total += stat.size;
+      }
+    } catch {}
   }
   return total / (1024 * 1024);
 }
@@ -109,7 +121,16 @@ function evictLru(tier, tierDir, limitMB, lru, overflowDir, overflowTier, overfl
   }
 }
 
-function findCacheFile(dir, key) {
+function getRuntimeDirs(cfg, runtime) {
+  const r = (runtime || 'rkllm').toLowerCase();
+  return {
+    hotDir: path.join(cfg.cacheDir, 'hot', r),
+    coldDir: path.join(cfg.cacheDir, 'cold', r),
+  };
+}
+
+function findCacheFileInDir(dir, key) {
+  if (!fs.existsSync(dir)) return null;
   for (const ext of CACHE_EXTS) {
     const f = path.join(dir, key + ext);
     if (fs.existsSync(f)) return f;
@@ -117,21 +138,104 @@ function findCacheFile(dir, key) {
   return null;
 }
 
-function mirrorToColdIfSpace(key, cfg) {
+function findInHot(cfg, key) {
+  for (const r of ['llama', 'rkllm']) {
+    const p = findCacheFileInDir(path.join(cfg.cacheDir, 'hot', r), key);
+    if (p) return p;
+  }
+  return findCacheFileInDir(path.join(cfg.cacheDir, 'hot'), key);
+}
+
+function findInCold(cfg, key) {
+  for (const r of ['llama', 'rkllm']) {
+    const p = findCacheFileInDir(path.join(cfg.cacheDir, 'cold', r), key);
+    if (p) return p;
+  }
+  return findCacheFileInDir(path.join(cfg.cacheDir, 'cold'), key);
+}
+
+function findCacheFile(cfg, key, runtime = null) {
+  const runtimes = runtime ? [runtime.toLowerCase()] : ['llama', 'rkllm'];
+  
+  // 1. Search runtime-specific folders
+  for (const r of runtimes) {
+    // Check hot runtime-specific
+    const hotDir = path.join(cfg.cacheDir, 'hot', r);
+    for (const ext of CACHE_EXTS) {
+      const p = path.join(hotDir, key + ext);
+      if (fs.existsSync(p)) {
+        return { path: p, runtime: r, tier: 'hot', isLegacy: false };
+      }
+    }
+    // Check cold runtime-specific
+    const coldDir = path.join(cfg.cacheDir, 'cold', r);
+    for (const ext of CACHE_EXTS) {
+      const p = path.join(coldDir, key + ext);
+      if (fs.existsSync(p)) {
+        return { path: p, runtime: r, tier: 'cold', isLegacy: false };
+      }
+    }
+  }
+
+  // Fallback to checking other runtimes if a specific one was requested but not found
+  if (runtime) {
+    const otherRuntimes = ['llama', 'rkllm'].filter(r => r !== runtime.toLowerCase());
+    for (const r of otherRuntimes) {
+      const hotDir = path.join(cfg.cacheDir, 'hot', r);
+      for (const ext of CACHE_EXTS) {
+        const p = path.join(hotDir, key + ext);
+        if (fs.existsSync(p)) {
+          return { path: p, runtime: r, tier: 'hot', isLegacy: false };
+        }
+      }
+      const coldDir = path.join(cfg.cacheDir, 'cold', r);
+      for (const ext of CACHE_EXTS) {
+        const p = path.join(coldDir, key + ext);
+        if (fs.existsSync(p)) {
+          return { path: p, runtime: r, tier: 'cold', isLegacy: false };
+        }
+      }
+    }
+  }
+
+  // 2. Search legacy roots
+  const legacyHotDir = path.join(cfg.cacheDir, 'hot');
+  for (const ext of CACHE_EXTS) {
+    const p = path.join(legacyHotDir, key + ext);
+    if (fs.existsSync(p) && fs.statSync(p).isFile()) {
+      const resolvedRuntime = ext === '.llamacache' ? 'llama' : 'rkllm';
+      return { path: p, runtime: resolvedRuntime, tier: 'hot', isLegacy: true };
+    }
+  }
+
+  const legacyColdDir = path.join(cfg.cacheDir, 'cold');
+  for (const ext of CACHE_EXTS) {
+    const p = path.join(legacyColdDir, key + ext);
+    if (fs.existsSync(p) && fs.statSync(p).isFile()) {
+      const resolvedRuntime = ext === '.llamacache' ? 'llama' : 'rkllm';
+      return { path: p, runtime: resolvedRuntime, tier: 'cold', isLegacy: true };
+    }
+  }
+
+  return { path: null, runtime: null, tier: null, isLegacy: false };
+}
+
+function mirrorToColdIfSpace(key, cfg, runtime = null) {
   if (cfg.coldLimitMB <= 0) return;
-  const hotDir = path.join(cfg.cacheDir, 'hot');
-  const coldDir = path.join(cfg.cacheDir, 'cold');
-  const hotFile = findCacheFile(hotDir, key);
-  if (!hotFile) return;
+  
+  const res = findCacheFile(cfg, key, runtime);
+  if (!res.path || res.tier !== 'hot') return;
+
+  const activeRuntime = res.runtime;
+  const { hotDir, coldDir } = getRuntimeDirs(cfg, activeRuntime);
+  const hotFile = res.path;
 
   try {
     const stat = fs.statSync(hotFile);
     const sizeMB = stat.size / (1024 * 1024);
 
-    // Check if the file is already in coldDir
-    const coldFile = findCacheFile(coldDir, key);
-    if (coldFile) {
-      // It is already mirrored! Just make sure LRU is updated.
+    // Check if already mirrored
+    if (findInCold(cfg, key)) {
       const lru = readLru(cfg.cacheDir);
       lru.cold = lru.cold || {};
       lru.cold[key] = Date.now();
@@ -182,6 +286,7 @@ export async function resolveSegmentsCache(modelName, segments) {
     return { keys: [], hitIndex: -1, loadCachePath: null, missedSegments: [] };
   }
 
+  const runtime = modelName.toLowerCase().endsWith('.gguf') ? 'llama' : 'rkllm';
   const keys = [];
   let currentKey = modelName;
 
@@ -203,7 +308,7 @@ export async function resolveSegmentsCache(modelName, segments) {
   let hitIndex = -1;
   let loadCachePath = null;
   for (let i = segments.length - 1; i >= 0; i--) {
-    const path = await getCachePath(keys[i]);
+    const path = await getCachePath(keys[i], runtime);
     if (path) {
       hitIndex = i;
       loadCachePath = path;
@@ -215,70 +320,111 @@ export async function resolveSegmentsCache(modelName, segments) {
   return { keys, hitIndex, loadCachePath, missedSegments };
 }
 
-
-export async function getCachePath(key) {
+export async function getCachePath(key, runtime = null) {
   const cfg = settings();
   if (!cfg.enabled) return null;
 
-  const hotDir  = path.join(cfg.cacheDir, 'hot');
-  const coldDir = path.join(cfg.cacheDir, 'cold');
   const lru = readLru(cfg.cacheDir);
+  const res = findCacheFile(cfg, key, runtime);
+  if (!res.path) return null;
 
-  let found = findCacheFile(hotDir, key);
-  if (!found) {
-    const coldFound = findCacheFile(coldDir, key);
-    if (coldFound) {
-      if (cfg.hotLimitMB <= 0) {
-        // Hot cache is disabled. Read directly from SSD/cold cache.
-        found = coldFound;
-        lru.cold = lru.cold || {};
-        lru.cold[key] = Date.now();
-        writeLru(cfg.cacheDir, lru);
-        console.log(`[Cache] Using SSD cold cache directly for "${key}" (hot cache disabled)`);
-      } else {
-        // Promote cold → hot (keep same extension)
-        ensureDir(hotDir);
-        const hotDest = path.join(hotDir, path.basename(coldFound));
+  const activeRuntime = res.runtime;
+  const { hotDir, coldDir } = getRuntimeDirs(cfg, activeRuntime);
+
+  let found = null;
+
+  if (res.isLegacy) {
+    // Migrate legacy file to the new runtime-specific folder
+    if (res.tier === 'hot') {
+      ensureDir(hotDir);
+      const dest = path.join(hotDir, path.basename(res.path));
+      try {
+        fs.renameSync(res.path, dest);
+        found = dest;
+      } catch {
         try {
-          // Optimization: copy instead of rename+copy-back to avoid redundant SSD writes
-          fs.copyFileSync(coldFound, hotDest);
-          found = hotDest;
+          fs.copyFileSync(res.path, dest);
+          fs.unlinkSync(res.path);
+          found = dest;
         } catch {
-          found = coldFound;
+          found = res.path;
         }
-        delete lru.cold[key];
-        lru.hot[key] = Date.now();
-        
-        // Evict oldest hot → overflow to cold, then evict cold if needed
-        evictLru('hot', hotDir, cfg.hotLimitMB, lru, coldDir, 'cold', cfg.coldLimitMB);
-        
-        // Ensure the cold entry is tracked since it remains on SSD
-        if (fs.existsSync(coldFound)) {
-          lru.cold[key] = Date.now();
-        }
-
-        // Keep LRU synchronized by removing any stale keys
-        for (const k of Object.keys(lru.hot)) {
-          if (!findCacheFile(hotDir, k)) delete lru.hot[k];
-        }
-        lru.cold = lru.cold || {};
-        for (const k of Object.keys(lru.cold)) {
-          if (!findCacheFile(coldDir, k)) delete lru.cold[k];
-        }
-
-        writeLru(cfg.cacheDir, lru);
       }
+      lru.hot[key] = Date.now();
+      evictLru('hot', hotDir, cfg.hotLimitMB, lru, coldDir, 'cold', cfg.coldLimitMB);
+      writeLru(cfg.cacheDir, lru);
+      mirrorToColdIfSpace(key, cfg, activeRuntime);
+      const updatedLru = readLru(cfg.cacheDir);
+      Object.assign(lru, updatedLru);
+    } else {
+      ensureDir(coldDir);
+      const dest = path.join(coldDir, path.basename(res.path));
+      try {
+        fs.renameSync(res.path, dest);
+        found = dest;
+      } catch {
+        try {
+          fs.copyFileSync(res.path, dest);
+          fs.unlinkSync(res.path);
+          found = dest;
+        } catch {
+          found = res.path;
+        }
+      }
+      lru.cold = lru.cold || {};
+      lru.cold[key] = Date.now();
+      evictLru('cold', coldDir, cfg.coldLimitMB, lru);
+    }
+    writeLru(cfg.cacheDir, lru);
+  } else if (res.tier === 'cold') {
+    if (cfg.hotLimitMB <= 0) {
+      // Hot cache is disabled. Read directly from SSD/cold cache.
+      found = res.path;
+      lru.cold = lru.cold || {};
+      lru.cold[key] = Date.now();
+      writeLru(cfg.cacheDir, lru);
+      console.log(`[Cache] Using SSD cold cache directly for "${key}" (hot cache disabled)`);
+    } else {
+      // Promote cold → hot
+      ensureDir(hotDir);
+      const hotDest = path.join(hotDir, path.basename(res.path));
+      try {
+        fs.copyFileSync(res.path, hotDest);
+        found = hotDest;
+      } catch {
+        found = res.path;
+      }
+      delete lru.cold[key];
+      lru.hot[key] = Date.now();
+
+      // Evict oldest hot → overflow to cold, then evict cold if needed
+      evictLru('hot', hotDir, cfg.hotLimitMB, lru, coldDir, 'cold', cfg.coldLimitMB);
+
+      if (fs.existsSync(res.path)) {
+        lru.cold[key] = Date.now();
+      }
+
+      // Synchronize LRU
+      for (const k of Object.keys(lru.hot)) {
+        if (!findInHot(cfg, k)) delete lru.hot[k];
+      }
+      lru.cold = lru.cold || {};
+      for (const k of Object.keys(lru.cold)) {
+        if (!findInCold(cfg, k)) delete lru.cold[k];
+      }
+
+      writeLru(cfg.cacheDir, lru);
     }
   } else {
+    found = res.path;
     lru.hot[key] = Date.now();
     writeLru(cfg.cacheDir, lru);
   }
 
-  // Fallback to cold cache path if promoted hot file was evicted because its size exceeded hotLimitMB
   if (found && !fs.existsSync(found)) {
-    const coldFound = findCacheFile(coldDir, key);
-    if (coldFound) {
-      found = coldFound;
+    const coldRes = findCacheFile(cfg, key, activeRuntime);
+    if (coldRes.path && coldRes.tier === 'cold') {
+      found = coldRes.path;
     } else {
       found = null;
     }
@@ -286,13 +432,10 @@ export async function getCachePath(key) {
 
   if (!found) return null;
 
-  // Quantised variants (rkllm PolarQuant only) dequantize to a tmp FP16 file for
-  // RKLLM to load. Native blobs (.rkllmcache / .llamacache) load directly.
   if (QUANTIZED_EXTS.some(e => found.endsWith(e))) {
     const tmpDir = path.join(cfg.cacheDir, 'tmp');
     ensureDir(tmpDir);
     const tmpFile = path.join(tmpDir, key + '_deq.rkllmcache');
-    // Reuse existing deq file if it's newer than the quantised file
     if (fs.existsSync(tmpFile) &&
         fs.statSync(tmpFile).mtimeMs >= fs.statSync(found).mtimeMs) {
       return tmpFile;
@@ -314,17 +457,12 @@ export function putCachePath(key, tmpFile, runtime, modelQuantOverride) {
   if (!cfg.enabled) return;
   if (!fs.existsSync(tmpFile)) return;
 
-  // Native blob extension is backend-specific: the rkllm addon writes a
-  // reverse-engineered .rkllmcache; the llama backend writes a llama_state_seq
-  // file (.llamacache) whose compression is the in-context KV type. PolarQuant
-  // (below) understands only the rkllm layout and is skipped for llama.
-  const nativeExt = runtime === 'llama' ? '.llamacache' : '.rkllmcache';
+  const activeRuntime = runtime || 'rkllm';
+  const nativeExt = activeRuntime === 'llama' ? '.llamacache' : '.rkllmcache';
 
-  const hotDir  = path.join(cfg.cacheDir, 'hot');
-  const coldDir = path.join(cfg.cacheDir, 'cold');
+  const { hotDir, coldDir } = getRuntimeDirs(cfg, activeRuntime);
   ensureDir(coldDir);
 
-  // When hot limit is 0 (disabled), write directly to cold
   const useHot = cfg.hotLimitMB > 0;
   const destDir = useHot ? hotDir : coldDir;
   const destTier = useHot ? 'hot' : 'cold';
@@ -337,35 +475,28 @@ export function putCachePath(key, tmpFile, runtime, modelQuantOverride) {
   }
 
   const lru = readLru(cfg.cacheDir);
+  lru[destTier] = lru[destTier] || {};
   lru[destTier][key] = Date.now();
 
   if (useHot) {
-    // Evict oldest hot → overflow to cold, then evict cold if needed
     evictLru('hot', hotDir, cfg.hotLimitMB, lru, coldDir, 'cold', cfg.coldLimitMB);
-    // Remove stale hot keys (files that were evicted/moved and no longer in hot)
     for (const k of Object.keys(lru.hot)) {
-      if (!findCacheFile(hotDir, k)) delete lru.hot[k];
+      if (!findInHot(cfg, k)) delete lru.hot[k];
     }
   } else {
     evictLru('cold', coldDir, cfg.coldLimitMB, lru);
   }
 
-  // Keep LRU synchronized by removing any stale keys from cold cache
   lru.cold = lru.cold || {};
   for (const k of Object.keys(lru.cold)) {
-    if (!findCacheFile(coldDir, k)) delete lru.cold[k];
+    if (!findInCold(cfg, k)) delete lru.cold[k];
   }
 
   writeLru(cfg.cacheDir, lru);
 
-  // Background quantisation — rkllm only. The llama prefix cache compresses via the
-  // in-context KV type (serialized natively into the .llamacache by the runtime);
-  // running kvcache_quant_napi on a llama state_seq blob would be wrong (different
-  // layout) and, for turbo, a redundant second GPU pass. Only start after the file
-  // is safely in place (eviction already ran above).
-  const scheme = runtime === 'llama' ? 'off' : kvCacheQuant(modelQuantOverride);
+  const scheme = activeRuntime === 'llama' ? 'off' : kvCacheQuant(modelQuantOverride);
   if (scheme !== 'off' && hasNativeAddon) {
-    const actualFile = findCacheFile(destDir, key) || findCacheFile(coldDir, key);
+    const actualFile = findCacheFile(cfg, key, activeRuntime).path;
     if (actualFile && actualFile.endsWith(nativeExt)) {
       const { fn, ext } = QUANT_SCHEMES[scheme];
       const quantDest = actualFile.replace('.rkllmcache', ext);
@@ -374,23 +505,23 @@ export function putCachePath(key, tmpFile, runtime, modelQuantOverride) {
           try { fs.unlinkSync(actualFile); } catch {}
           console.log(`[Cache] Quantised ${key} → ${ext} (${scheme})`);
           if (useHot) {
-            mirrorToColdIfSpace(key, cfg);
+            mirrorToColdIfSpace(key, cfg, activeRuntime);
           }
         })
         .catch(e => {
           console.warn(`[Cache] Quantise failed for ${key}:`, e.message);
           if (useHot) {
-            mirrorToColdIfSpace(key, cfg);
+            mirrorToColdIfSpace(key, cfg, activeRuntime);
           }
         });
     } else {
       if (useHot) {
-        mirrorToColdIfSpace(key, cfg);
+        mirrorToColdIfSpace(key, cfg, activeRuntime);
       }
     }
   } else {
     if (useHot) {
-      mirrorToColdIfSpace(key, cfg);
+      mirrorToColdIfSpace(key, cfg, activeRuntime);
     }
   }
 }
