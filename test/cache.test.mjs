@@ -144,6 +144,69 @@ describe('KV Prefix Cache Mirroring', () => {
     assert.equal(stats.hot.entries, 0);
     assert.equal(stats.cold.entries, 1);
   });
+
+  test('evicts oldest cold cache entries dynamically during mirroring when cold cache is full', async () => {
+    clearAllCache();
+
+    // Set limits: hot = 50MB, cold = 1MB (extremely small to trigger eviction)
+    dbSetSetting('cache_hot_limit_mb', '50');
+    dbSetSetting('cache_cold_limit_mb', '1');
+
+    // Write first file (0.6 MB)
+    const key1 = 'coldkey1';
+    const tmpFile1 = path.join(tempCacheDir, 'tmp_file1.rkllmcache');
+    fs.writeFileSync(tmpFile1, 'a'.repeat(600 * 1024)); // 600 KB
+    putCachePath(key1, tmpFile1, 'rkllm', 'off');
+
+    // Wait a bit to ensure distinct timestamps
+    await new Promise(r => setTimeout(r, 10));
+
+    // Write second file (0.6 MB) - total will be 1.2MB, exceeding 1MB cold limit
+    const key2 = 'coldkey2';
+    const tmpFile2 = path.join(tempCacheDir, 'tmp_file2.rkllmcache');
+    fs.writeFileSync(tmpFile2, 'b'.repeat(600 * 1024)); // 600 KB
+    putCachePath(key2, tmpFile2, 'rkllm', 'off');
+
+    const stats = getCacheStats();
+    // Cold cache entries should have evicted coldkey1 and kept coldkey2
+    assert.equal(stats.cold.entries, 1);
+    
+    const coldFile1 = path.join(tempCacheDir, 'cold', `${key1}.rkllmcache`);
+    const coldFile2 = path.join(tempCacheDir, 'cold', `${key2}.rkllmcache`);
+    assert.ok(!fs.existsSync(coldFile1), 'coldkey1 should be evicted');
+    assert.ok(fs.existsSync(coldFile2), 'coldkey2 should remain');
+  });
+
+  test('seamlessly falls back to cold cache path when promoted hot file is immediately evicted due to hotLimitMB', async () => {
+    clearAllCache();
+
+    // Set hot limit extremely small (e.g. 0.1 MB) and cold limit larger
+    dbSetSetting('cache_hot_limit_mb', '1');
+    dbSetSetting('cache_cold_limit_mb', '50');
+
+    // Write a file that exceeds the hot limit (1.5 MB) directly to cold when hot is disabled
+    dbSetSetting('cache_hot_limit_mb', '0');
+    const key = 'hugepromotekey';
+    const tmpFile = path.join(tempCacheDir, 'tmp_huge.rkllmcache');
+    fs.writeFileSync(tmpFile, 'h'.repeat(1500 * 1024)); // 1.5 MB
+    putCachePath(key, tmpFile, 'rkllm', 'off');
+
+    const hotFile = path.join(tempCacheDir, 'hot', `${key}.rkllmcache`);
+    const coldFile = path.join(tempCacheDir, 'cold', `${key}.rkllmcache`);
+    assert.ok(!fs.existsSync(hotFile));
+    assert.ok(fs.existsSync(coldFile));
+
+    // Enable hot cache with small limit (1 MB)
+    dbSetSetting('cache_hot_limit_mb', '1');
+
+    // Retrieve via getCachePath (it will attempt to promote, but file is 1.5MB which is > 1MB, so it immediately evicts from hot)
+    const foundPath = await getCachePath(key);
+    
+    // It should seamlessly return the coldFile path and not crash or return a non-existent hotFile path
+    assert.equal(foundPath, coldFile, 'Should fall back to cold cache path');
+    assert.ok(!fs.existsSync(hotFile), 'Should not exist in hot cache because it was evicted');
+    assert.ok(fs.existsSync(coldFile), 'Should still exist in cold cache');
+  });
 });
 
 describe('Segment-Based Prefix Caching', () => {

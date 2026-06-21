@@ -127,7 +127,6 @@ function mirrorToColdIfSpace(key, cfg) {
   try {
     const stat = fs.statSync(hotFile);
     const sizeMB = stat.size / (1024 * 1024);
-    const coldSize = dirSizeMB(coldDir);
 
     // Check if the file is already in coldDir
     const coldFile = findCacheFile(coldDir, key);
@@ -140,19 +139,27 @@ function mirrorToColdIfSpace(key, cfg) {
       return;
     }
 
-    if (coldSize + sizeMB <= cfg.coldLimitMB) {
-      ensureDir(coldDir);
-      const dest = path.join(coldDir, path.basename(hotFile));
-      fs.copyFileSync(hotFile, dest);
-
-      const lru = readLru(cfg.cacheDir);
-      lru.cold = lru.cold || {};
-      lru.cold[key] = Date.now();
-      writeLru(cfg.cacheDir, lru);
-      console.log(`[Cache] Mirrored hot cache ${key} to cold cache SSD (${sizeMB.toFixed(2)} MB)`);
-    } else {
-      console.log(`[Cache] Mirroring skipped for ${key}: insufficient space in cold cache (needed ${sizeMB.toFixed(2)} MB, cold size ${coldSize.toFixed(2)} MB, limit ${cfg.coldLimitMB} MB)`);
+    const lru = readLru(cfg.cacheDir);
+    const coldSize = dirSizeMB(coldDir);
+    if (coldSize + sizeMB > cfg.coldLimitMB) {
+      const targetLimit = cfg.coldLimitMB - sizeMB;
+      if (targetLimit >= 0) {
+        evictLru('cold', coldDir, targetLimit, lru);
+        console.log(`[Cache] Evicted old cold cache files to make room for "${key}" (${sizeMB.toFixed(2)} MB)`);
+      } else {
+        console.log(`[Cache] Mirroring skipped for ${key}: file size (${sizeMB.toFixed(2)} MB) exceeds cold limit (${cfg.coldLimitMB} MB)`);
+        return;
+      }
     }
+
+    ensureDir(coldDir);
+    const dest = path.join(coldDir, path.basename(hotFile));
+    fs.copyFileSync(hotFile, dest);
+
+    lru.cold = lru.cold || {};
+    lru.cold[key] = Date.now();
+    writeLru(cfg.cacheDir, lru);
+    console.log(`[Cache] Mirrored hot cache ${key} to cold cache SSD (${sizeMB.toFixed(2)} MB)`);
   } catch (e) {
     console.error(`[Cache] Mirroring failed for ${key}:`, e.message);
   }
@@ -241,18 +248,40 @@ export async function getCachePath(key) {
         }
         delete lru.cold[key];
         lru.hot[key] = Date.now();
-        evictLru('hot', hotDir, cfg.hotLimitMB, lru);
+        
+        // Evict oldest hot → overflow to cold, then evict cold if needed
+        evictLru('hot', hotDir, cfg.hotLimitMB, lru, coldDir, 'cold', cfg.coldLimitMB);
         
         // Ensure the cold entry is tracked since it remains on SSD
         if (fs.existsSync(coldFound)) {
           lru.cold[key] = Date.now();
         }
+
+        // Keep LRU synchronized by removing any stale keys
+        for (const k of Object.keys(lru.hot)) {
+          if (!findCacheFile(hotDir, k)) delete lru.hot[k];
+        }
+        lru.cold = lru.cold || {};
+        for (const k of Object.keys(lru.cold)) {
+          if (!findCacheFile(coldDir, k)) delete lru.cold[k];
+        }
+
         writeLru(cfg.cacheDir, lru);
       }
     }
   } else {
     lru.hot[key] = Date.now();
     writeLru(cfg.cacheDir, lru);
+  }
+
+  // Fallback to cold cache path if promoted hot file was evicted because its size exceeded hotLimitMB
+  if (found && !fs.existsSync(found)) {
+    const coldFound = findCacheFile(coldDir, key);
+    if (coldFound) {
+      found = coldFound;
+    } else {
+      found = null;
+    }
   }
 
   if (!found) return null;
@@ -319,6 +348,12 @@ export function putCachePath(key, tmpFile, runtime, modelQuantOverride) {
     }
   } else {
     evictLru('cold', coldDir, cfg.coldLimitMB, lru);
+  }
+
+  // Keep LRU synchronized by removing any stale keys from cold cache
+  lru.cold = lru.cold || {};
+  for (const k of Object.keys(lru.cold)) {
+    if (!findCacheFile(coldDir, k)) delete lru.cold[k];
   }
 
   writeLru(cfg.cacheDir, lru);
