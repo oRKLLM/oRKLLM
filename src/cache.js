@@ -117,6 +117,47 @@ function findCacheFile(dir, key) {
   return null;
 }
 
+function mirrorToColdIfSpace(key, cfg) {
+  if (cfg.coldLimitMB <= 0) return;
+  const hotDir = path.join(cfg.cacheDir, 'hot');
+  const coldDir = path.join(cfg.cacheDir, 'cold');
+  const hotFile = findCacheFile(hotDir, key);
+  if (!hotFile) return;
+
+  try {
+    const stat = fs.statSync(hotFile);
+    const sizeMB = stat.size / (1024 * 1024);
+    const coldSize = dirSizeMB(coldDir);
+
+    // Check if the file is already in coldDir
+    const coldFile = findCacheFile(coldDir, key);
+    if (coldFile) {
+      // It is already mirrored! Just make sure LRU is updated.
+      const lru = readLru(cfg.cacheDir);
+      lru.cold = lru.cold || {};
+      lru.cold[key] = Date.now();
+      writeLru(cfg.cacheDir, lru);
+      return;
+    }
+
+    if (coldSize + sizeMB <= cfg.coldLimitMB) {
+      ensureDir(coldDir);
+      const dest = path.join(coldDir, path.basename(hotFile));
+      fs.copyFileSync(hotFile, dest);
+
+      const lru = readLru(cfg.cacheDir);
+      lru.cold = lru.cold || {};
+      lru.cold[key] = Date.now();
+      writeLru(cfg.cacheDir, lru);
+      console.log(`[Cache] Mirrored hot cache ${key} to cold cache SSD (${sizeMB.toFixed(2)} MB)`);
+    } else {
+      console.log(`[Cache] Mirroring skipped for ${key}: insufficient space in cold cache (needed ${sizeMB.toFixed(2)} MB, cold size ${coldSize.toFixed(2)} MB, limit ${cfg.coldLimitMB} MB)`);
+    }
+  } catch (e) {
+    console.error(`[Cache] Mirroring failed for ${key}:`, e.message);
+  }
+}
+
 export function cacheKey(modelId, messages) {
   const payload = modelId + '\0' + JSON.stringify(messages.map(m => ({ r: m.role, c: m.content })));
   return crypto.createHash('sha256').update(payload).digest('hex').slice(0, 16);
@@ -143,6 +184,7 @@ export async function getCachePath(key) {
       lru.hot[key] = Date.now();
       evictLru('hot', hotDir, cfg.hotLimitMB, lru);
       writeLru(cfg.cacheDir, lru);
+      mirrorToColdIfSpace(key, cfg);
     }
   } else {
     lru.hot[key] = Date.now();
@@ -232,8 +274,24 @@ export function putCachePath(key, tmpFile, runtime, modelQuantOverride) {
         .then(() => {
           try { fs.unlinkSync(actualFile); } catch {}
           console.log(`[Cache] Quantised ${key} → ${ext} (${scheme})`);
+          if (useHot) {
+            mirrorToColdIfSpace(key, cfg);
+          }
         })
-        .catch(e => console.warn(`[Cache] Quantise failed for ${key}:`, e.message));
+        .catch(e => {
+          console.warn(`[Cache] Quantise failed for ${key}:`, e.message);
+          if (useHot) {
+            mirrorToColdIfSpace(key, cfg);
+          }
+        });
+    } else {
+      if (useHot) {
+        mirrorToColdIfSpace(key, cfg);
+      }
+    }
+  } else {
+    if (useHot) {
+      mirrorToColdIfSpace(key, cfg);
     }
   }
 }

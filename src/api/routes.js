@@ -8,7 +8,7 @@ import { dbGetModelSettings, dbSetModelSettings, dbGetSetting, dbListEnabledMcpS
 import { cacheKey, getCachePath, putCachePath, tmpCachePath, isCacheEnabled, getMaxContextTokens } from '../cache.js';
 import { traceInference } from '../langfuse.js';
 import { getAggregatedTools } from '../mcp.js';
-import { resolveWithTools } from '../mcp_inference.js';
+import { resolveWithTools, buildToolSystemPrompt } from '../mcp_inference.js';
 import { activeStreams } from '../streams.js';
 
 
@@ -321,9 +321,31 @@ export default async function apiRoutes(fastify, options) {
       }
 
       if (mcpTools) {
+        let firstRoundCachePath = null;
+        if (cacheEnabled && trimmed.length === 1) {
+          const mcpPromptText = buildToolSystemPrompt(mcpTools.tools);
+          const prefixMsgs = [{ role: 'system', content: mcpPromptText }];
+          const pKey = cacheKey(model, prefixMsgs);
+          const hit = await getCachePath(pKey);
+          if (hit) {
+            firstRoundCachePath = hit;
+            console.log(`[Cache] MCP Prefix Cache HIT ${pKey} → using loadCachePath`);
+          } else {
+            console.log(`[Cache] MCP Prefix Cache MISS ${pKey}`);
+          }
+        }
+
+        let isFirstRound = true;
         const generate = async (p) => {
           let t = '';
-          const r = await pool.generate(model, p, modelOptions, (m) => { if (m.text) t += m.text; }, {});
+          const cachePaths = {};
+          if (isFirstRound) {
+            if (firstRoundCachePath) {
+              cachePaths.loadCachePath = firstRoundCachePath;
+            }
+            isFirstRound = false;
+          }
+          const r = await pool.generate(model, p, modelOptions, (m) => { if (m.text) t += m.text; }, cachePaths);
           return { text: t, perf: r.perf };
         };
         let resolved;

@@ -495,7 +495,10 @@ export default async function adminRoutes(fastify, options) {
     if (typeof maxNewTokens === 'number') dbSetSetting('default_max_new_tokens', maxNewTokens);
     if (typeof repPenalty === 'number') dbSetSetting('default_rep_penalty', repPenalty);
     if (typeof hfToken === 'string') dbSetSetting('hf_token', hfToken);
-    if (typeof cacheEnabled === 'boolean') dbSetSetting('cache_enabled', cacheEnabled ? '1' : '0');
+    if (typeof cacheEnabled === 'boolean') {
+      dbSetSetting('cache_enabled', cacheEnabled ? '1' : '0');
+      if (cacheEnabled) pool.triggerMcpCacheGeneration?.();
+    }
     if (typeof cacheHotLimitMB === 'number')  dbSetSetting('cache_hot_limit_mb',        cacheHotLimitMB);
     if (typeof cacheColdLimitMB === 'number') dbSetSetting('cache_cold_limit_mb',       cacheColdLimitMB);
     if (typeof cacheDir === 'string')         dbSetSetting('cache_dir',                 cacheDir);
@@ -514,7 +517,10 @@ export default async function adminRoutes(fastify, options) {
     if (typeof langfusePublicKey === 'string')  dbSetSetting('langfuse_public_key', langfusePublicKey);
     if (typeof langfuseSecretKey === 'string' && langfuseSecretKey)
       dbSetSetting('langfuse_secret_key', langfuseSecretKey);
-    if (typeof mcpInferenceEnabled === 'boolean') dbSetSetting('mcp_inference_enabled', mcpInferenceEnabled ? '1' : '0');
+    if (typeof mcpInferenceEnabled === 'boolean') {
+      dbSetSetting('mcp_inference_enabled', mcpInferenceEnabled ? '1' : '0');
+      if (mcpInferenceEnabled) pool.triggerMcpCacheGeneration?.();
+    }
     if (typeof managePerformance === 'boolean') {
       dbSetSetting('manage_performance', managePerformance ? '1' : '0');
       // Pin immediately when turned on (appliance stays at performance for the

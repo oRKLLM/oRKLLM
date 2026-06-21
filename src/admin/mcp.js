@@ -5,6 +5,7 @@ import {
 } from '../db.js';
 import { validateServer, invalidateClient, getAggregatedTools } from '../mcp.js';
 import { buildToolSystemPrompt } from '../mcp_inference.js';
+import pool from '../pool.js';
 
 const TRANSPORTS = ['stdio', 'sse', 'http'];
 
@@ -69,6 +70,7 @@ export default async function mcpRoutes(fastify) {
       validation = await validateServer({ id, name, transport, config });
     }
     dbCreateMcpServer({ id, name, transport, config, enabled });
+    pool.triggerMcpCacheGeneration();
     return { server: dbGetMcpServer(id), validation };
   });
 
@@ -93,6 +95,7 @@ export default async function mcpRoutes(fastify) {
     if (request.body?.enabled !== undefined) fields.enabled = request.body.enabled;
     dbUpdateMcpServer(id, fields);
     await invalidateClient(id); // drop any stale cached connection
+    pool.triggerMcpCacheGeneration();
     return { server: dbGetMcpServer(id) };
   });
 
@@ -102,6 +105,7 @@ export default async function mcpRoutes(fastify) {
     if (!dbGetMcpServer(id)) return reply.status(404).send({ error: 'MCP server not found' });
     dbDeleteMcpServer(id);
     await invalidateClient(id);
+    pool.triggerMcpCacheGeneration();
     return { success: true };
   });
 

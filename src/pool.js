@@ -3,11 +3,15 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { MODELS_DIR, LIBRKLLMRT_PATH, RUNTIMES_DIR, LLAMA_RUNTIME_DIR, parseRuntimeVersion, getNpuCoreCount } from './config.js';
-import { dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings } from './db.js';
+import { dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings, dbListEnabledMcpServers } from './db.js';
 import { applyPerformance } from './perf_governor.js';
 import { syncRuntimes, hasRuntime } from './runtime_sync.js';
 import { syncLlamaRuntime, isLlamaRuntimeAvailable } from './llama_sync.js';
 import { eagle3Generate } from './eagle.js';
+import { getAggregatedTools } from './mcp.js';
+import { buildToolSystemPrompt } from './mcp_inference.js';
+import { isRecurrentArch, supportsThinkingToggle } from './gguf.js';
+import { cacheKey, getCachePath, tmpCachePath, putCachePath, isCacheEnabled } from './cache.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -462,6 +466,11 @@ class EnginePool {
     try {
       const res = await s.loadingPromise;
       this._loadStatus.loading = null;
+      if (res && res.status === 0) {
+        this._generateMcpCaches(modelName).catch(e => {
+          console.error(`[EnginePool] MCP cache generation background error:`, e.message);
+        });
+      }
       return res;
     } catch (e) {
       this._loadStatus = { loading: null, error: { model: modelName, message: e.message, code: e.code ?? null } };
@@ -600,7 +609,7 @@ class EnginePool {
   // Runs inference, aborts after the first decode token, saves KV cache.
   // Returns { firstToken, savedPath } so callers can detect whether the
   // saved cache includes the first decode token (case B) or is clean (case A).
-  async prefillAndCache(prompt, savePath) {
+  async prefillAndCache(prompt, savePath, options = {}) {
     if (!this.isLoaded) throw new Error('No model loaded');
     return new Promise((resolve, reject) => {
       let firstToken = null;
@@ -625,7 +634,7 @@ class EnginePool {
       };
 
       this.worker.on('message', onMsg);
-      this.worker.send({ type: 'run', prompt, saveCachePath: savePath });
+      this.worker.send({ type: 'run', prompt, saveCachePath: savePath, options });
     });
   }
 
@@ -1082,6 +1091,117 @@ class EnginePool {
       })),
     };
   }
+
+  // Helper to trigger background MCP cache generation for the currently loaded model (if any)
+  triggerMcpCacheGeneration() {
+    const primary = this._slots[0];
+    if (primary && primary.isLoaded && primary.activeModel) {
+      this._generateMcpCaches(primary.activeModel.name).catch(e => {
+        console.error(`[EnginePool] MCP cache generation background error:`, e.message);
+      });
+    }
+  }
+
+  // Asynchronously check and auto-generate the KV cache for each available MCP tool
+  async _generateMcpCaches(modelName) {
+    try {
+      // 1. Check settings and environment
+      if (dbGetSetting('mcp_inference_enabled') !== '1') return;
+      if (!isCacheEnabled()) return;
+
+      const modelPath = path.join(MODELS_DIR, modelName);
+      if (modelName.toLowerCase().endsWith('.gguf') && isRecurrentArch(modelPath)) {
+        return; // Recurrent models excluded from prefix cache
+      }
+
+      // 2. Query enabled MCP servers and tools
+      const servers = dbListEnabledMcpServers();
+      if (!servers || servers.length === 0) return;
+
+      const { tools } = await getAggregatedTools(servers);
+      if (!tools || tools.length === 0) return;
+
+      console.log(`[EnginePool] Starting background MCP cache generation for model ${modelName} (${tools.length} tool(s) found)`);
+
+      // 3. Define targets to cache: individual tools, and all tools combined if > 1
+      const targets = [];
+      // Individual tools
+      for (const t of tools) {
+        targets.push({ name: t.function.name, tools: [t], desc: `tool: ${t.function.name}` });
+      }
+      // Combined tools (only if > 1 tool)
+      if (tools.length > 1) {
+        targets.push({ name: 'all_combined', tools, desc: 'all tools combined' });
+      }
+
+      const saved = dbGetModelSettings(modelName) || {};
+      const isGguf = modelName.toLowerCase().endsWith('.gguf');
+      const canToggleThinking = isGguf && supportsThinkingToggle(modelPath);
+      const seedNoThink = canToggleThinking && !saved.thinking_enabled;
+
+      // 4. Generate cache for each target sequentially
+      for (const target of targets) {
+        const slot = this._slots.find(s => s.isLoaded && s.activeModel?.name === modelName);
+        if (!slot) {
+          console.log(`[EnginePool] Model ${modelName} no longer loaded, stopping MCP cache generation`);
+          return;
+        }
+
+        const promptText = buildToolSystemPrompt(target.tools);
+        const prefixMsgs = [{ role: 'system', content: promptText }];
+        const pKey = cacheKey(modelName, prefixMsgs);
+
+        // Check if already cached
+        const existing = await getCachePath(pKey);
+        if (existing) {
+          console.log(`[EnginePool] MCP cache for target "${target.desc}" (${pKey}) already exists, skipping`);
+          continue;
+        }
+
+        // Wait if slot is busy or there are queued requests
+        while (slot.activeGeneration || this.queue.length > 0 || !slot.isLoaded || slot.activeModel?.name !== modelName) {
+          if (!slot.isLoaded || slot.activeModel?.name !== modelName) {
+            console.log(`[EnginePool] Model ${modelName} unloaded/swapped, stopping MCP cache generation`);
+            return;
+          }
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
+        console.log(`[EnginePool] Generating MCP cache for "${target.desc}" (${pKey})...`);
+        const prompt = formatMessagesForCache(prefixMsgs, seedNoThink);
+        const tmpFile = tmpCachePath(pKey);
+
+        const options = {};
+        if (isGguf) {
+          options.messages = prefixMsgs.map(m => ({ role: m.role, content: m.content }));
+        }
+
+        try {
+          await this.prefillAndCache(prompt, tmpFile, options);
+          // Register in cache
+          putCachePath(pKey, tmpFile, isGguf ? 'llama' : 'rkllm', isGguf ? null : (saved.kv_cache_quant ?? null));
+          console.log(`[EnginePool] Successfully cached MCP target "${target.desc}" (${pKey})`);
+        } catch (e) {
+          console.error(`[EnginePool] Failed to generate MCP cache for "${target.desc}": ${e.message}`);
+        }
+      }
+
+      console.log(`[EnginePool] Finished background MCP cache generation for model ${modelName}`);
+    } catch (err) {
+      console.error(`[EnginePool] Error in _generateMcpCaches: ${err.message}`);
+    }
+  }
+}
+
+function formatMessagesForCache(msgs, seedNoThink = false) {
+  let p = "";
+  for (const msg of msgs) {
+    if (msg.role === 'system')    p += `<|im_start|>system\n${msg.content}<|im_end|>\n`;
+    else if (msg.role === 'user') p += `<|im_start|>user\n${msg.content}<|im_end|>\n`;
+    else if (msg.role === 'assistant') p += `<|im_start|>assistant\n${msg.content}<|im_end|>\n`;
+    else if (msg.role === 'tool') p += `<|im_start|>tool\n${msg.content}<|im_end|>\n`;
+  }
+  return p + `<|im_start|>assistant\n` + (seedNoThink ? `<think>\n\n</think>\n\n` : ``);
 }
 
 export const pool = new EnginePool();
