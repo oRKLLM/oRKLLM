@@ -155,6 +155,7 @@ typedef void     (*llama_kv_self_clear_t)(struct llama_context *);
 typedef struct llama_memory_i * llama_memory_t;
 typedef llama_memory_t (*llama_get_memory_t)(const struct llama_context *);
 typedef void (*llama_memory_clear_t)(llama_memory_t, bool);
+typedef bool (*llama_memory_seq_rm_t)(llama_memory_t, llama_seq_id, llama_pos, llama_pos);
 typedef bool     (*llama_state_seq_save_file_t)(struct llama_context *, const char *, llama_seq_id, const llama_token *, size_t);
 typedef size_t   (*llama_state_seq_load_file_t)(struct llama_context *, const char *, llama_seq_id, llama_token *, size_t, size_t *);
 struct llama_sampler_chain_params {
@@ -220,6 +221,7 @@ static llama_decode_t                    fn_decode         = nullptr;
 static llama_kv_self_clear_t             fn_kv_clear       = nullptr;
 static llama_get_memory_t                fn_get_memory     = nullptr;
 static llama_memory_clear_t              fn_memory_clear   = nullptr;
+static llama_memory_seq_rm_t             fn_memory_seq_rm  = nullptr;
 
 // Fully reset the context's memory (KV + recurrent). Prefer llama_memory_clear
 // (resets the recurrent/hybrid module too); fall back to kv_self_clear.
@@ -295,6 +297,7 @@ Napi::Value LoadLibrary(const Napi::CallbackInfo& info) {
     LOAD_SYM2(kv_clear,      "llama_kv_self_clear");
     LOAD_SYM2(get_memory,    "llama_get_memory");
     LOAD_SYM2(memory_clear,  "llama_memory_clear");
+    LOAD_SYM2(memory_seq_rm, "llama_memory_seq_rm");
     LOAD_SYM2(state_save,    "llama_state_seq_save_file");
     LOAD_SYM2(state_load,    "llama_state_seq_load_file");
     LOAD_SYM2(schain_init,   "llama_sampler_chain_init");
@@ -808,6 +811,21 @@ Napi::Value ClearKVCache(const Napi::CallbackInfo& info) {
     return Napi::Number::New(info.Env(), 0);
 }
 
+Napi::Value RollbackKVCache(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (!g_ctx) return Napi::Boolean::New(env, false);
+    if (info.Length() < 1 || !info[0].IsNumber()) {
+        Napi::TypeError::New(env, "Expected number position to rollback to").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    int pos = info[0].As<Napi::Number>().Int32Value();
+    bool ok = false;
+    if (fn_get_memory && fn_memory_seq_rm) {
+        ok = fn_memory_seq_rm(fn_get_memory(g_ctx), -1, pos, -1);
+    }
+    return Napi::Boolean::New(env, ok);
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("load_library",     Napi::Function::New(env, LoadLibrary));
     exports.Set("init_model",       Napi::Function::New(env, InitModel));
@@ -815,6 +833,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("unload_model",     Napi::Function::New(env, UnloadModel));
     exports.Set("abort_inference",  Napi::Function::New(env, AbortInference));
     exports.Set("clear_kv_cache",   Napi::Function::New(env, ClearKVCache));
+    exports.Set("rollback_kv_cache", Napi::Function::New(env, RollbackKVCache));
     return exports;
 }
 

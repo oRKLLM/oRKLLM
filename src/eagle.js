@@ -270,7 +270,7 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
         // GET_LOGITS returns the logits in a single NORMAL callback with no
         // trailing FINISH on this runtime — resolve when the logits land (or on
         // a real FINISH if one does arrive) instead of blocking on state 2.
-        if (msg.logits || msg.state === 2) {
+        if (msg.hidden_states || msg.logits || msg.state === 2) {
           finish(() => resolve({ ...msg, _tokenTexts: tokenTexts }));
           return;
         }
@@ -296,6 +296,11 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
   // Clear NPU KV cache via IPC (used when a partial rejection requires rolling back state)
   function clearKV() {
     worker.send({ type: 'clear_cache' });
+  }
+
+  // Rollback NPU KV cache to a specific position (keeps tokens in [0, pos))
+  function rollbackKV(pos) {
+    worker.send({ type: 'rollback_kv_cache', pos });
   }
 
   // ── Step 0: Initial hidden state extraction ────────────────────────────
@@ -389,6 +394,9 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
       if (totalTokens >= maxTokens) { done = true; break; }
     }
 
+    // Prune the KV cache to keep only the accepted tokens (positions [0, ctxLen))
+    rollbackKV(ctxLen);
+
     // Emit correction token (stop at end-of-text without emitting it)
     if (!done && correctionId !== null) {
       if (eosTokenIds.has(correctionId)) {
@@ -402,40 +410,25 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
         lastTokenId = correctionId;
         stats.corrected++;
         if (totalTokens >= maxTokens) done = true;
-      }
-    }
 
-    // Update hidden states for next draft
-    if (verifyMsg.hidden_states) {
-      lastHiddenStates  = verifyMsg.hidden_states;
-      lastEmbdSize      = verifyMsg.hidden_embd_size;
-      lastNumTokens     = verifyMsg.hidden_num_tokens;
-    }
-
-    // ── KV rollback on partial rejection ──────────────────────────────────
-    // The KV cache now contains [prompt + pendingDraftIds]. We accepted
-    // (acceptedCount + 1) tokens. If acceptedCount < k (partial rejection),
-    // the KV has (k - acceptedCount - 1) extra tokens that must be removed.
-    // RKLLM has no partial-rollback API, so we clear and re-run hidden layer.
-    const partialRejection = acceptedCount < pendingDraftIds.length;
-    if (!done && partialRejection) {
-      clearKV();
-      const tRe = Date.now();
-      let reHiddenMsg;
-      try {
-        reHiddenMsg = await runNPUPrompt(currentPrompt, INFER_GET_HIDDEN_LAYER, false);
-      } catch (e) {
-        // Worker died during the rollback re-prefill — stop generation with the
-        // tokens emitted so far rather than propagating an error.
-        console.warn('[Eagle-3] KV rollback failed:', e.message, '— ending generation');
-        break;
-      }
-      stats.npu_hidden_ms += Date.now() - tRe;
-      if (reHiddenMsg?.hidden_states) {
-        lastHiddenStates  = reHiddenMsg.hidden_states;
-        lastEmbdSize      = reHiddenMsg.hidden_embd_size;
-        lastNumTokens     = reHiddenMsg.hidden_num_tokens;
-        ctxLen            = reHiddenMsg.hidden_num_tokens;  // resync RoPE base after rollback
+        // Decode this single correction token with keep_history=true to append it
+        // to the KV cache and extract its hidden state for the next draft pass.
+        if (!done) {
+          const tRe = Date.now();
+          let reHiddenMsg;
+          try {
+            reHiddenMsg = await runNPUTokens([correctionId], INFER_GET_HIDDEN_LAYER, true);
+          } catch (e) {
+            console.warn('[Eagle-3] single token decode failed:', e.message, '— ending generation');
+            break;
+          }
+          stats.npu_hidden_ms += Date.now() - tRe;
+          if (reHiddenMsg?.hidden_states) {
+            lastHiddenStates  = reHiddenMsg.hidden_states;
+            lastEmbdSize      = reHiddenMsg.hidden_embd_size;
+            lastNumTokens     = 1;
+          }
+        }
       }
     }
 
