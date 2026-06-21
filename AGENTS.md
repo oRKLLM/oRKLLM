@@ -42,6 +42,8 @@ oRKLLM is a **Node.js / JavaScript project end-to-end**. All tooling decisions s
 
 All development happens on `alpha`. Promotions flow strictly forward — **never commit directly to `beta` or `main`, and never cherry-pick from beta/main back to alpha.**
 
+Promotions/pushes to the `beta` and `main` branches are sensitive operations and **must be explicitly requested by the user** before execution.
+
 ```
 alpha  →  beta  →  main
 ```
