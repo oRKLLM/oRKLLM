@@ -112,7 +112,7 @@ export async function resolveWithTools({ messages, tools, lookup, formatMessages
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const prompt = formatMessages(working);
-    const result = await generate(prompt);
+    const result = await generate(prompt, working);
     lastPerf = result.perf || {};
     const text = result.text || '';
 
@@ -133,6 +133,9 @@ export async function resolveWithTools({ messages, tools, lookup, formatMessages
     ...working,
     { role: 'system', content: 'Tool call limit reached. Provide your best final answer now without calling any more tools.' },
   ]);
-  const final = await generate(finalPrompt);
+  const final = await generate(finalPrompt, [
+    ...working,
+    { role: 'system', content: 'Tool call limit reached. Provide your best final answer now without calling any more tools.' },
+  ]);
   return { finalText: final.text || '', perf: final.perf || lastPerf, toolCalls };
 }

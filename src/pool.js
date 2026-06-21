@@ -357,6 +357,7 @@ class EnginePool {
           applyPerformance();
           s.activeModel = { name: modelName, path: modelPath, options, isMock: result.isMock, libPath, backend: 'llama' };
           console.log(`[EnginePool] Slot ${s.id}: loaded ${modelName} (llama, isMock: ${result.isMock})`);
+          await this._warmMcpCacheInline(modelName);
           this.resetIdleTimer(s);
           return { status: 0, activeModel: s.activeModel };
         }
@@ -378,6 +379,7 @@ class EnginePool {
               applyPerformance();
               s.activeModel = { name: modelName, path: modelPath, options, isMock: result2.isMock, libPath, backend: 'llama' };
               console.log(`[EnginePool] Slot ${s.id}: loaded after llama runtime sync: ${modelName}`);
+              await this._warmMcpCacheInline(modelName);
               this.resetIdleTimer(s);
               return { status: 0, activeModel: s.activeModel };
             }
@@ -1099,6 +1101,38 @@ class EnginePool {
       this._generateMcpCaches(primary.activeModel.name).catch(e => {
         console.error(`[EnginePool] MCP cache generation background error:`, e.message);
       });
+    }
+  }
+
+  // Synchronously/inline prefill and cache the aggregated MCP tools system prompt before accepting client requests.
+  async _warmMcpCacheInline(modelName) {
+    if (dbGetSetting('mcp_inference_enabled') === '1') {
+      try {
+        const enabledServers = dbListEnabledMcpServers();
+        if (!enabledServers || enabledServers.length === 0) return;
+        const agg = await getAggregatedTools(enabledServers);
+        const tools = agg?.tools || [];
+        if (tools.length > 0) {
+          const toolSystemPrompt = buildToolSystemPrompt(tools);
+          const prefixMsgs = [{"role": "system", "content": toolSystemPrompt}];
+          const pKey = cacheKey(modelName, prefixMsgs);
+          const hit = await getCachePath(pKey);
+          if (!hit) {
+            console.log(`[Cache Warming] Prefilling MCP tools for model ${modelName} (Key: ${pKey})...`);
+            const promptStr = `<|im_start|>system\n${toolSystemPrompt}<|im_end|>\n<|im_start|>assistant\n`;
+            const savePath = tmpCachePath(pKey);
+            await this.prefillAndCache(promptStr, savePath);
+            if (fs.existsSync(savePath)) {
+              putCachePath(pKey, savePath, 'llama');
+              console.log(`[Cache Warming] MCP tools cached successfully (Key: ${pKey}).`);
+            }
+          } else {
+            console.log(`[Cache Warming] MCP tools already in KV cache (Key: ${pKey}).`);
+          }
+        }
+      } catch (e) {
+        console.error('[Cache Warming] MCP prefill failed:', e.message);
+      }
     }
   }
 

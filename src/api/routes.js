@@ -321,31 +321,29 @@ export default async function apiRoutes(fastify, options) {
       }
 
       if (mcpTools) {
-        let firstRoundCachePath = null;
-        if (cacheEnabled && trimmed.length === 1) {
-          const mcpPromptText = buildToolSystemPrompt(mcpTools.tools);
-          const prefixMsgs = [{ role: 'system', content: mcpPromptText }];
-          const pKey = cacheKey(model, prefixMsgs);
-          const hit = await getCachePath(pKey);
-          if (hit) {
-            firstRoundCachePath = hit;
-            console.log(`[Cache] MCP Prefix Cache HIT ${pKey} → using loadCachePath`);
-          } else {
-            console.log(`[Cache] MCP Prefix Cache MISS ${pKey}`);
-          }
-        }
-
-        let isFirstRound = true;
-        const generate = async (p) => {
+        const generate = async (p, workingMsgs) => {
           let t = '';
-          const cachePaths = {};
-          if (isFirstRound) {
-            if (firstRoundCachePath) {
-              cachePaths.loadCachePath = firstRoundCachePath;
+          let loadCachePath = null;
+          let saveCachePath = null;
+          if (cacheEnabled && workingMsgs && workingMsgs.length >= 2) {
+            const prefixMsgs = workingMsgs.slice(0, -1);
+            const pKey = cacheKey(model, prefixMsgs);
+            const hit = await getCachePath(pKey);
+            saveCachePath = tmpCachePath(pKey + '_next');
+            if (hit) {
+              loadCachePath = hit;
+              p = formatMessages(workingMsgs.slice(-1));
+              console.log(`[Cache] MCP HIT ${pKey} → suffix prompt length: ${p.length}`);
+            } else {
+              console.log(`[Cache] MCP MISS ${pKey}`);
             }
-            isFirstRound = false;
           }
-          const r = await pool.generate(model, p, modelOptions, (m) => { if (m.text) t += m.text; }, cachePaths);
+          const r = await pool.generate(model, p, modelOptions, (m) => { if (m.text) t += m.text; }, { loadCachePath, saveCachePath });
+          if (saveCachePath && fs.existsSync(saveCachePath)) {
+            const cacheKeyToSave = cacheKey(model, [...workingMsgs, { role: 'assistant', content: t }]);
+            putCachePath(cacheKeyToSave, saveCachePath, 'llama');
+            console.log(`[Cache] Saved MCP KV cache for key ${cacheKeyToSave}`);
+          }
           return { text: t, perf: r.perf };
         };
         let resolved;
