@@ -45,6 +45,14 @@
             <div class="setting-label">Models Directory</div>
             <div class="setting-value font-mono text-truncate">{{ serverInfo.modelsDir || '—' }}</div>
           </v-col>
+          <v-col cols="12" sm="6" v-if="serverInfo.runtimesDir">
+            <div class="setting-label">RKLLM Runtimes Directory</div>
+            <div class="setting-value font-mono text-truncate">{{ serverInfo.runtimesDir }}</div>
+          </v-col>
+          <v-col cols="12" sm="6" v-if="serverInfo.llamaRuntimeDir">
+            <div class="setting-label">Llama Runtime Directory</div>
+            <div class="setting-value font-mono text-truncate">{{ serverInfo.llamaRuntimeDir }}</div>
+          </v-col>
         </v-row>
         <v-alert type="info" variant="tonal" density="compact" class="mt-3 text-caption">
           Host, Port, and paths are configured via environment variables and require a server restart to change.
@@ -84,6 +92,10 @@
               <a href="https://github.com/mafischer/rkllm-runtimes" target="_blank" class="text-primary">mafischer/rkllm-runtimes</a>
               on startup and when a model with an unknown runtime version is loaded.
               Binaries are Apache 2.0 licensed.
+              <span v-if="serverInfo.runtimesDir" class="d-block mt-1">
+                <v-icon size="12" class="mr-1">mdi-folder-outline</v-icon>
+                Downloaded to: <code class="text-caption font-weight-regular">{{ serverInfo.runtimesDir }}</code>
+              </span>
             </div>
           </div>
           <v-switch v-model="settings.autoDownloadRuntimes" color="primary" hide-details density="compact" class="ml-4 flex-shrink-0"></v-switch>
@@ -117,6 +129,10 @@
               <a href="https://github.com/oRKLLM/llama.cpp-rockchip" target="_blank" class="text-primary">llama.cpp-rockchip</a>)
               from <a href="https://github.com/oRKLLM/llama.cpp-rockchip" target="_blank" class="text-primary">oRKLLM/llama.cpp-rockchip</a>.
               Required to load <code>.gguf</code> models. ARM64 (board) only.
+              <span v-if="serverInfo.llamaRuntimeDir" class="d-block mt-1">
+                <v-icon size="12" class="mr-1">mdi-folder-outline</v-icon>
+                Downloaded to: <code class="text-caption font-weight-regular">{{ serverInfo.llamaRuntimeDir }}</code>
+              </span>
             </div>
           </div>
           <v-switch :model-value="settings.autoDownloadLlamaRuntime" @update:model-value="onToggleAutoLlama" color="teal" hide-details density="compact" class="ml-4 flex-shrink-0"></v-switch>

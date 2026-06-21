@@ -1,4 +1,4 @@
-import { getCredentials, saveCredentials, verifyCredentials, hashPassword, checkPassword, MODELS_DIR, LIBRKLLMRT_PATH, RUNTIMES_DIR, parseRuntimeVersion, getPlatform, getNpuCoreCount, getGpuInfo, getDeviceDrivers } from '../config.js';
+import { getCredentials, saveCredentials, verifyCredentials, hashPassword, checkPassword, MODELS_DIR, LIBRKLLMRT_PATH, RUNTIMES_DIR, LLAMA_RUNTIME_DIR, parseRuntimeVersion, getPlatform, getNpuCoreCount, getGpuInfo, getDeviceDrivers } from '../config.js';
 import { signCookie, verifyCookie, issueSessionCookie } from '../auth/session.js';
 import { clearAllCache, getCacheStats } from '../cache.js';
 import pool from '../pool.js';
@@ -431,6 +431,8 @@ export default async function adminRoutes(fastify, options) {
         port,
         libPath: LIBRKLLMRT_PATH,
         modelsDir: MODELS_DIR,
+        runtimesDir: RUNTIMES_DIR,
+        llamaRuntimeDir: LLAMA_RUNTIME_DIR,
         platform: getPlatform(),
         npuCores: getNpuCoreCount(),   // pool size cap (rk3576→2, rk3588→3, else 1)
         // Hardware capacity for the dynamic cache-limit ceilings: hot cache ≤ 50%
