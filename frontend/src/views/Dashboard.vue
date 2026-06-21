@@ -100,7 +100,7 @@
         <v-col cols="12" md="4" class="d-flex flex-column gap-6">
 
           <!-- Metrics Panel -->
-          <v-card class="glass-card pa-5">
+          <v-card class="glass-card pa-5 telemetry-card">
             <div class="text-h6 font-weight-bold mb-4 d-flex align-center justify-space-between">
               <div class="d-flex align-center">
                 <v-icon start color="primary">mdi-chart-line</v-icon>
@@ -116,30 +116,30 @@
               </v-btn-toggle>
             </div>
 
-            <v-row class="text-center">
-              <v-col cols="4" class="py-2">
+            <div class="telemetry-grid text-center">
+              <div class="py-2 d-flex flex-column align-center">
                 <v-progress-circular :model-value="metrics.cpu" :size="80" :width="7" color="blue" class="font-weight-bold mb-1">
                   <span class="text-caption font-weight-bold">{{ metrics.cpu }}%</span>
                 </v-progress-circular>
                 <div class="text-caption text-grey">CPU</div>
-              </v-col>
+              </div>
 
-              <v-col cols="4" class="py-2">
+              <div class="py-2 d-flex flex-column align-center">
                 <v-progress-circular :model-value="metrics.npu" :size="80" :width="7" color="primary" class="font-weight-bold mb-1">
                   <span class="text-caption font-weight-bold">{{ metrics.npu }}%</span>
                 </v-progress-circular>
                 <div class="text-caption text-grey">NPU</div>
-              </v-col>
+              </div>
 
-              <v-col cols="4" class="py-2">
+              <div class="py-2 d-flex flex-column align-center">
                 <v-progress-circular :model-value="metrics.gpu" :size="80" :width="7" color="orange" class="font-weight-bold mb-1">
                   <span class="text-caption font-weight-bold">{{ metrics.gpu }}%</span>
                 </v-progress-circular>
                 <div class="text-caption text-grey">GPU</div>
-              </v-col>
+              </div>
 
               <!-- Memory row: RAM usage, RAM bandwidth, Swap -->
-              <v-col cols="4" class="py-2">
+              <div class="py-2 d-flex flex-column align-center">
                 <v-progress-circular :model-value="metrics.ram" :size="80" :width="7" color="teal" class="font-weight-bold mb-1">
                   <span v-if="!telemetryUnits" class="text-caption font-weight-bold">{{ metrics.ram }}%</span>
                   <span v-else class="font-weight-bold" style="font-size: 0.62rem; line-height: 1.2; text-align: center;">
@@ -148,9 +148,9 @@
                   </span>
                 </v-progress-circular>
                 <div class="text-caption text-grey">RAM</div>
-              </v-col>
+              </div>
 
-              <v-col cols="4" class="py-2">
+              <div class="py-2 d-flex flex-column align-center">
                 <v-progress-circular :model-value="metrics.memBw" :size="80" :width="7" :color="metricsRaw.memBwAvailable ? 'deep-purple-lighten-1' : 'grey'" class="font-weight-bold mb-1">
                   <span v-if="!metricsRaw.memBwAvailable" class="text-caption font-weight-bold text-grey">N/A</span>
                   <span v-else-if="!telemetryUnits" class="text-caption font-weight-bold">{{ metrics.memBw }}%</span>
@@ -159,9 +159,9 @@
                   </span>
                 </v-progress-circular>
                 <div class="text-caption text-grey">RAM BW</div>
-              </v-col>
+              </div>
 
-              <v-col cols="4" class="py-2">
+              <div class="py-2 d-flex flex-column align-center">
                 <v-progress-circular :model-value="metrics.swap" :size="80" :width="7" :color="metricsRaw.swapTotal ? 'blue-grey-lighten-1' : 'grey'" class="font-weight-bold mb-1">
                   <span v-if="!metricsRaw.swapTotal" class="text-caption font-weight-bold text-grey">none</span>
                   <span v-else-if="!telemetryUnits" class="text-caption font-weight-bold">{{ metrics.swap }}%</span>
@@ -171,10 +171,10 @@
                   </span>
                 </v-progress-circular>
                 <div class="text-caption text-grey">Swap</div>
-              </v-col>
+              </div>
 
               <!-- Disk I/O row: utilization, live read, live write -->
-              <v-col cols="4" class="py-2">
+              <div class="py-2 d-flex flex-column align-center">
                 <v-progress-circular :model-value="metrics.disk" :size="80" :width="7" color="amber" class="font-weight-bold mb-1">
                   <span v-if="!telemetryUnits" class="text-caption font-weight-bold">{{ metrics.disk }}%</span>
                   <span v-else class="font-weight-bold" style="font-size: 0.62rem; line-height: 1.2; text-align: center;">
@@ -183,9 +183,9 @@
                   </span>
                 </v-progress-circular>
                 <div class="text-caption text-grey">Disk</div>
-              </v-col>
+              </div>
 
-              <v-col cols="4" class="py-2">
+              <div class="py-2 d-flex flex-column align-center">
                 <v-progress-circular :model-value="diskReadRing" :size="80" :width="7" color="light-green" class="font-weight-bold mb-1">
                   <span class="font-weight-bold" style="font-size: 0.62rem; line-height: 1.2; text-align: center;">
                     {{ fmtRate(metrics.diskRead) }}<br>
@@ -193,9 +193,9 @@
                   </span>
                 </v-progress-circular>
                 <div class="text-caption text-grey">Disk Read</div>
-              </v-col>
+              </div>
 
-              <v-col cols="4" class="py-2">
+              <div class="py-2 d-flex flex-column align-center">
                 <v-progress-circular :model-value="diskWriteRing" :size="80" :width="7" color="deep-orange-lighten-1" class="font-weight-bold mb-1">
                   <span class="font-weight-bold" style="font-size: 0.62rem; line-height: 1.2; text-align: center;">
                     {{ fmtRate(metrics.diskWrite) }}<br>
@@ -203,25 +203,25 @@
                   </span>
                 </v-progress-circular>
                 <div class="text-caption text-grey">Disk Write</div>
-              </v-col>
+              </div>
 
               <!-- Thermal row: disk temp, SoC temp, fan -->
-              <v-col cols="4" class="py-2">
+              <div class="py-2 d-flex flex-column align-center">
                 <v-progress-circular :model-value="metrics.diskTemp || 0" :size="80" :width="7" :color="metricsRaw.diskTempAvailable ? 'pink-lighten-1' : 'grey'" class="font-weight-bold mb-1">
                   <span v-if="!metricsRaw.diskTempAvailable" class="text-caption font-weight-bold text-grey">N/A</span>
                   <span v-else class="text-caption font-weight-bold">{{ metrics.diskTemp }}°C</span>
                 </v-progress-circular>
                 <div class="text-caption text-grey">Disk Temp</div>
-              </v-col>
+              </div>
 
-              <v-col cols="4" class="py-2">
+              <div class="py-2 d-flex flex-column align-center">
                 <v-progress-circular :model-value="metrics.temp" :size="80" :width="7" color="rose" class="font-weight-bold mb-1">
                   <span class="text-caption font-weight-bold">{{ metrics.temp }}°C</span>
                 </v-progress-circular>
                 <div class="text-caption text-grey">Temp</div>
-              </v-col>
+              </div>
 
-              <v-col cols="4" class="py-2">
+              <div class="py-2 d-flex flex-column align-center">
                 <v-progress-circular :model-value="metrics.fan" :size="80" :width="7" :color="metricsRaw.fanAvailable ? 'cyan' : 'grey'" class="font-weight-bold mb-1">
                   <span v-if="!metricsRaw.fanAvailable" class="text-caption font-weight-bold text-grey">N/A</span>
                   <span v-else-if="!telemetryUnits" class="text-caption font-weight-bold">{{ metrics.fan }}%</span>
@@ -231,73 +231,77 @@
                   </span>
                 </v-progress-circular>
                 <div class="text-caption text-grey">Fan</div>
-              </v-col>
-            </v-row>
+              </div>
+            </div>
 
             <!-- Disk table -->
             <div v-if="disks.length" class="mt-4">
               <v-divider class="mb-3"></v-divider>
-              <v-table density="compact" class="text-caption">
-                <thead>
-                  <tr>
-                    <th class="text-left">Device</th>
-                    <th class="text-left">Type</th>
-                    <th class="text-right">Size</th>
-                    <th class="text-right">Read</th>
-                    <th class="text-right">Write</th>
-                    <th class="text-right">TBW</th>
-                    <th class="text-center">SMART</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="d in disks" :key="d.device">
-                    <td class="font-mono">{{ d.device }}</td>
-                    <td>{{ d.type }}</td>
-                    <td class="text-right">{{ formatGb(d.size) }}</td>
-                    <td class="text-right text-grey">{{ d.readMBs != null ? fmtRate(d.readMBs) : '—' }}</td>
-                    <td class="text-right text-grey">{{ d.writeMBs != null ? fmtRate(d.writeMBs) : '—' }}</td>
-                    <td class="text-right text-grey">{{ d.tbw != null ? d.tbw + ' TB' : '—' }}</td>
-                    <td class="text-center">
-                      <v-chip
-                        size="x-small"
-                        :color="d.smartStatus === 'Ok' ? 'success' : d.smartStatus === 'Bad' ? 'error' : d.smartStatus === 'Degraded' ? 'warning' : 'grey'"
-                        variant="tonal"
-                      >{{ d.smartStatus }}</v-chip>
-                    </td>
-                  </tr>
-                </tbody>
-              </v-table>
+              <div style="overflow-x: auto; width: 100%;">
+                <v-table density="compact" class="text-caption" style="min-width: 500px;">
+                  <thead>
+                    <tr>
+                      <th class="text-left">Device</th>
+                      <th class="text-left">Type</th>
+                      <th class="text-right">Size</th>
+                      <th class="text-right">Read</th>
+                      <th class="text-right">Write</th>
+                      <th class="text-right">TBW</th>
+                      <th class="text-center">SMART</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="d in disks" :key="d.device">
+                      <td class="font-mono">{{ d.device }}</td>
+                      <td>{{ d.type }}</td>
+                      <td class="text-right">{{ formatGb(d.size) }}</td>
+                      <td class="text-right text-grey">{{ d.readMBs != null ? fmtRate(d.readMBs) : '—' }}</td>
+                      <td class="text-right text-grey">{{ d.writeMBs != null ? fmtRate(d.writeMBs) : '—' }}</td>
+                      <td class="text-right text-grey">{{ d.tbw != null ? d.tbw + ' TB' : '—' }}</td>
+                      <td class="text-center">
+                        <v-chip
+                          size="x-small"
+                          :color="d.smartStatus === 'Ok' ? 'success' : d.smartStatus === 'Bad' ? 'error' : d.smartStatus === 'Degraded' ? 'warning' : 'grey'"
+                          variant="tonal"
+                        >{{ d.smartStatus }}</v-chip>
+                      </td>
+                    </tr>
+                  </tbody>
+                </v-table>
+              </div>
             </div>
 
             <!-- Accelerator Devices table -->
             <div class="mt-4">
               <v-divider class="mb-3"></v-divider>
-              <v-table density="compact" class="text-caption">
-                <thead>
-                  <tr>
-                    <th class="text-left">Device</th>
-                    <th class="text-left">Type</th>
-                    <th class="text-left">Detail</th>
-                    <th class="text-left">Driver</th>
-                    <th class="text-right">Load</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="dev in acceleratorDevices" :key="dev.type">
-                    <td>{{ dev.name }}</td>
-                    <td>
-                      <v-chip size="x-small" :color="dev.color" variant="tonal">{{ dev.type }}</v-chip>
-                    </td>
-                    <td class="text-grey">{{ dev.detail || '—' }}</td>
-                    <td class="font-mono text-grey">{{ dev.driver || '—' }}</td>
-                    <td class="text-right">
-                      <v-chip size="x-small" :color="dev.load > 70 ? 'warning' : 'grey'" variant="tonal">
-                        {{ dev.load }}%
-                      </v-chip>
-                    </td>
-                  </tr>
-                </tbody>
-              </v-table>
+              <div style="overflow-x: auto; width: 100%;">
+                <v-table density="compact" class="text-caption" style="min-width: 500px;">
+                  <thead>
+                    <tr>
+                      <th class="text-left">Device</th>
+                      <th class="text-left">Type</th>
+                      <th class="text-left">Detail</th>
+                      <th class="text-left">Driver</th>
+                      <th class="text-right">Load</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="dev in acceleratorDevices" :key="dev.type">
+                      <td>{{ dev.name }}</td>
+                      <td>
+                        <v-chip size="x-small" :color="dev.color" variant="tonal">{{ dev.type }}</v-chip>
+                      </td>
+                      <td class="text-grey">{{ dev.detail || '—' }}</td>
+                      <td class="font-mono text-grey">{{ dev.driver || '—' }}</td>
+                      <td class="text-right">
+                        <v-chip size="x-small" :color="dev.load > 70 ? 'warning' : 'grey'" variant="tonal">
+                          {{ dev.load }}%
+                        </v-chip>
+                      </td>
+                    </tr>
+                  </tbody>
+                </v-table>
+              </div>
             </div>
           </v-card>
 
@@ -885,6 +889,32 @@ export default {
 .gap-6 { gap: 24px; }
 .gap-3 { gap: 12px; }
 .gap-2 { gap: 8px; }
+
+/* Responsive Container Grid for Hardware Telemetry Gauges */
+.telemetry-card {
+  container-type: inline-size;
+}
+
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  justify-items: center;
+}
+
+@container (max-width: 330px) {
+  .telemetry-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+}
+
+@container (max-width: 220px) {
+  .telemetry-grid {
+    grid-template-columns: repeat(1, 1fr);
+    gap: 8px;
+  }
+}
 </style>
 
 <style>
