@@ -163,6 +163,52 @@ export function cacheKey(modelId, messages) {
   return crypto.createHash('sha256').update(payload).digest('hex').slice(0, 16);
 }
 
+/**
+ * Resolves the longest cached prefix for a given list of segments.
+ * Calculates cache keys for each segment using a hash-chain tree path:
+ * K_1 = sha256(modelName + '\0' + segment_1_hash)
+ * K_2 = sha256(K_1 + '\0' + segment_2_hash)
+ * ...
+ */
+export async function resolveSegmentsCache(modelName, segments) {
+  if (!segments || segments.length === 0) {
+    return { keys: [], hitIndex: -1, loadCachePath: null, missedSegments: [] };
+  }
+
+  const keys = [];
+  let currentKey = modelName;
+
+  for (const s of segments) {
+    let sHash = s.hash;
+    if (sHash) {
+      if (sHash.startsWith('sha256:')) {
+        sHash = sHash.slice(7);
+      }
+    } else {
+      sHash = crypto.createHash('sha256').update(s.content).digest('hex');
+    }
+    const payload = currentKey + '\0' + sHash;
+    currentKey = crypto.createHash('sha256').update(payload).digest('hex').slice(0, 16);
+    keys.push(currentKey);
+  }
+
+  // Walk backwards to find the longest hit
+  let hitIndex = -1;
+  let loadCachePath = null;
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const path = await getCachePath(keys[i]);
+    if (path) {
+      hitIndex = i;
+      loadCachePath = path;
+      break;
+    }
+  }
+
+  const missedSegments = segments.slice(hitIndex + 1);
+  return { keys, hitIndex, loadCachePath, missedSegments };
+}
+
+
 export async function getCachePath(key) {
   const cfg = settings();
   if (!cfg.enabled) return null;

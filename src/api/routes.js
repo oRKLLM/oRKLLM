@@ -5,7 +5,7 @@ import { supportsThinkingToggle, isRecurrentArch } from '../gguf.js';
 import pool from '../pool.js';
 import { recordRequest } from '../stats.js';
 import { dbGetModelSettings, dbSetModelSettings, dbGetSetting, dbListEnabledMcpServers } from '../db.js';
-import { cacheKey, getCachePath, putCachePath, tmpCachePath, isCacheEnabled, getMaxContextTokens } from '../cache.js';
+import { cacheKey, getCachePath, putCachePath, tmpCachePath, isCacheEnabled, getMaxContextTokens, resolveSegmentsCache } from '../cache.js';
 import { traceInference } from '../langfuse.js';
 import { getAggregatedTools } from '../mcp.js';
 import { resolveWithTools, buildToolSystemPrompt } from '../mcp_inference.js';
@@ -138,6 +138,7 @@ export default async function apiRoutes(fastify, options) {
     const {
       model,
       messages,
+      segments = undefined,
       stream = false,
       temperature = 0.8,
       top_p = 0.9,
@@ -178,8 +179,51 @@ export default async function apiRoutes(fastify, options) {
     let loadCachePath = null;
     let saveCachePath = null;
     let prefixMessages = trimmed;
+    let segmentCacheHit = false;
+    const isGguf = model.toLowerCase().endsWith('.gguf');
 
-    if (cacheEnabled && trimmed.length >= 2) {
+    if (cacheEnabled && Array.isArray(segments) && segments.length > 0) {
+      try {
+        const { keys, hitIndex, loadCachePath: resolvedLoadPath, missedSegments } =
+          await resolveSegmentsCache(model, segments);
+
+        let currentLoadPath = resolvedLoadPath;
+        for (let i = 0; i < missedSegments.length; i++) {
+          const seg = missedSegments[i];
+          const segIndex = hitIndex + 1 + i;
+          const targetKey = keys[segIndex];
+
+          console.log(`[Segments Cache] Prefilling missed segment: "${seg.id || segIndex}" (Key: ${targetKey})...`);
+
+          const promptStr = seg.content;
+          const savePath = tmpCachePath(targetKey);
+
+          // Warm the cache by prefilling this segment on top of currentLoadPath
+          await pool.prefillAndCache(promptStr, savePath, { loadCachePath: currentLoadPath });
+
+          if (fs.existsSync(savePath)) {
+            putCachePath(targetKey, savePath, isGguf ? 'llama' : 'rkllm');
+            console.log(`[Segments Cache] Cached segment "${seg.id || segIndex}" successfully (Key: ${targetKey}).`);
+            currentLoadPath = await getCachePath(targetKey);
+          } else {
+            console.warn(`[Segments Cache] Failed to save segment cache for "${seg.id || segIndex}" (Key: ${targetKey}).`);
+            currentLoadPath = null;
+            break;
+          }
+        }
+
+        if (currentLoadPath) {
+          loadCachePath = currentLoadPath;
+          segmentCacheHit = true;
+          prefixMessages = trimmed; // run all messages on top of the segments KV state
+          console.log(`[Segments Cache] Using resolved segment cache path: ${loadCachePath}`);
+        }
+      } catch (e) {
+        console.error('[Segments Cache] Error building segment-based prefix cache:', e.message);
+      }
+    }
+
+    if (cacheEnabled && !segmentCacheHit && trimmed.length >= 2) {
       const prefixMsgs = trimmed.slice(0, -1); // everything except last (new user) message
       const pKey       = cacheKey(model, prefixMsgs);
       const hit        = await getCachePath(pKey);  // async: dequantizes if needed
@@ -211,7 +255,6 @@ export default async function apiRoutes(fastify, options) {
     //   • no toggle (e.g. LFM2.5-MoE): the model ALWAYS reasons; there's nothing to
     //     disable, so we never seed/strip and the thinking setting is hidden in the
     //     UI for these models (see /api/admin/library `thinkingToggle`).
-    const isGguf = model.toLowerCase().endsWith('.gguf');
     const canToggleThinking = isGguf && supportsThinkingToggle(path.join(MODELS_DIR, model));
     const seedNoThink = canToggleThinking && !saved.thinking_enabled;
 

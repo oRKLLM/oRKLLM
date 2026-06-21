@@ -10,7 +10,7 @@ process.env.ORKLLM_DB_PATH = tempDbPath;
 const tempCacheDir = path.join(os.tmpdir(), `orkllm-cache-dir-test-${Date.now()}`);
 
 const { dbSetSetting } = await import('../src/db.js');
-const { putCachePath, getCachePath, getCacheStats, clearAllCache } = await import('../src/cache.js');
+const { putCachePath, getCachePath, getCacheStats, clearAllCache, resolveSegmentsCache } = await import('../src/cache.js');
 
 describe('KV Prefix Cache Mirroring', () => {
   before(() => {
@@ -118,3 +118,70 @@ describe('KV Prefix Cache Mirroring', () => {
     assert.equal(stats.cold.entries, 1);
   });
 });
+
+describe('Segment-Based Prefix Caching', () => {
+
+  before(() => {
+    fs.mkdirSync(tempCacheDir, { recursive: true });
+    dbSetSetting('cache_enabled', '1');
+    dbSetSetting('cache_dir', tempCacheDir);
+  });
+
+  after(() => {
+    clearAllCache();
+  });
+
+  test('returns empty results on empty segments', async () => {
+    const res = await resolveSegmentsCache('my-model', []);
+    assert.deepEqual(res.keys, []);
+    assert.equal(res.hitIndex, -1);
+    assert.equal(res.loadCachePath, null);
+    assert.deepEqual(res.missedSegments, []);
+  });
+
+  test('successfully hashes, chains and resolves segments hits and misses', async () => {
+    clearAllCache();
+    const model = 'my-model';
+    const segments = [
+      { id: 'seg1', content: 'system rules' },
+      { id: 'seg2', content: 'agent prompt' },
+      { id: 'seg3', content: 'task summary' }
+    ];
+
+    // First resolve (cold cache, everything missed)
+    const res1 = await resolveSegmentsCache(model, segments);
+    assert.equal(res1.keys.length, 3);
+    assert.equal(res1.hitIndex, -1);
+    assert.equal(res1.loadCachePath, null);
+    assert.equal(res1.missedSegments.length, 3);
+    assert.equal(res1.missedSegments[0].id, 'seg1');
+
+    // Manually cache the first segment key to simulate a hit
+    const key1 = res1.keys[0];
+    const tmpFile = path.join(tempCacheDir, 'tmp_seg1.rkllmcache');
+    fs.writeFileSync(tmpFile, 'seg1 cache content');
+    putCachePath(key1, tmpFile, 'rkllm', 'off');
+
+    // Second resolve (first segment hits, others miss)
+    const res2 = await resolveSegmentsCache(model, segments);
+    assert.equal(res2.hitIndex, 0);
+    assert.ok(res2.loadCachePath?.includes(key1), 'loadCachePath should resolve to cached segment 1');
+    assert.equal(res2.missedSegments.length, 2);
+    assert.equal(res2.missedSegments[0].id, 'seg2');
+    assert.equal(res2.missedSegments[1].id, 'seg3');
+
+    // Manually cache the second segment key (chains under first)
+    const key2 = res1.keys[1];
+    const tmpFile2 = path.join(tempCacheDir, 'tmp_seg2.rkllmcache');
+    fs.writeFileSync(tmpFile2, 'seg2 cache content');
+    putCachePath(key2, tmpFile2, 'rkllm', 'off');
+
+    // Third resolve (first and second segment hit, third misses)
+    const res3 = await resolveSegmentsCache(model, segments);
+    assert.equal(res3.hitIndex, 1);
+    assert.ok(res3.loadCachePath?.includes(key2), 'loadCachePath should resolve to cached segment 2');
+    assert.equal(res3.missedSegments.length, 1);
+    assert.equal(res3.missedSegments[0].id, 'seg3');
+  });
+});
+
