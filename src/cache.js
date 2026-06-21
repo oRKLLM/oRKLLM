@@ -221,16 +221,34 @@ export async function getCachePath(key) {
   if (!found) {
     const coldFound = findCacheFile(coldDir, key);
     if (coldFound) {
-      // Promote cold → hot (keep same extension)
-      ensureDir(hotDir);
-      const hotDest = path.join(hotDir, path.basename(coldFound));
-      try { fs.renameSync(coldFound, hotDest); found = hotDest; }
-      catch { found = coldFound; }
-      delete lru.cold[key];
-      lru.hot[key] = Date.now();
-      evictLru('hot', hotDir, cfg.hotLimitMB, lru);
-      writeLru(cfg.cacheDir, lru);
-      mirrorToColdIfSpace(key, cfg);
+      if (cfg.hotLimitMB <= 0) {
+        // Hot cache is disabled. Read directly from SSD/cold cache.
+        found = coldFound;
+        lru.cold = lru.cold || {};
+        lru.cold[key] = Date.now();
+        writeLru(cfg.cacheDir, lru);
+        console.log(`[Cache] Using SSD cold cache directly for "${key}" (hot cache disabled)`);
+      } else {
+        // Promote cold → hot (keep same extension)
+        ensureDir(hotDir);
+        const hotDest = path.join(hotDir, path.basename(coldFound));
+        try {
+          // Optimization: copy instead of rename+copy-back to avoid redundant SSD writes
+          fs.copyFileSync(coldFound, hotDest);
+          found = hotDest;
+        } catch {
+          found = coldFound;
+        }
+        delete lru.cold[key];
+        lru.hot[key] = Date.now();
+        evictLru('hot', hotDir, cfg.hotLimitMB, lru);
+        
+        // Ensure the cold entry is tracked since it remains on SSD
+        if (fs.existsSync(coldFound)) {
+          lru.cold[key] = Date.now();
+        }
+        writeLru(cfg.cacheDir, lru);
+      }
     }
   } else {
     lru.hot[key] = Date.now();

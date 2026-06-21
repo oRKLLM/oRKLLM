@@ -117,6 +117,33 @@ describe('KV Prefix Cache Mirroring', () => {
     assert.equal(stats.hot.entries, 1);
     assert.equal(stats.cold.entries, 1);
   });
+
+  test('returns cold cache path directly without promotion when hot cache is disabled (limit <= 0)', async () => {
+    clearAllCache();
+    const key = 'testkeypurecold';
+
+    // Disable hot cache (limit = 0)
+    dbSetSetting('cache_hot_limit_mb', '0');
+    const tmpFile = path.join(tempCacheDir, 'tmp_test_file_purecold.rkllmcache');
+    fs.writeFileSync(tmpFile, 'pure cold content');
+
+    putCachePath(key, tmpFile, 'rkllm', 'off');
+
+    const hotFile = path.join(tempCacheDir, 'hot', `${key}.rkllmcache`);
+    const coldFile = path.join(tempCacheDir, 'cold', `${key}.rkllmcache`);
+    assert.ok(!fs.existsSync(hotFile), 'Should not exist in hot cache');
+    assert.ok(fs.existsSync(coldFile), 'Should exist in cold cache');
+
+    // Retrieve via getCachePath
+    const foundPath = await getCachePath(key);
+    assert.equal(foundPath, coldFile, 'Should return cold cache path directly');
+    assert.ok(!fs.existsSync(hotFile), 'Should still not exist in hot cache');
+    assert.ok(fs.existsSync(coldFile), 'Should still exist in cold cache');
+
+    const stats = getCacheStats();
+    assert.equal(stats.hot.entries, 0);
+    assert.equal(stats.cold.entries, 1);
+  });
 });
 
 describe('Segment-Based Prefix Caching', () => {

@@ -187,11 +187,21 @@ export default async function apiRoutes(fastify, options) {
         const { keys, hitIndex, loadCachePath: resolvedLoadPath, missedSegments } =
           await resolveSegmentsCache(model, segments);
 
-        let currentLoadPath = resolvedLoadPath;
         for (let i = 0; i < missedSegments.length; i++) {
           const seg = missedSegments[i];
           const segIndex = hitIndex + 1 + i;
           const targetKey = keys[segIndex];
+
+          let currentLoadPath = null;
+          // Dynamically resolve and promote the previous segment's cache path from hot/cold tiers.
+          if (segIndex > 0) {
+            const prevKey = keys[segIndex - 1];
+            currentLoadPath = await getCachePath(prevKey);
+            if (!currentLoadPath) {
+              console.warn(`[Segments Cache] Parent segment cache lost: "${prevKey}"`);
+              break;
+            }
+          }
 
           console.log(`[Segments Cache] Prefilling missed segment: "${seg.id || segIndex}" (Key: ${targetKey})...`);
 
@@ -204,16 +214,17 @@ export default async function apiRoutes(fastify, options) {
           if (fs.existsSync(savePath)) {
             putCachePath(targetKey, savePath, isGguf ? 'llama' : 'rkllm');
             console.log(`[Segments Cache] Cached segment "${seg.id || segIndex}" successfully (Key: ${targetKey}).`);
-            currentLoadPath = await getCachePath(targetKey);
           } else {
             console.warn(`[Segments Cache] Failed to save segment cache for "${seg.id || segIndex}" (Key: ${targetKey}).`);
-            currentLoadPath = null;
             break;
           }
         }
 
-        if (currentLoadPath) {
-          loadCachePath = currentLoadPath;
+        // Retrieve and promote the final segment cache path right before execution
+        const finalKey = keys[keys.length - 1];
+        const finalPath = await getCachePath(finalKey);
+        if (finalPath) {
+          loadCachePath = finalPath;
           segmentCacheHit = true;
           prefixMessages = trimmed; // run all messages on top of the segments KV state
           console.log(`[Segments Cache] Using resolved segment cache path: ${loadCachePath}`);
