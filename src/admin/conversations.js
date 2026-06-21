@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import {
   dbCreateConversation, dbListConversations, dbGetConversation,
   dbTouchConversation, dbUpdateConversationTitle, dbDeleteConversation,
-  dbAddMessage, dbGetMessages,
+  dbAddMessage, dbGetMessages, dbUpdateLastMessage,
 } from '../db.js';
 import { activeStreams } from '../streams.js';
 import pool from '../pool.js';
@@ -113,6 +113,15 @@ export default async function conversationRoutes(fastify) {
     if (!role || !content) return reply.status(400).send({ error: 'role and content required' });
     const conv = dbGetConversation(request.params.id);
     if (!conv) return reply.status(404).send({ error: 'Conversation not found' });
+
+    if (role === 'assistant') {
+      const updated = dbUpdateLastMessage(request.params.id, 'assistant', content);
+      if (updated) {
+        dbTouchConversation(request.params.id);
+        return { success: true, updated: true };
+      }
+    }
+
     const id = randomUUID();
     dbAddMessage({ id, conversationId: request.params.id, role, content });
     dbTouchConversation(request.params.id);

@@ -554,6 +554,21 @@ export function dbAddMessage({ id, conversationId, role, content }) {
   ).run(id, conversationId, role, content, Date.now()));
 }
 
+export function dbUpdateLastMessage(conversationId, role, content) {
+  return withReconnect(d => {
+    const lastMsg = d.prepare(
+      'SELECT id, role FROM messages WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1'
+    ).get(conversationId);
+    if (lastMsg && lastMsg.role === role) {
+      d.prepare(
+        'UPDATE messages SET content = ? WHERE id = ?'
+      ).run(content, lastMsg.id);
+      return true;
+    }
+    return false;
+  });
+}
+
 export function dbGetMessages(conversationId) {
   return withReconnect(d => d.prepare(
     'SELECT id, role, content, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC'
