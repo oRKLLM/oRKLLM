@@ -89,23 +89,27 @@
               <v-list-item
                 v-for="model in models"
                 :key="model.id"
-                class="border-bottom py-3"
+                class="border-bottom py-3 px-4"
               >
-                <template v-slot:prepend>
-                  <v-icon color="grey-darken-1">mdi-file-code-outline</v-icon>
-                </template>
-                <v-list-item-title class="font-weight-bold text-truncate">
-                  {{ modelSettings[model.id]?.display_name || model.id }}
-                </v-list-item-title>
-                <v-list-item-subtitle class="d-flex align-center gap-1">
-                  {{ formatBytes(model.size) }}
-                  <v-chip size="x-small" :color="model.runtime === 'llama' ? 'teal' : 'primary'" variant="tonal" class="ml-1">
-                    {{ model.runtime === 'llama' ? 'llama / .gguf' : 'rkllm / .rkllm' }}
-                  </v-chip>
-                </v-list-item-subtitle>
+                <div class="d-flex flex-column flex-sm-row align-start align-sm-center justify-space-between w-100 gap-3">
+                  <!-- Left side: Icon + Text -->
+                  <div class="d-flex align-start gap-3" style="min-width: 0; flex: 1; width: 100%;">
+                    <v-icon color="grey-darken-1" class="mt-1" style="flex-shrink: 0;">mdi-file-code-outline</v-icon>
+                    <div style="min-width: 0; flex: 1;">
+                      <div class="font-weight-bold text-break text-body-1" style="word-break: break-all;">
+                        {{ modelSettings[model.id]?.display_name || model.id }}
+                      </div>
+                      <div class="d-flex align-center flex-wrap gap-2 mt-1">
+                        <span class="text-caption text-grey">{{ formatBytes(model.size) }}</span>
+                        <v-chip size="x-small" :color="model.runtime === 'llama' ? 'teal' : 'primary'" variant="tonal">
+                          {{ model.runtime === 'llama' ? 'llama / .gguf' : 'rkllm / .rkllm' }}
+                        </v-chip>
+                      </div>
+                    </div>
+                  </div>
 
-                <template v-slot:append>
-                  <div class="d-flex align-center gap-1">
+                  <!-- Right side: Actions -->
+                  <div class="d-flex align-center flex-wrap gap-2" style="flex-shrink: 0;">
                     <v-btn
                       icon
                       size="x-small"
@@ -160,7 +164,7 @@
                       Load
                     </v-btn>
                   </div>
-                </template>
+                </div>
               </v-list-item>
               <div v-if="models.length === 0" class="text-center py-6 text-grey">
                 No models found in scan directory.
@@ -185,24 +189,33 @@
               <v-list-item
                 v-for="head in library.eagle3"
                 :key="head.dir"
-                class="border-bottom py-3"
+                class="border-bottom py-3 px-4"
               >
-                <template v-slot:prepend>
-                  <v-icon color="purple">mdi-head-flash-outline</v-icon>
-                </template>
-                <v-list-item-title class="font-weight-bold text-truncate">{{ head.dir }}</v-list-item-title>
-                <v-list-item-subtitle class="d-flex align-center flex-wrap" style="gap:4px;">
-                  <v-chip size="x-small" :color="head.format === 'npu' ? 'primary' : 'purple'" variant="tonal">
-                    {{ head.format === 'npu' ? 'NPU (.rkllm)' : 'Vulkan (.safetensors)' }}
-                  </v-chip>
-                  <v-chip size="x-small" :color="head.embeddingsPresent ? 'success' : 'warning'" variant="tonal">
-                    <v-icon start size="x-small">{{ head.embeddingsPresent ? 'mdi-check' : 'mdi-alert-outline' }}</v-icon>
-                    {{ head.embeddingsPresent ? 'embeddings ready' : 'embeddings missing' }}
-                  </v-chip>
-                </v-list-item-subtitle>
-                <template v-slot:append v-if="!head.embeddingsPresent">
-                  <v-btn size="x-small" variant="tonal" color="purple" @click="openEmbedDialog(head)">Add embeddings</v-btn>
-                </template>
+                <div class="d-flex flex-column flex-sm-row align-start align-sm-center justify-space-between w-100 gap-3">
+                  <!-- Left side: Icon + Text -->
+                  <div class="d-flex align-start gap-3" style="min-width: 0; flex: 1; width: 100%;">
+                    <v-icon color="purple" class="mt-1" style="flex-shrink: 0;">mdi-head-flash-outline</v-icon>
+                    <div style="min-width: 0; flex: 1;">
+                      <div class="font-weight-bold text-break text-body-1" style="word-break: break-all;">
+                        {{ head.dir }}
+                      </div>
+                      <div class="d-flex align-center flex-wrap gap-2 mt-1">
+                        <v-chip size="x-small" :color="head.format === 'npu' ? 'primary' : 'purple'" variant="tonal">
+                          {{ head.format === 'npu' ? 'NPU (.rkllm)' : 'Vulkan (.safetensors)' }}
+                        </v-chip>
+                        <v-chip size="x-small" :color="head.embeddingsPresent ? 'success' : 'warning'" variant="tonal">
+                          <v-icon start size="x-small">{{ head.embeddingsPresent ? 'mdi-check' : 'mdi-alert-outline' }}</v-icon>
+                          {{ head.embeddingsPresent ? 'embeddings ready' : 'embeddings missing' }}
+                        </v-chip>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Right side: Actions -->
+                  <div v-if="!head.embeddingsPresent" class="d-flex align-center" style="flex-shrink: 0;">
+                    <v-btn size="x-small" variant="tonal" color="purple" @click="openEmbedDialog(head)">Add embeddings</v-btn>
+                  </div>
+                </div>
               </v-list-item>
               <div v-if="library.eagle3.length === 0" class="text-center py-6 text-grey">
                 No Eagle-3 draft heads found. Download a head with "Eagle-3" in its name or path.
@@ -225,17 +238,21 @@
               </v-btn>
             </div>
             <v-list bg-color="transparent" class="pa-0 border rounded">
-              <v-list-item v-for="b in library.base" :key="b.dir" class="border-bottom py-3">
-                <template v-slot:prepend>
-                  <v-icon color="teal">mdi-cube-outline</v-icon>
-                </template>
-                <v-list-item-title class="font-weight-bold text-truncate">{{ b.dir }}</v-list-item-title>
-                <v-list-item-subtitle class="d-flex align-center flex-wrap" style="gap:4px;">
-                  <v-chip v-if="b.arch" size="x-small" color="teal" variant="tonal">{{ b.arch }}</v-chip>
-                  <v-chip size="x-small" :color="b.hasEmbeddings ? 'success' : 'grey'" variant="tonal">
-                    {{ b.hasEmbeddings ? 'has embed_tokens' : 'no embed_tokens' }}
-                  </v-chip>
-                </v-list-item-subtitle>
+              <v-list-item v-for="b in library.base" :key="b.dir" class="border-bottom py-3 px-4">
+                <div class="d-flex align-start gap-3" style="min-width: 0; width: 100%;">
+                  <v-icon color="teal" class="mt-1" style="flex-shrink: 0;">mdi-cube-outline</v-icon>
+                  <div style="min-width: 0; flex: 1;">
+                    <div class="font-weight-bold text-break text-body-1" style="word-break: break-all;">
+                      {{ b.dir }}
+                    </div>
+                    <div class="d-flex align-center flex-wrap gap-2 mt-1">
+                      <v-chip v-if="b.arch" size="x-small" color="teal" variant="tonal">{{ b.arch }}</v-chip>
+                      <v-chip size="x-small" :color="b.hasEmbeddings ? 'success' : 'grey'" variant="tonal">
+                        {{ b.hasEmbeddings ? 'has embed_tokens' : 'no embed_tokens' }}
+                      </v-chip>
+                    </div>
+                  </div>
+                </div>
               </v-list-item>
               <div v-if="library.base.length === 0" class="text-center py-6 text-grey">
                 No base models downloaded. Download a base model to supply Eagle-3 embeddings.

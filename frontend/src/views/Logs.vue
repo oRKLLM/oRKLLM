@@ -27,7 +27,7 @@
             </v-btn-toggle>
           </div>
 
-          <v-divider vertical class="mx-1"></v-divider>
+          <v-divider vertical class="mx-1 d-none d-sm-flex"></v-divider>
 
           <!-- Level filter -->
           <div class="d-flex align-center gap-2">
@@ -40,7 +40,7 @@
             </v-btn-toggle>
           </div>
 
-          <v-divider vertical class="mx-1"></v-divider>
+          <v-divider vertical class="mx-1 d-none d-sm-flex"></v-divider>
 
           <!-- Auto-scroll toggle -->
           <v-switch

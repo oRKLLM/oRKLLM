@@ -183,43 +183,43 @@
           </div>
           <v-btn size="small" variant="text" color="error" prepend-icon="mdi-delete-outline" @click="clearHistory">Clear</v-btn>
         </div>
-        <v-table density="comfortable" class="bench-history">
-          <thead>
-            <tr>
-              <th>When</th>
-              <th class="text-truncate">Model</th>
-              <th class="text-right">TTFT</th>
-              <th class="text-right">Prefill</th>
-              <th class="text-right">Gen</th>
-              <th class="text-right">Tokens</th>
-              <th class="text-right">Total</th>
-              <th class="text-right">Max</th>
-              <th>Spec decode</th>
-              <th class="text-right"></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="r in history" :key="r.id">
-              <td class="text-caption text-no-wrap">{{ formatTime(r.created_at) }}</td>
-              <td class="text-caption text-truncate" style="max-width: 180px;">{{ r.model }}</td>
-              <td class="text-right text-no-wrap">{{ r.ttft_ms != null ? r.ttft_ms.toFixed(0) + ' ms' : '—' }}</td>
-              <td class="text-right text-no-wrap">{{ r.prefill_tps != null ? r.prefill_tps.toFixed(1) : '—' }}</td>
-              <td class="text-right text-no-wrap">{{ r.gen_tps != null ? r.gen_tps.toFixed(1) : '—' }}</td>
-              <td class="text-right">{{ r.gen_tokens ?? '—' }}</td>
-              <td class="text-right text-no-wrap">{{ r.total_ms != null ? (r.total_ms / 1000).toFixed(2) + 's' : '—' }}</td>
-              <td class="text-right">{{ r.max_tokens ?? '—' }}</td>
-              <td class="text-no-wrap">
-                <span v-if="r.spec_enabled" class="text-caption">{{ specLabel(r.spec_strategy) }} · {{ hwLabel(r.spec_hardware) }}</span>
-                <span v-else class="text-caption text-grey">off</span>
-              </td>
-              <td class="text-right">
-                <v-btn icon size="x-small" variant="text" color="error" title="Delete this run" @click="deleteRun(r.id)">
-                  <v-icon size="16">mdi-delete-outline</v-icon>
-                </v-btn>
-              </td>
-            </tr>
-          </tbody>
-        </v-table>
+          <v-table density="comfortable" class="bench-history">
+            <thead>
+              <tr>
+                <th>When</th>
+                <th class="text-truncate">Model</th>
+                <th class="text-right">TTFT</th>
+                <th class="text-right">Prefill</th>
+                <th class="text-right">Gen</th>
+                <th class="text-right">Tokens</th>
+                <th class="text-right">Total</th>
+                <th class="text-right">Max</th>
+                <th>Spec decode</th>
+                <th class="text-right"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="r in history" :key="r.id">
+                <td class="text-caption text-no-wrap">{{ formatTime(r.created_at) }}</td>
+                <td class="text-caption text-truncate" style="max-width: 180px;">{{ r.model }}</td>
+                <td class="text-right text-no-wrap">{{ r.ttft_ms != null ? r.ttft_ms.toFixed(0) + ' ms' : '—' }}</td>
+                <td class="text-right text-no-wrap">{{ r.prefill_tps != null ? r.prefill_tps.toFixed(1) : '—' }}</td>
+                <td class="text-right text-no-wrap">{{ r.gen_tps != null ? r.gen_tps.toFixed(1) : '—' }}</td>
+                <td class="text-right">{{ r.gen_tokens ?? '—' }}</td>
+                <td class="text-right text-no-wrap">{{ r.total_ms != null ? (r.total_ms / 1000).toFixed(2) + 's' : '—' }}</td>
+                <td class="text-right">{{ r.max_tokens ?? '—' }}</td>
+                <td class="text-no-wrap">
+                  <span v-if="r.spec_enabled" class="text-caption">{{ specLabel(r.spec_strategy) }} · {{ hwLabel(r.spec_hardware) }}</span>
+                  <span v-else class="text-caption text-grey">off</span>
+                </td>
+                <td class="text-right">
+                  <v-btn icon size="x-small" variant="text" color="error" title="Delete this run" @click="deleteRun(r.id)">
+                    <v-icon size="16">mdi-delete-outline</v-icon>
+                  </v-btn>
+                </td>
+              </tr>
+            </tbody>
+          </v-table>
       </v-card>
 
     </v-container>
@@ -415,6 +415,10 @@ export default {
 </script>
 
 <style scoped>
+.bench-history :deep(table) {
+  min-width: 800px;
+}
+
 .bg-slate-page {
   background: #0B0F19 !important;
 }

@@ -479,44 +479,44 @@
           No MCP servers configured yet.
         </div>
         <v-table v-else density="comfortable" class="mcp-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Transport</th>
-              <th>Endpoint</th>
-              <th class="text-center">Enabled</th>
-              <th class="text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="s in mcpServers" :key="s.id">
-              <td class="font-weight-medium">{{ s.name }}</td>
-              <td><v-chip size="x-small" variant="tonal" color="primary">{{ s.transport }}</v-chip></td>
-              <td class="font-mono text-caption text-truncate" style="max-width: 200px;">
-                {{ s.transport === 'stdio' ? s.config.command : s.config.url }}
-              </td>
-              <td class="text-center">
-                <v-switch
-                  :model-value="s.enabled"
-                  color="primary" density="compact" hide-details inset
-                  style="display:inline-flex"
-                  @update:model-value="toggleMcp(s, $event)"
-                ></v-switch>
-              </td>
-              <td class="text-right text-no-wrap">
-                <v-btn icon size="x-small" variant="text" :loading="mcpTesting === s.id" title="Test connection" @click="testMcp(s)">
-                  <v-icon size="16">mdi-connection</v-icon>
-                </v-btn>
-                <v-btn icon size="x-small" variant="text" color="primary" title="Edit" @click="openMcpDialog(s)">
-                  <v-icon size="16">mdi-pencil-outline</v-icon>
-                </v-btn>
-                <v-btn icon size="x-small" variant="text" color="error" title="Delete" @click="deleteMcp(s)">
-                  <v-icon size="16">mdi-delete-outline</v-icon>
-                </v-btn>
-              </td>
-            </tr>
-          </tbody>
-        </v-table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Transport</th>
+                <th>Endpoint</th>
+                <th class="text-center">Enabled</th>
+                <th class="text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="s in mcpServers" :key="s.id">
+                <td class="font-weight-medium">{{ s.name }}</td>
+                <td><v-chip size="x-small" variant="tonal" color="primary">{{ s.transport }}</v-chip></td>
+                <td class="font-mono text-caption text-truncate" style="max-width: 200px;">
+                  {{ s.transport === 'stdio' ? s.config.command : s.config.url }}
+                </td>
+                <td class="text-center">
+                  <v-switch
+                    :model-value="s.enabled"
+                    color="primary" density="compact" hide-details inset
+                    style="display:inline-flex"
+                    @update:model-value="toggleMcp(s, $event)"
+                  ></v-switch>
+                </td>
+                <td class="text-right text-no-wrap">
+                  <v-btn icon size="x-small" variant="text" :loading="mcpTesting === s.id" title="Test connection" @click="testMcp(s)">
+                    <v-icon size="16">mdi-connection</v-icon>
+                  </v-btn>
+                  <v-btn icon size="x-small" variant="text" color="primary" title="Edit" @click="openMcpDialog(s)">
+                    <v-icon size="16">mdi-pencil-outline</v-icon>
+                  </v-btn>
+                  <v-btn icon size="x-small" variant="text" color="error" title="Delete" @click="deleteMcp(s)">
+                    <v-icon size="16">mdi-delete-outline</v-icon>
+                  </v-btn>
+                </td>
+              </tr>
+            </tbody>
+          </v-table>
       </v-card>
 
       </div><!-- /settings-masonry -->
@@ -1162,6 +1162,10 @@ export default {
 </script>
 
 <style scoped>
+.mcp-table :deep(table) {
+  min-width: 600px;
+}
+
 .bg-slate-page {
   background-color: #0B0F19 !important;
 }

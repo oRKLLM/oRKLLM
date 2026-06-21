@@ -18,7 +18,7 @@
       <div class="text-h5 font-weight-bold mb-1">Site Management</div>
       <div class="text-caption text-grey mb-6">Manage users, authentication providers, and audit logs.</div>
 
-      <v-tabs v-model="tab" color="primary" class="mb-6">
+      <v-tabs v-model="tab" color="primary" class="mb-6" show-arrows>
         <v-tab value="users">
           <v-icon start>mdi-account-group-outline</v-icon>
           Users
@@ -64,65 +64,65 @@
 
           <!-- Users table -->
           <v-card class="glass-card pa-0 mb-5">
-            <v-data-table
-              :headers="userHeaders"
-              :items="users"
-              :loading="loadingUsers"
-              density="comfortable"
-              class="transparent-table"
-              no-data-text="No users found"
-            >
-              <template v-slot:item.role="{ item }">
-                <v-chip
-                  size="small"
-                  :color="item.role === 'admin' ? 'primary' : 'grey'"
-                  variant="tonal"
-                >
-                  {{ item.role }}
-                </v-chip>
-              </template>
-              <template v-slot:item.authProvider="{ item }">
-                <v-chip
-                  v-if="item.authProvider && item.authProvider !== 'local'"
-                  size="x-small"
-                  :color="item.authProvider === 'saml' ? 'teal' : 'primary'"
-                  variant="tonal"
-                >
-                  {{ item.authProvider.toUpperCase() }}
-                </v-chip>
-                <span v-else class="text-caption text-grey">local</span>
-              </template>
-              <template v-slot:item.is_active="{ item }">
-                <v-chip
-                  size="small"
-                  :color="item.is_active !== false ? 'success' : 'error'"
-                  variant="tonal"
-                >
-                  {{ item.is_active !== false ? 'Active' : 'Inactive' }}
-                </v-chip>
-              </template>
-              <template v-slot:item.last_login="{ item }">
-                <span class="text-caption">{{ item.last_login ? formatDateTime(item.last_login) : 'Never' }}</span>
-              </template>
-              <template v-slot:item.actions="{ item }">
-                <div class="d-flex align-center gap-1">
-                  <v-btn icon size="x-small" variant="text" color="primary" title="Edit user" @click="openEditUserDialog(item)">
-                    <v-icon size="16">mdi-pencil-outline</v-icon>
-                  </v-btn>
-                  <v-btn
-                    icon
-                    size="x-small"
-                    variant="text"
-                    :color="item.is_active !== false ? 'error' : 'success'"
-                    :title="item.is_active !== false ? 'Deactivate user' : 'Reactivate user'"
-                    :disabled="item.id === currentUser.id"
-                    @click="toggleUserActive(item)"
+              <v-data-table
+                :headers="userHeaders"
+                :items="users"
+                :loading="loadingUsers"
+                density="comfortable"
+                class="transparent-table responsive-data-table"
+                no-data-text="No users found"
+              >
+                <template v-slot:item.role="{ item }">
+                  <v-chip
+                    size="small"
+                    :color="item.role === 'admin' ? 'primary' : 'grey'"
+                    variant="tonal"
                   >
-                    <v-icon size="16">{{ item.is_active !== false ? 'mdi-account-off-outline' : 'mdi-account-check-outline' }}</v-icon>
-                  </v-btn>
-                </div>
-              </template>
-            </v-data-table>
+                    {{ item.role }}
+                  </v-chip>
+                </template>
+                <template v-slot:item.authProvider="{ item }">
+                  <v-chip
+                    v-if="item.authProvider && item.authProvider !== 'local'"
+                    size="x-small"
+                    :color="item.authProvider === 'saml' ? 'teal' : 'primary'"
+                    variant="tonal"
+                  >
+                    {{ item.authProvider.toUpperCase() }}
+                  </v-chip>
+                  <span v-else class="text-caption text-grey">local</span>
+                </template>
+                <template v-slot:item.is_active="{ item }">
+                  <v-chip
+                    size="small"
+                    :color="item.is_active !== false ? 'success' : 'error'"
+                    variant="tonal"
+                  >
+                    {{ item.is_active !== false ? 'Active' : 'Inactive' }}
+                  </v-chip>
+                </template>
+                <template v-slot:item.last_login="{ item }">
+                  <span class="text-caption">{{ item.last_login ? formatDateTime(item.last_login) : 'Never' }}</span>
+                </template>
+                <template v-slot:item.actions="{ item }">
+                  <div class="d-flex align-center gap-1">
+                    <v-btn icon size="x-small" variant="text" color="primary" title="Edit user" @click="openEditUserDialog(item)">
+                      <v-icon size="16">mdi-pencil-outline</v-icon>
+                    </v-btn>
+                    <v-btn
+                      icon
+                      size="x-small"
+                      variant="text"
+                      :color="item.is_active !== false ? 'error' : 'success'"
+                      :title="item.is_active !== false ? 'Deactivate user' : 'Reactivate user'"
+                      :disabled="item.id === currentUser.id"
+                      @click="toggleUserActive(item)"
+                    >
+                      <v-icon size="16">{{ item.is_active !== false ? 'mdi-account-off-outline' : 'mdi-account-check-outline' }}</v-icon>
+                    </v-btn>
+                  </div>
+                </template>
+              </v-data-table>
           </v-card>
 
           <!-- New User Dialog -->
@@ -728,21 +728,21 @@
                 </v-btn>
               </div>
             </div>
-            <v-data-table
-              :headers="auditHeaders"
-              :items="auditLog"
-              :loading="loadingAuditLog"
-              density="comfortable"
-              class="transparent-table"
-              no-data-text="No audit log entries"
-            >
-              <template v-slot:item.timestamp="{ item }">
-                <span class="text-caption font-mono">{{ formatDateTime(item.timestamp) }}</span>
-              </template>
-              <template v-slot:item.action="{ item }">
-                <v-chip size="x-small" variant="tonal" color="primary">{{ item.action }}</v-chip>
-              </template>
-            </v-data-table>
+              <v-data-table
+                :headers="auditHeaders"
+                :items="auditLog"
+                :loading="loadingAuditLog"
+                density="comfortable"
+                class="transparent-table responsive-data-table"
+                no-data-text="No audit log entries"
+              >
+                <template v-slot:item.timestamp="{ item }">
+                  <span class="text-caption font-mono">{{ formatDateTime(item.timestamp) }}</span>
+                </template>
+                <template v-slot:item.action="{ item }">
+                  <v-chip size="x-small" variant="tonal" color="primary">{{ item.action }}</v-chip>
+                </template>
+              </v-data-table>
           </v-card>
         </v-tabs-window-item>
 
@@ -1437,6 +1437,10 @@ export default {
 </script>
 
 <style scoped>
+.responsive-data-table :deep(table) {
+  min-width: 700px;
+}
+
 .bg-slate-page {
   background: #0B0F19 !important;
 }

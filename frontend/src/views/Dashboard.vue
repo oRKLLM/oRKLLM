@@ -97,7 +97,7 @@
       <v-row class="align-start">
 
         <!-- Left Side: Telemetry & API Endpoints -->
-        <v-col cols="12" md="4" class="d-flex flex-column gap-6">
+        <v-col cols="12" md="4" class="d-flex flex-column gap-6" style="min-width: 0;">
 
           <!-- Metrics Panel -->
           <v-card class="glass-card pa-5 telemetry-card">
@@ -237,71 +237,67 @@
             <!-- Disk table -->
             <div v-if="disks.length" class="mt-4">
               <v-divider class="mb-3"></v-divider>
-              <div style="overflow-x: auto; width: 100%;">
-                <v-table density="compact" class="text-caption" style="min-width: 500px;">
-                  <thead>
-                    <tr>
-                      <th class="text-left">Device</th>
-                      <th class="text-left">Type</th>
-                      <th class="text-right">Size</th>
-                      <th class="text-right">Read</th>
-                      <th class="text-right">Write</th>
-                      <th class="text-right">TBW</th>
-                      <th class="text-center">SMART</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="d in disks" :key="d.device">
-                      <td class="font-mono">{{ d.device }}</td>
-                      <td>{{ d.type }}</td>
-                      <td class="text-right">{{ formatGb(d.size) }}</td>
-                      <td class="text-right text-grey">{{ d.readMBs != null ? fmtRate(d.readMBs) : '—' }}</td>
-                      <td class="text-right text-grey">{{ d.writeMBs != null ? fmtRate(d.writeMBs) : '—' }}</td>
-                      <td class="text-right text-grey">{{ d.tbw != null ? d.tbw + ' TB' : '—' }}</td>
-                      <td class="text-center">
-                        <v-chip
-                          size="x-small"
-                          :color="d.smartStatus === 'Ok' ? 'success' : d.smartStatus === 'Bad' ? 'error' : d.smartStatus === 'Degraded' ? 'warning' : 'grey'"
-                          variant="tonal"
-                        >{{ d.smartStatus }}</v-chip>
-                      </td>
-                    </tr>
-                  </tbody>
-                </v-table>
-              </div>
+              <v-table density="compact" class="text-caption telemetry-table">
+                <thead>
+                  <tr>
+                    <th class="text-left">Device</th>
+                    <th class="text-left">Type</th>
+                    <th class="text-right">Size</th>
+                    <th class="text-right">Read</th>
+                    <th class="text-right">Write</th>
+                    <th class="text-right">TBW</th>
+                    <th class="text-center">SMART</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="d in disks" :key="d.device">
+                    <td class="font-mono">{{ d.device }}</td>
+                    <td>{{ d.type }}</td>
+                    <td class="text-right">{{ formatGb(d.size) }}</td>
+                    <td class="text-right text-grey">{{ d.readMBs != null ? fmtRate(d.readMBs) : '—' }}</td>
+                    <td class="text-right text-grey">{{ d.writeMBs != null ? fmtRate(d.writeMBs) : '—' }}</td>
+                    <td class="text-right text-grey">{{ d.tbw != null ? d.tbw + ' TB' : '—' }}</td>
+                    <td class="text-center">
+                      <v-chip
+                        size="x-small"
+                        :color="d.smartStatus === 'Ok' ? 'success' : d.smartStatus === 'Bad' ? 'error' : d.smartStatus === 'Degraded' ? 'warning' : 'grey'"
+                        variant="tonal"
+                      >{{ d.smartStatus }}</v-chip>
+                    </td>
+                  </tr>
+                </tbody>
+              </v-table>
             </div>
 
             <!-- Accelerator Devices table -->
             <div class="mt-4">
               <v-divider class="mb-3"></v-divider>
-              <div style="overflow-x: auto; width: 100%;">
-                <v-table density="compact" class="text-caption" style="min-width: 500px;">
-                  <thead>
-                    <tr>
-                      <th class="text-left">Device</th>
-                      <th class="text-left">Type</th>
-                      <th class="text-left">Detail</th>
-                      <th class="text-left">Driver</th>
-                      <th class="text-right">Load</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="dev in acceleratorDevices" :key="dev.type">
-                      <td>{{ dev.name }}</td>
-                      <td>
-                        <v-chip size="x-small" :color="dev.color" variant="tonal">{{ dev.type }}</v-chip>
-                      </td>
-                      <td class="text-grey">{{ dev.detail || '—' }}</td>
-                      <td class="font-mono text-grey">{{ dev.driver || '—' }}</td>
-                      <td class="text-right">
-                        <v-chip size="x-small" :color="dev.load > 70 ? 'warning' : 'grey'" variant="tonal">
-                          {{ dev.load }}%
-                        </v-chip>
-                      </td>
-                    </tr>
-                  </tbody>
-                </v-table>
-              </div>
+              <v-table density="compact" class="text-caption telemetry-table">
+                <thead>
+                  <tr>
+                    <th class="text-left">Device</th>
+                    <th class="text-left">Type</th>
+                    <th class="text-left">Detail</th>
+                    <th class="text-left">Driver</th>
+                    <th class="text-right">Load</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="dev in acceleratorDevices" :key="dev.type">
+                    <td>{{ dev.name }}</td>
+                    <td>
+                      <v-chip size="x-small" :color="dev.color" variant="tonal">{{ dev.type }}</v-chip>
+                    </td>
+                    <td class="text-grey">{{ dev.detail || '—' }}</td>
+                    <td class="font-mono text-grey">{{ dev.driver || '—' }}</td>
+                    <td class="text-right">
+                      <v-chip size="x-small" :color="dev.load > 70 ? 'warning' : 'grey'" variant="tonal">
+                        {{ dev.load }}%
+                      </v-chip>
+                    </td>
+                  </tr>
+                </tbody>
+              </v-table>
             </div>
           </v-card>
 
@@ -357,7 +353,7 @@
         </v-col>
 
         <!-- Right Side: Cache Observability + Runtime Versions -->
-        <v-col cols="12" md="8" class="d-flex flex-column gap-6">
+        <v-col cols="12" md="8" class="d-flex flex-column gap-6" style="min-width: 0;">
 
           <!-- Prefix Cache Observability -->
           <v-card class="glass-card pa-5">
@@ -893,6 +889,9 @@ export default {
 /* Responsive Container Grid for Hardware Telemetry Gauges */
 .telemetry-card {
   container-type: inline-size;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .telemetry-grid {
@@ -914,6 +913,10 @@ export default {
     grid-template-columns: repeat(1, 1fr);
     gap: 8px;
   }
+}
+
+.telemetry-table :deep(table) {
+  min-width: 500px;
 }
 </style>
 

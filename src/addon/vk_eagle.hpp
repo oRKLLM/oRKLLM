@@ -464,7 +464,7 @@ private:
     // Linear: out[OUT] = W[OUT x IN] @ in (input already in s_in_ or given buf)
     void gemv(GpuBuf& in, GpuBuf& w, GpuBuf& out, uint32_t OUT, uint32_t IN) {
         PushC pc{ OUT, IN, 0.f };
-        dispatch(pipe_gemv_, (OUT + 127u) / 128u, pc, in, w, out);
+        dispatch(pipe_gemv_, OUT, pc, in, w, out);
     }
     void rmsnorm(GpuBuf& in, GpuBuf& scale, GpuBuf& out, uint32_t DIM) {
         PushC pc{ DIM, 0u, rms_eps_ };

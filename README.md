@@ -177,6 +177,27 @@ journalctl -u orkllm -f
 - Node.js ≥ 18 (≥ 22.5 preferred for native `node:sqlite`)
 - `node-gyp` dependencies: Python 3, C++ compiler (Xcode CLT on macOS, `build-essential` on Linux)
 - *(optional, ARM64 Linux)* `libvulkan-dev` at build time for the GPU-accelerated paths (KV-cache quantisation and the Eagle-3 Mali draft head); at runtime `libvulkan1` + `mesa-vulkan-drivers` provide the loader and the Mali driver across chipsets (Mali-G52 on RK3576, Mali-G610 on RK3588). The `.deb` package declares these as dependencies; without Vulkan, oRKLLM falls back to NEON/CPU.
+  
+  > [!TIP]
+  > **Enabling Vulkan on Mali-G610 (Rockchip Vendor Kernel 6.1):**
+  > When running the vendor kernel `6.1`, the proprietary `mali_kbase` kernel driver binds the GPU (exposing `/dev/mali0`). The open-source Mesa `panvk` driver (shipped with standard `mesa-vulkan-drivers`) is incompatible with this setup and will discover zero physical GPU devices. 
+  > 
+  > To enable Vulkan on vendor kernel 6.1, you must install the proprietary Arm userspace drivers matching your kernel DDK version (usually `g24p0` or `g25p0`):
+  > 
+  > 1. **Download and Install the Userspace Driver Package:**
+  >    ```bash
+  >    wget https://github.com/tsukumijima/libmali-rockchip/releases/download/v1.9-1-2131373/libmali-valhall-g610-g24p0-x11-wayland-gbm_1.9-1_arm64.deb
+  >    sudo dpkg -i libmali-valhall-g610-g24p0-x11-wayland-gbm_1.9-1_arm64.deb
+  >    sudo apt-get install -f
+  >    ```
+  > 2. **Configure Linker and Permissions:**
+  >    ```bash
+  >    sudo ldconfig
+  >    sudo usermod -aG video,render $USER
+  >    ```
+  > 3. **Verify Device Recognition:**
+  >    Running `vulkaninfo --summary` should list the `Mali-G610` as an integrated GPU (`PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU`) with driver ID `DRIVER_ID_ARM_PROPRIETARY`.
+
 - A compiled `.rkllm` model (use `rkllm-toolkit` to convert from HuggingFace)
 - `librkllmrt.so` on the target board (typically at `/usr/lib/librkllmrt.so`)
 
