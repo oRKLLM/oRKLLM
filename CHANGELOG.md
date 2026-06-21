@@ -1,3 +1,21 @@
+# [0.9.0](https://github.com/oRKLLM/oRKLLM/compare/v0.8.0...v0.9.0) (2026-06-21)
+
+
+### Bug Fixes
+
+* **bench:** invoke backend abort endpoint on benchmark cancellation ([46aa985](https://github.com/oRKLLM/oRKLLM/commit/46aa9857d629eec3801c6c4312d954903285c009))
+* **chat:** prevent duplicate message bubbles on reload during active inference ([c892898](https://github.com/oRKLLM/oRKLLM/commit/c89289826e41b35df5506ff931ef1a11d0aa3b45))
+
+
+### Features
+
+* **chat:** show animating dots in message bubble during prefill stage ([74a765f](https://github.com/oRKLLM/oRKLLM/commit/74a765f7a71e5024b8db9a0e09f035e4e3499bb5))
+* **dashboard:** make hardware telemetry card responsive on mobile viewports ([1c4dafc](https://github.com/oRKLLM/oRKLLM/commit/1c4dafcab219a9816b7dfa39c571c8de8bf7809d))
+* **eagle3:** add detailed Vulkan initialization error logging to VkEagleDraftHead::init ([7bdeb2d](https://github.com/oRKLLM/oRKLLM/commit/7bdeb2d0501e22e19539e2e1f3436169cbb487bd))
+* refactor tables for responsive layouts and fix mobile viewport blowouts ([ce78821](https://github.com/oRKLLM/oRKLLM/commit/ce78821fc4822424e96238662678244673c30d66))
+* **settings:** show directory paths of downloadable runtimes and libraries ([c96bfe4](https://github.com/oRKLLM/oRKLLM/commit/c96bfe45f6be8666db1460fa435151692d6c9684))
+* **spec-decode:** support prefix-insensitive safetensors lookup and log dimension mismatch ([da534a5](https://github.com/oRKLLM/oRKLLM/commit/da534a5f895dbc48afd83543243e76b87d2ebcc9))
+
 # [0.8.0](https://github.com/oRKLLM/oRKLLM/compare/v0.7.0...v0.8.0) (2026-06-20)
 
 
