@@ -566,8 +566,7 @@ export default async function apiRoutes(fastify, options) {
         scheduleHeartbeat(); // cover the prefill gap before the first token
         try {
           const cachePaths = loadCachePath || saveCachePath ? { loadCachePath, saveCachePath } : {};
-          const isLlamaModel = model.endsWith('.gguf');
-          const specMode    = isLlamaModel ? null : saved.speculative_mode;
+          const specMode    = saved.speculative_mode;
           const draftModel  = saved.draft_model;
           const specK       = saved.spec_draft_tokens || 8;
           const eagle3Weights = saved.eagle3_weights_path ?? null;

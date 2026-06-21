@@ -298,12 +298,10 @@ class EnginePool {
         kv_type_v: kvV,
         ork_quant: orkQuant,
         ork_hybrid: orkHybrid,
-        // Default no-mmap for gguf: layers are packed/offloaded to the NPU, so a
-        // mmap'd source would be a full second copy of the weights in RAM (the
-        // OOM logs showed ~22 GB of mapped source alongside the resident copy).
-        // Reading straight into the resident buffers avoids the duplication.
+        // Default mmap for GGUF: file-backed mmap is fully reclaimable under memory
+        // pressure and is necessary to load models >15B on a 32 GB board without OOM.
         // Overridable per-model via the `use_mmap` setting.
-        use_mmap: options.use_mmap ?? saved.use_mmap ?? false,
+        use_mmap: options.use_mmap ?? saved.use_mmap ?? true,
         // With TurboQuant KV: scope the Vulkan backend to the KV/turbo ops only
         // (ggml_vk_set_mode TURBOQUANT) so model layers stay on the NPU and the
         // recurrent multi-turn decode isn't corrupted, and keep weights off Vulkan

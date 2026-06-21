@@ -299,8 +299,8 @@ export async function eagle3Generate(worker, prompt, options, onToken, {
   }
 
   // Rollback NPU KV cache to a specific position (keeps tokens in [0, pos))
-  function rollbackKV(pos) {
-    worker.send({ type: 'rollback_kv_cache', pos });
+  function rollbackKV(pos, seqId = 0) {
+    worker.send({ type: 'rollback_kv_cache', pos, seq_id: seqId });
   }
 
   // ── Step 0: Initial hidden state extraction ────────────────────────────

@@ -165,7 +165,7 @@ process.on('message', async (msg) => {
   else if (msg.type === 'rollback_kv_cache') {
     if (engine) {
       if (engine.rollback_kv_cache) {
-        engine.rollback_kv_cache(msg.pos);
+        engine.rollback_kv_cache(msg.pos, msg.seq_id);
       }
     }
   }

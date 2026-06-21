@@ -412,6 +412,7 @@ Napi::Value InitModel(const Napi::CallbackInfo& info) {
     cpar.n_threads_batch = 4;
     cpar.offload_kqv = true;
     cpar.embeddings = true;
+    cpar.n_rs_seq = 16;
     // Let g_abort interrupt an in-flight llama_decode (esp. a long single-batch
     // prefill) — so the Chat "Stop" / client-disconnect abort takes effect promptly
     // instead of waiting for the whole decode call to return.
@@ -819,9 +820,13 @@ Napi::Value RollbackKVCache(const Napi::CallbackInfo& info) {
         return env.Null();
     }
     int pos = info[0].As<Napi::Number>().Int32Value();
+    int seq_id = 0;
+    if (info.Length() >= 2 && info[1].IsNumber()) {
+        seq_id = info[1].As<Napi::Number>().Int32Value();
+    }
     bool ok = false;
     if (fn_get_memory && fn_memory_seq_rm) {
-        ok = fn_memory_seq_rm(fn_get_memory(g_ctx), -1, pos, -1);
+        ok = fn_memory_seq_rm(fn_get_memory(g_ctx), seq_id, pos, -1);
     }
     return Napi::Boolean::New(env, ok);
 }
