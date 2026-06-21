@@ -201,7 +201,14 @@
                 :class="['message-bubble pa-3 rounded-lg', msg.role === 'user' ? 'bg-primary text-white' : 'bg-surface-variant']"
                 style="max-width: 75%;"
               >
-                <div class="message-text" v-html="formatMessage(msg.content)"></div>
+                <div class="message-text">
+                  <span v-if="msg.role === 'assistant' && !msg.content && generating && idx === chatHistory.length - 1" class="d-flex align-center py-1">
+                    <span class="pulse-dot"></span>
+                    <span class="pulse-dot delay-1"></span>
+                    <span class="pulse-dot delay-2"></span>
+                  </span>
+                  <span v-else v-html="formatMessage(msg.content)"></span>
+                </div>
                 <div v-if="msg.perf" class="text-caption text-grey-lighten-1 mt-2 border-top-dashed pt-1">
                   Prefill: {{ (msg.perf.prefill_time_ms ?? 0).toFixed(1) }}ms
                   ({{ msg.perf.prefill_time_ms && msg.perf.prefill_tokens ? (msg.perf.prefill_tokens / (msg.perf.prefill_time_ms / 1000)).toFixed(1) : '—' }} t/s) |
