@@ -38,6 +38,11 @@
             required
             variant="outlined"
             color="primary"
+            name="username"
+            id="username"
+            autocomplete="username"
+            autocapitalize="none"
+            spellcheck="false"
             :rules="[v => !!v || 'Username is required']"
           ></v-text-field>
 
@@ -49,6 +54,9 @@
             required
             variant="outlined"
             color="primary"
+            name="password"
+            id="password"
+            autocomplete="current-password"
             :rules="[v => !!v || 'Password is required']"
           ></v-text-field>
 

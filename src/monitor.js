@@ -216,7 +216,7 @@ export async function getSystemMetrics() {
   //    is the current DDR clock. Null when no DMC devfreq node exists.
   const memBw = isLinux ? readMemBandwidth() : mockMemBw(cpuLoad);
 
-  return {
+  const metrics = {
     cpu: Math.round(cpuLoad),
     ram: {
       total: totalMem,
@@ -248,6 +248,31 @@ export async function getSystemMetrics() {
     fan,
     memBw,
   };
+
+  // Cache the last full snapshot so a freshly-loaded dashboard can prefill its
+  // gauges from a REST endpoint instantly, instead of staring at zeroed rings
+  // for the few seconds the cold disk-layout/smartctl path takes on the WS's
+  // first poll. While any dashboard is open the WS refreshes this every second.
+  _lastMetrics = metrics;
+  _lastMetricsTime = Date.now();
+  return metrics;
+}
+
+// Last full metrics snapshot + the wall-clock time it was computed.
+let _lastMetrics = null;
+let _lastMetricsTime = 0;
+
+/**
+ * Return a metrics snapshot for prefilling, reusing the cached value when it's
+ * still fresh and only recomputing (the slow path) when it's stale or absent.
+ * @param {number} maxAgeMs serve the cache when newer than this (default 2s)
+ * @returns {Promise<object>} system metrics object
+ */
+export async function getMetricsSnapshot(maxAgeMs = 2000) {
+  if (_lastMetrics && Date.now() - _lastMetricsTime < maxAgeMs) {
+    return _lastMetrics;
+  }
+  return getSystemMetrics();
 }
 
 // ── Fan speed ───────────────────────────────────────────────────────────────
@@ -343,9 +368,14 @@ function readMappedUsedMem() {
     };
     const total = kb('MemTotal');
     if (!total) return 0;
-    // classic "used" (anon + kernel) = total - free - buffers - cached, then add
-    // back the mmap'd file pages so the loaded model is counted as in-use.
-    const used = total - kb('MemFree') - kb('Buffers') - kb('Cached') + kb('Mapped');
+    // Classic non-reclaimable "used" RAM (anonymous, slab, etc.) is derived 
+    // from total - MemAvailable. We then add back only the file-backed mapped
+    // pages (Mapped - Shmem) representing the resident parts of the GGUF model.
+    // This prevents double-counting unmapped page cache, system buffers, and 
+    // mmap'd device allocations (which are already part of total - MemAvailable).
+    const avail = kb('MemAvailable') || (kb('MemFree') + kb('Buffers') + kb('Cached'));
+    const mappedRegularFiles = Math.max(0, kb('Mapped') - kb('Shmem'));
+    const used = (total - avail) + mappedRegularFiles;
     return Math.min(total, Math.max(0, used));
   } catch {
     return 0;

@@ -605,6 +605,7 @@ export default {
     this.fetchAuth();
     this.fetchModels();
     this.fetchStatus();
+    this.fetchMetrics();
     this.initWebSockets();
     this.fetchAllModelSettings();
     this.fetchCacheStats();
@@ -737,6 +738,48 @@ export default {
         this.$router.push('/login');
       } catch (e) {}
     },
+    applyMetrics(data) {
+      this.metrics.cpu = data.cpu;
+      this.metrics.npu = data.npu;
+      this.metrics.gpu = data.gpu ?? 0;
+      this.metrics.ram = data.ram.percentage;
+      this.metrics.disk = data.disk?.percentage ?? 0;
+      this.metricsRaw.ramUsed = data.ram.used ?? 0;
+      this.metricsRaw.ramTotal = data.ram.total ?? 0;
+      this.metricsRaw.diskUsed = data.disk?.used ?? 0;
+      this.metricsRaw.diskTotal = data.disk?.total ?? 0;
+      if (data.disks) this.disks = data.disks;
+      this.metrics.temp = data.temperature;
+      // Fan + RAM bandwidth (null when the board exposes no such sensor)
+      this.metricsRaw.fanAvailable = !!data.fan;
+      this.metrics.fan = data.fan?.percentage ?? 0;
+      this.metricsRaw.fanRpm = data.fan?.rpm ?? null;
+      this.metricsRaw.memBwAvailable = !!data.memBw;
+      this.metrics.memBw = data.memBw?.percentage ?? 0;
+      this.metricsRaw.memBwFreqMhz = data.memBw?.freqMhz ?? null;
+      this.metrics.swap = data.swap?.percentage ?? 0;
+      this.metricsRaw.swapUsed = data.swap?.used ?? 0;
+      this.metricsRaw.swapTotal = data.swap?.total ?? 0;
+      // Live disk throughput (aggregate MB/s); each ring scales to its session peak.
+      this.metrics.diskRead = data.diskRead ?? 0;
+      this.metrics.diskWrite = data.diskWrite ?? 0;
+      if (this.metrics.diskRead > this.diskReadMax) this.diskReadMax = this.metrics.diskRead;
+      if (this.metrics.diskWrite > this.diskWriteMax) this.diskWriteMax = this.metrics.diskWrite;
+      // Disk temperature (°C from SMART); null when no disk reports it.
+      this.metricsRaw.diskTempAvailable = data.diskTemp != null;
+      this.metrics.diskTemp = data.diskTemp ?? 0;
+      if (data.stats) {
+        this.stats = data.stats;
+      }
+    },
+    // Prefill gauges from the cached server-side snapshot so the dashboard isn't
+    // blank for the few seconds the WebSocket's first poll takes on cold start.
+    async fetchMetrics() {
+      try {
+        const res = await fetch('/api/admin/metrics');
+        if (res.ok) this.applyMetrics(await res.json());
+      } catch (e) {}
+    },
     initWebSockets() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const host = window.location.host;
@@ -747,39 +790,7 @@ export default {
       this.metricsWs.onerror = (err) => console.error('[WS] Metrics WebSocket error', err);
       this.metricsWs.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data);
-          this.metrics.cpu = data.cpu;
-          this.metrics.npu = data.npu;
-          this.metrics.gpu = data.gpu ?? 0;
-          this.metrics.ram = data.ram.percentage;
-          this.metrics.disk = data.disk?.percentage ?? 0;
-          this.metricsRaw.ramUsed = data.ram.used ?? 0;
-          this.metricsRaw.ramTotal = data.ram.total ?? 0;
-          this.metricsRaw.diskUsed = data.disk?.used ?? 0;
-          this.metricsRaw.diskTotal = data.disk?.total ?? 0;
-          if (data.disks) this.disks = data.disks;
-          this.metrics.temp = data.temperature;
-          // Fan + RAM bandwidth (null when the board exposes no such sensor)
-          this.metricsRaw.fanAvailable = !!data.fan;
-          this.metrics.fan = data.fan?.percentage ?? 0;
-          this.metricsRaw.fanRpm = data.fan?.rpm ?? null;
-          this.metricsRaw.memBwAvailable = !!data.memBw;
-          this.metrics.memBw = data.memBw?.percentage ?? 0;
-          this.metricsRaw.memBwFreqMhz = data.memBw?.freqMhz ?? null;
-          this.metrics.swap = data.swap?.percentage ?? 0;
-          this.metricsRaw.swapUsed = data.swap?.used ?? 0;
-          this.metricsRaw.swapTotal = data.swap?.total ?? 0;
-          // Live disk throughput (aggregate MB/s); each ring scales to its session peak.
-          this.metrics.diskRead = data.diskRead ?? 0;
-          this.metrics.diskWrite = data.diskWrite ?? 0;
-          if (this.metrics.diskRead > this.diskReadMax) this.diskReadMax = this.metrics.diskRead;
-          if (this.metrics.diskWrite > this.diskWriteMax) this.diskWriteMax = this.metrics.diskWrite;
-          // Disk temperature (°C from SMART); null when no disk reports it.
-          this.metricsRaw.diskTempAvailable = data.diskTemp != null;
-          this.metrics.diskTemp = data.diskTemp ?? 0;
-          if (data.stats) {
-            this.stats = data.stats;
-          }
+          this.applyMetrics(JSON.parse(event.data));
         } catch (e) {}
       };
       this.metricsWs.onclose = () => {

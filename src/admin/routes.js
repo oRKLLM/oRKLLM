@@ -7,6 +7,7 @@ import os from 'os';
 import fs from 'fs';
 import path from 'path';
 import { getStats, clearSessionStats, clearAllTimeStats } from '../stats.js';
+import { getMetricsSnapshot } from '../monitor.js';
 import { supportsThinkingToggle } from '../gguf.js';
 import {
   dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings, dbDeleteModelSettings,
@@ -278,6 +279,15 @@ export default async function adminRoutes(fastify, options) {
   // GET /api/admin/stats
   fastify.get('/stats', async (request, reply) => {
     return getStats();
+  });
+
+  // GET /api/admin/metrics — a one-shot telemetry snapshot (same shape the
+  // /ws/metrics stream pushes) so the Dashboard can prefill its gauges on load
+  // instead of waiting for the WebSocket's first tick. Serves the cached
+  // snapshot when fresh; recomputes only when stale.
+  fastify.get('/metrics', async (request, reply) => {
+    const m = await getMetricsSnapshot();
+    return { ...m, stats: getStats() };
   });
 
   // POST /api/admin/stats/clear-session
