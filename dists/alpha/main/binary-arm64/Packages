@@ -1,15 +1,15 @@
 Package: orkllm
-Version: 0.9.0-alpha.9
+Version: 0.9.0-alpha.10
 Architecture: arm64
 Maintainer: Michael Fischer <mfischer@toorakcapital.io>
 Pre-Depends: debconf (>= 0.5) | debconf-2.0
 Depends: nodejs (>= 18.0.0), smartmontools, libgomp1, libvulkan1, mesa-vulkan-drivers
 Suggests: tailscale
-Filename: pool/alpha/o/orkllm/orkllm_0.9.0-alpha.9_arm64.deb
-Size: 8937198
-MD5sum: dfed9b7f94c659bf2fb14789e7b6eb18
-SHA1: b2e8f8b391cf945a8e32b8c034fdd482e9b073fb
-SHA256: 8d9aee69d4df0816c4bbb51a5568b3fd7b66b0dfd68f1ef76c86d42baa2fbe73
+Filename: pool/alpha/o/orkllm/orkllm_0.9.0-alpha.10_arm64.deb
+Size: 8939882
+MD5sum: c38faa5e9a2ef2bb992b18eb344688f0
+SHA1: 456d27618b91b0ae9e50e1323c109c4cd1c89898
+SHA256: c6835a7dc46c0aa1de916efbfc14c274d2cc36403bcfd4abdd0aa7b8faa2c105
 Section: net
 Priority: optional
 Homepage: https://github.com/oRKLLM/oRKLLM
