@@ -16,6 +16,11 @@
 #include <vector>
 #include <cstring>
 
+#ifdef __linux__
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 #ifdef _WIN32
 #include <windows.h>
 #define DYNLIB_HANDLE HMODULE
@@ -76,8 +81,8 @@ struct llama_context_params {
     uint32_t n_batch;
     uint32_t n_ubatch;
     uint32_t n_seq_max;
-    uint32_t n_rs_seq;
     uint32_t n_outputs_max;
+    uint32_t n_rs_seq;
     int32_t  n_threads;
     int32_t  n_threads_batch;
 
@@ -408,6 +413,7 @@ Napi::Value InitModel(const Napi::CallbackInfo& info) {
     cpar.n_ctx     = opts.Has("max_context_len") ? (uint32_t)opts.Get("max_context_len").As<Napi::Number>().Int32Value() : 4096;
     cpar.n_batch   = 512;
     cpar.n_ubatch  = 512;
+    cpar.n_outputs_max = cpar.n_batch;
     cpar.n_threads = 4;
     cpar.n_threads_batch = 4;
     cpar.offload_kqv = true;
@@ -450,6 +456,19 @@ Napi::Value InitModel(const Napi::CallbackInfo& info) {
     fn_schain_add(g_sampler, fn_s_dist(LLAMA_RANDOM_SEED));
 
     g_abort = false;
+
+#ifdef __linux__
+    // After successful initialization, drop the GGUF file from the OS page cache.
+    // Since layers have been offloaded to NPU/GPU, the raw GGUF weights in physical
+    // memory are a redundant duplicate. Dropping them saves up to 21 GB of RAM!
+    // Any CPU-bound layers will page-fault back on demand.
+    int fd = open(s_modelPath.c_str(), O_RDONLY);
+    if (fd >= 0) {
+        posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+        close(fd);
+    }
+#endif
+
     return Napi::Number::New(env, 0);
 }
 
@@ -692,7 +711,16 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
                 b.seq_id[j][0] = 0;
                 b.logits[j] = (inferMode == 1 || inferMode == 2) ? 1 : (j == batch - 1 ? 1 : 0);
             }
-            if (fn_decode(g_ctx, b) != 0) { fn_batch_free(b); finish("", 3); return; }
+            auto td0 = std::chrono::high_resolution_clock::now();
+            int decode_ret = fn_decode(g_ctx, b);
+            auto td1 = std::chrono::high_resolution_clock::now();
+            const char* val = std::getenv("ORKLLM_VERBOSE");
+            if (val != nullptr && std::strcmp(val, "2") == 0) {
+                double ms = std::chrono::duration<double, std::milli>(td1 - td0).count();
+                std::printf("[Llama TRACE] prefill fn_decode of %d tokens took %.3f ms (ret=%d)\n", batch, ms, decode_ret);
+                std::fflush(stdout);
+            }
+            if (decode_ret != 0) { fn_batch_free(b); finish("", 3); return; }
             
             if (inferMode == 1 || inferMode == 2) {
                 for (int j = 0; j < batch; j++) {
@@ -781,7 +809,16 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
             b.n_seq_id[0] = 1;
             b.seq_id[0][0] = 0;
             b.logits[0] = 1;
-            if (fn_decode(g_ctx, b) != 0) { fn_batch_free(b); break; }
+            auto td2 = std::chrono::high_resolution_clock::now();
+            int decode_ret = fn_decode(g_ctx, b);
+            auto td3 = std::chrono::high_resolution_clock::now();
+            const char* val = std::getenv("ORKLLM_VERBOSE");
+            if (val != nullptr && std::strcmp(val, "2") == 0) {
+                double ms = std::chrono::duration<double, std::milli>(td3 - td2).count();
+                std::printf("[Llama TRACE] generate fn_decode took %.3f ms (ret=%d)\n", ms, decode_ret);
+                std::fflush(stdout);
+            }
+            if (decode_ret != 0) { fn_batch_free(b); break; }
             fn_batch_free(b);
             n_past++;
         }
