@@ -16,6 +16,9 @@ import { cacheKey, getCachePath, tmpCachePath, putCachePath, isCacheEnabled } fr
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Memoizes readSoVersion() results keyed by `${path}:${mtimeMs}:${size}`.
+const _soVersionCache = new Map();
+
 // Default rkllm context length when neither an explicit option nor a per-model
 // `ctx_window` setting is given. 4096 matches the common RK3576/RK3588 model
 // build and is large enough for chat templates the old 2048 default overflowed;
@@ -156,15 +159,30 @@ class EnginePool {
   }
 
   // Extract version embedded in a librkllmrt.so binary via strings
-  // Returns e.g. "1.2.3" or null
+  // Returns e.g. "1.2.3" or null.
+  // Memoized by path+mtime+size: a .so's content is immutable, so spawning
+  // `strings` (blocking, up to 5s) once per file is enough — repeat reads (the
+  // Dashboard's Inference Engines card on every load) hit the cache. A replaced
+  // file changes mtime/size and is re-read.
   static readSoVersion(soPath) {
+    let key = soPath;
     try {
-      const out = execFileSync('strings', [soPath], { encoding: 'utf8', timeout: 5000 });
-      const m = out.match(/RKLLM SDK \(version:\s*(\d+\.\d+\.\d+)/);
-      return m ? m[1] : null;
+      const st = fs.statSync(soPath);
+      key = `${soPath}:${st.mtimeMs}:${st.size}`;
     } catch {
       return null;
     }
+    if (_soVersionCache.has(key)) return _soVersionCache.get(key);
+    let version = null;
+    try {
+      const out = execFileSync('strings', [soPath], { encoding: 'utf8', timeout: 5000 });
+      const m = out.match(/RKLLM SDK \(version:\s*(\d+\.\d+\.\d+)/);
+      version = m ? m[1] : null;
+    } catch {
+      version = null;
+    }
+    _soVersionCache.set(key, version);
+    return version;
   }
 
   // Discover available versioned runtimes in RUNTIMES_DIR, sorted newest-first

@@ -541,20 +541,35 @@ export function clearAllCache() {
   }
   const lp = lruPath(cfg.cacheDir);
   if (fs.existsSync(lp)) fs.unlinkSync(lp);
+  _statsMemo = null;  // bust the observability snapshot so a Clear shows 0 at once
 }
 
+// Short-lived memo of the last computed stats. getCacheStats walks the hot/cold
+// trees (dirSizeMB) — cheap normally but seconds-slow with many blobs, and it's
+// fetched on every Dashboard load. A 3s TTL serves rapid reloads instantly while
+// staying fresh enough for an observability gauge; clearAllCache busts it.
+let _statsMemo = null;       // { stats }
+let _statsMemoTime = 0;
+const STATS_MEMO_TTL_MS = 3000;
+
 export function getCacheStats() {
+  if (_statsMemo && Date.now() - _statsMemoTime < STATS_MEMO_TTL_MS) {
+    return _statsMemo;
+  }
   const cfg = settings();
   if (!cfg.enabled) return { enabled: false };
   const hotDir  = path.join(cfg.cacheDir, 'hot');
   const coldDir = path.join(cfg.cacheDir, 'cold');
   const lru = readLru(cfg.cacheDir);
-  return {
+  const stats = {
     enabled: true,
     hot:  { entries: Object.keys(lru.hot).length,  sizeMB: Math.round(dirSizeMB(hotDir)  * 10) / 10, limitMB: cfg.hotLimitMB },
     cold: { entries: Object.keys(lru.cold).length, sizeMB: Math.round(dirSizeMB(coldDir) * 10) / 10, limitMB: cfg.coldLimitMB },
     cacheDir: cfg.cacheDir,
   };
+  _statsMemo = stats;
+  _statsMemoTime = Date.now();
+  return stats;
 }
 
 export function isCacheEnabled() {
