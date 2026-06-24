@@ -714,3 +714,51 @@ test('Downloader: Find Files renders the picker for a multi-quant repo', async (
   await expect(page.locator('.v-chip', { hasText: 'Q4_K_M' })).toBeVisible();
   await expect(page.getByText('is not a function')).toHaveCount(0);
 });
+
+// Regression: clicking Download on a SEARCH RESULT with multiple model formats goes through
+// selectModel(), whose variant detection once mapped the file OBJECTS ({name,size}) straight
+// through variantKey(n)=n.replace(...) — throwing "n.replace is not a function", surfaced as
+// "Network error: p.replace is not a function", so the scroll-to-picker never ran. variantKey
+// must key off f.name. This drives the real search -> Download (selectModel) path, which the
+// "Find Files" test above does NOT cover (that path is fetchRepoFiles, no variantKey).
+test('Downloader: Download on a multi-format search result shows the picker (no replace crash)', async ({ page }) => {
+  await login(page);
+  await page.goto('/models');
+  await page.click('.v-tab:has-text("Downloader")');
+
+  await page.route('**/api/admin/hf/search**', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([
+      { id: 'test/Multi-Format', downloads: 1000, likes: 10, tags: [] },
+    ]),
+  }));
+  await page.route('**/api/admin/hf/files**', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      repoId: 'test/Multi-Format',
+      files: [
+        { name: 'model-Q4_K_M.gguf', size: 1200000000 },
+        { name: 'model-Q8_0.gguf',   size: 2000000000 },
+        { name: 'config.json',       size: 1024 },
+      ],
+    }),
+  }));
+
+  // Search -> result card
+  const searchField = page.locator('.v-text-field').filter({ hasText: /Search models/i }).first();
+  await searchField.locator('input').fill('multi');
+  await searchField.locator('input').press('Enter');
+  const resultItem = page.locator('.v-list-item', { hasText: 'test/Multi-Format' });
+  await expect(resultItem).toBeVisible({ timeout: 5000 });
+
+  // Click that result's Download -> selectModel -> variant detection -> picker (>1 variant)
+  await resultItem.locator('button:has-text("Download")').click();
+
+  // Picker lists the variant files; crucially no replace/Network crash.
+  await expect(page.locator('.v-list-item', { hasText: 'model-Q4_K_M.gguf' })).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('.v-list-item', { hasText: 'model-Q8_0.gguf' })).toBeVisible();
+  await expect(page.getByText('is not a function')).toHaveCount(0);
+  await expect(page.getByText(/Network error/i)).toHaveCount(0);
+});

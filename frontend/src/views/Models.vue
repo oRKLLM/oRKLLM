@@ -1669,7 +1669,7 @@ export default {
         // single model (lone file or sharded) ⇒ download everything directly.
         const weights = data.files.filter(f => /\.(rkllm|gguf|safetensors|bin|pt|pth)$/i.test(f.name));
         const variantKey = (n) => n.replace(/-\d+-of-\d+(?=\.)/i, '').replace(/\.(rkllm|gguf|safetensors|bin|pt|pth)$/i, '');
-        const variants = new Set(weights.map(variantKey));
+        const variants = new Set(weights.map(f => variantKey(f.name)));   // f is a file OBJECT; key off its .name
         const scrollToDownload = () => this.$nextTick(() => {
           const el = this.$refs.downloadCard?.$el || this.$refs.downloadCard;
           if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
