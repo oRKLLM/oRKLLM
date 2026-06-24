@@ -740,37 +740,49 @@
               class="search-results-scroll"
               @scroll="onSearchScroll"
             >
-              <v-list class="pa-0" bg-color="transparent">
-                <v-list-item
-                  v-for="model in searchResults"
-                  :key="model.id"
-                  class="border-bottom py-2 px-0"
-                >
-                  <template v-slot:prepend>
-                    <v-icon color="grey" class="mr-2">mdi-robot-outline</v-icon>
-                  </template>
-                  <v-list-item-title class="text-body-2 font-weight-bold text-truncate">{{ model.id }}</v-list-item-title>
-                  <v-list-item-subtitle class="text-caption">
-                    <v-icon size="12" class="mr-1">mdi-download-outline</v-icon>{{ formatNum(model.downloads) }}
-                    <span class="mx-2">·</span>
-                    <v-icon size="12" class="mr-1">mdi-heart-outline</v-icon>{{ formatNum(model.likes) }}
-                    <template v-if="model.storageBytes">
-                      <span class="mx-2">·</span>
-                      <v-icon size="12" class="mr-1">mdi-harddisk</v-icon>{{ formatBytes(model.storageBytes) }}
-                    </template>
-                    <template v-if="model.paramCount">
-                      <span class="mx-2">·</span>
-                      <v-icon size="12" class="mr-1">mdi-weight</v-icon>{{ formatParams(model.paramCount) }} params
-                    </template>
-                    <span v-for="tag in model.tags.slice(0,3)" :key="tag" class="ml-2">
-                      <v-chip size="x-small" variant="tonal">{{ tag }}</v-chip>
-                    </span>
-                  </v-list-item-subtitle>
-                  <template v-slot:append>
-                    <v-btn size="small" color="primary" variant="tonal" :loading="loadingRepoId === model.id" @click="selectModel(model.id)">Download</v-btn>
-                  </template>
-                </v-list-item>
-              </v-list>
+              <!-- Each result is an accordion (collapsed by default); expanding lazy-loads the repo's
+                   files and lists each downloadable model/variant with its own Download button. -->
+              <v-expansion-panels v-model="searchOpen" multiple variant="accordion" bg-color="transparent" class="pa-0">
+                <v-expansion-panel v-for="model in searchResults" :key="model.id" :value="model.id" elevation="0" bg-color="transparent">
+                  <v-expansion-panel-title class="px-0">
+                    <div class="d-flex align-center" style="gap: 8px; min-width: 0;">
+                      <v-icon color="grey">mdi-robot-outline</v-icon>
+                      <div style="min-width: 0;">
+                        <div class="text-body-2 font-weight-bold text-truncate">{{ model.id }}</div>
+                        <div class="text-caption text-grey">
+                          <v-icon size="12" class="mr-1">mdi-download-outline</v-icon>{{ formatNum(model.downloads) }}
+                          <span class="mx-1">·</span>
+                          <v-icon size="12" class="mr-1">mdi-heart-outline</v-icon>{{ formatNum(model.likes) }}
+                          <template v-if="model.storageBytes"><span class="mx-1">·</span><v-icon size="12" class="mr-1">mdi-harddisk</v-icon>{{ formatBytes(model.storageBytes) }}</template>
+                          <template v-if="model.paramCount"><span class="mx-1">·</span><v-icon size="12" class="mr-1">mdi-weight</v-icon>{{ formatParams(model.paramCount) }} params</template>
+                          <span v-for="tag in (model.tags || []).slice(0,3)" :key="tag" class="ml-2"><v-chip size="x-small" variant="tonal">{{ tag }}</v-chip></span>
+                        </div>
+                      </div>
+                    </div>
+                  </v-expansion-panel-title>
+                  <v-expansion-panel-text>
+                    <div v-if="repoState(model.id).loading" class="d-flex justify-center py-3">
+                      <v-progress-circular indeterminate size="20" width="2" color="primary"></v-progress-circular>
+                    </div>
+                    <v-alert v-else-if="repoState(model.id).error" type="error" variant="tonal" density="compact" class="text-caption mb-0">{{ repoState(model.id).error }}</v-alert>
+                    <div v-else-if="!repoState(model.id).variants.length" class="text-caption text-grey py-2">No downloadable model files in this repo.</div>
+                    <v-list v-else class="pa-0" bg-color="transparent">
+                      <v-list-item v-for="v in repoState(model.id).variants" :key="v.key" class="px-0">
+                        <v-list-item-title class="text-body-2 font-mono d-flex align-center" style="gap: 8px;">
+                          <v-chip v-if="v.quant" size="x-small" color="primary" variant="tonal">{{ v.quant }}</v-chip>
+                          <span class="text-truncate">{{ v.label }}</span>
+                        </v-list-item-title>
+                        <v-list-item-subtitle v-if="v.size" class="text-caption">{{ formatBytes(v.size) }}</v-list-item-subtitle>
+                        <template #append>
+                          <v-btn size="small" color="primary" variant="flat" :loading="v.downloading" @click="downloadVariant(model.id, v)">
+                            <v-icon start size="16">mdi-download</v-icon>Download
+                          </v-btn>
+                        </template>
+                      </v-list-item>
+                    </v-list>
+                  </v-expansion-panel-text>
+                </v-expansion-panel>
+              </v-expansion-panels>
               <!-- Loading more indicator -->
               <div v-if="searchLoadingMore" class="d-flex justify-center py-3">
                 <v-progress-circular indeterminate size="20" width="2" color="primary"></v-progress-circular>
@@ -1115,6 +1127,8 @@ export default {
     dlJobs: [],
 
     // HF Search
+    searchOpen: [],          // open accordion panels (repo ids); expanding lazy-loads that repo's files
+    repoFiles: {},           // repoId -> { loading, error, variants:[{key,label,quant,size,files,companion,downloading}] }
     searchQuery: '',
     searchSort: 'downloads',
     searchRkllmOnly: false,
@@ -1214,6 +1228,10 @@ export default {
   watch: {
     tab(val) {
       if (val === 'downloader') this.refreshDownloadQueue();
+    },
+    searchOpen(open) {
+      // Lazy-load files for each newly-expanded repo accordion.
+      for (const repoId of open) this.loadRepoFiles(repoId);
     },
   },
   methods: {
@@ -1644,6 +1662,69 @@ export default {
       if ([502, 503, 504].includes(res.status))
         throw new Error('server is restarting or unavailable — try again in a moment');
       throw new Error(`unexpected response from server (HTTP ${res.status})`);
+    },
+    // ---- Search-result accordion: lazy file load + per-variant download ----
+    repoState(repoId) {
+      return this.repoFiles[repoId] || { loading: false, error: '', variants: [] };
+    },
+    // Fetch a repo's files (once) and group them into downloadable "models" (variants): weight files
+    // sharing a variant key — the `-N-of-M` shard suffix + extension stripped — collapse into one entry
+    // (a sharded model is one download); distinct keys (e.g. GGUF quants) are separate entries. The
+    // non-weight companion files (config/tokenizer json…) are shared and pulled with whichever variant
+    // the user downloads.
+    async loadRepoFiles(repoId) {
+      const cur = this.repoFiles[repoId];
+      if (cur && (cur.loading || cur.variants.length || cur.error)) return;   // already loading/loaded
+      this.repoFiles[repoId] = { loading: true, error: '', variants: [] };
+      try {
+        const res = await fetch(`/api/admin/hf/files?repoId=${encodeURIComponent(repoId)}`);
+        const data = await this._readJson(res);
+        if (!res.ok) { this.repoFiles[repoId] = { loading: false, error: data.error || 'Failed to fetch files', variants: [] }; return; }
+        const files = data.files || [];
+        const isWeight = (n) => /\.(rkllm|gguf|safetensors|bin|pt|pth)$/i.test(n);
+        const variantKey = (n) => n.replace(/-\d+-of-\d+(?=\.)/i, '').replace(/\.(rkllm|gguf|safetensors|bin|pt|pth)$/i, '');
+        const companion = files.filter(f => !isWeight(f.name));
+        const groups = {};
+        for (const f of files.filter(f => isWeight(f.name))) {
+          const k = variantKey(f.name);
+          (groups[k] = groups[k] || { key: k, files: [], size: 0 });
+          groups[k].files.push(f); groups[k].size += f.size || 0;
+        }
+        const variants = Object.values(groups).map(g => ({
+          key: g.key,
+          quant: this.quantOf(g.files[0].name),
+          label: g.files.length > 1 ? `${g.key} · ${g.files.length} shards` : g.files[0].name,
+          size: g.size,
+          files: g.files,
+          companion,
+          downloading: false,
+        }));
+        this.repoFiles[repoId] = { loading: false, error: '', variants };
+      } catch (e) {
+        this.repoFiles[repoId] = { loading: false, error: 'Network error: ' + e.message, variants: [] };
+      }
+    },
+    async downloadVariant(repoId, variant) {
+      variant.downloading = true;
+      try {
+        const toGet = [...variant.files, ...(variant.companion || [])];
+        await Promise.all(toGet.map(f => this._postDownload(repoId, f.name)));
+        this.startPollDownloadStatus();
+        this.$notify(`Started downloading ${variant.label}`, 'success');
+      } catch (e) {
+        this.$notify('Network error: ' + e.message, 'error');
+      } finally {
+        variant.downloading = false;
+      }
+    },
+    async _postDownload(repoId, filename) {
+      const res = await fetch('/api/admin/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoId, filename, hfToken: this.dlHfToken.trim() || undefined }),
+      });
+      const data = await this._readJson(res);
+      if (!res.ok) throw new Error(data.error || 'Failed to start download');
     },
     async selectModel(id) {
       // Fetch all .rkllm files and start every download immediately

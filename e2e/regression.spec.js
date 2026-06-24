@@ -715,13 +715,12 @@ test('Downloader: Find Files renders the picker for a multi-quant repo', async (
   await expect(page.getByText('is not a function')).toHaveCount(0);
 });
 
-// Regression: clicking Download on a SEARCH RESULT with multiple model formats goes through
-// selectModel(), whose variant detection once mapped the file OBJECTS ({name,size}) straight
-// through variantKey(n)=n.replace(...) — throwing "n.replace is not a function", surfaced as
-// "Network error: p.replace is not a function", so the scroll-to-picker never ran. variantKey
-// must key off f.name. This drives the real search -> Download (selectModel) path, which the
-// "Find Files" test above does NOT cover (that path is fetchRepoFiles, no variantKey).
-test('Downloader: Download on a multi-format search result shows the picker (no replace crash)', async ({ page }) => {
+// Regression: a search result is an accordion (collapsed by default); expanding it lazy-loads the
+// repo's files and lists each downloadable variant with a Download button. The variant grouping keys
+// off f.name (the file OBJECTS, {name,size}); a prior bug mapped the objects through variantKey(n)=
+// n.replace(...) → "n.replace is not a function" surfaced as "Network error: p.replace...". This drives
+// the full path: search -> collapsed panel -> expand (lazy load) -> variants render -> download a variant.
+test('Downloader: search-result accordion lazy-loads files and downloads a variant (no replace crash)', async ({ page }) => {
   await login(page);
   await page.goto('/models');
   await page.click('.v-tab:has-text("Downloader")');
@@ -745,20 +744,30 @@ test('Downloader: Download on a multi-format search result shows the picker (no 
       ],
     }),
   }));
+  const downloaded = [];
+  await page.route('**/api/admin/download', route => {
+    try { downloaded.push(route.request().postDataJSON().filename); } catch {}
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, jobId: 'x' }) });
+  });
 
-  // Search -> result card
+  // Search -> collapsed result panel
   const searchField = page.locator('.v-text-field').filter({ hasText: /Search models/i }).first();
   await searchField.locator('input').fill('multi');
   await searchField.locator('input').press('Enter');
-  const resultItem = page.locator('.v-list-item', { hasText: 'test/Multi-Format' });
-  await expect(resultItem).toBeVisible({ timeout: 5000 });
+  const panel = page.locator('.v-expansion-panel', { hasText: 'test/Multi-Format' });
+  await expect(panel).toBeVisible({ timeout: 5000 });
+  // Collapsed by default — files not loaded/shown yet.
+  await expect(page.getByText('model-Q4_K_M.gguf')).toHaveCount(0);
 
-  // Click that result's Download -> selectModel -> variant detection -> picker (>1 variant)
-  await resultItem.locator('button:has-text("Download")').click();
-
-  // Picker lists the variant files; crucially no replace/Network crash.
-  await expect(page.locator('.v-list-item', { hasText: 'model-Q4_K_M.gguf' })).toBeVisible({ timeout: 5000 });
-  await expect(page.locator('.v-list-item', { hasText: 'model-Q8_0.gguf' })).toBeVisible();
+  // Expand -> lazy-load -> nested variants (one per distinct quant) with Download buttons.
+  await panel.locator('.v-expansion-panel-title').click();
+  await expect(panel.getByText('model-Q4_K_M.gguf')).toBeVisible({ timeout: 5000 });
+  await expect(panel.getByText('model-Q8_0.gguf')).toBeVisible();
+  await expect(panel.locator('.v-chip', { hasText: 'Q4_K_M' })).toBeVisible();
   await expect(page.getByText('is not a function')).toHaveCount(0);
   await expect(page.getByText(/Network error/i)).toHaveCount(0);
+
+  // Download a variant -> POST /api/admin/download for its weight file (+ shared companions).
+  await panel.locator('.v-list-item', { hasText: 'model-Q4_K_M.gguf' }).locator('button:has-text("Download")').click();
+  await expect.poll(() => downloaded).toContain('model-Q4_K_M.gguf');
 });
