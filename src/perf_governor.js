@@ -134,10 +134,13 @@ function taskset(pid, cores) {
   catch (e) { console.warn(`[perf] affinity pin (pid ${pid} -> cpus ${cores}) failed: ${e.message}`); return false; }
 }
 
-// Pin THIS process (orchestration: all its threads) to the little cores, yielding
-// the big cores to inference workers + any co-resident NPU runtime. Call once at startup.
+// Pin THIS process (orchestration: all its threads) to the little cores, yielding the big cores
+// to inference workers + any co-resident NPU runtime. OPT-IN (env ORK_PIN_ORCH_LITTLE), default OFF:
+// the orchestration process is NOT light — the dashboard's telemetry streaming uses real CPU — so
+// confining it to the weak A55 cores drags the UI. Only pin it when you're deliberately running a
+// co-resident NPU benchmark (ork-driver/llama.cpp) that needs the big cores undisturbed.
 export function pinOrchestrationToLittle() {
-  if (!isManaged()) return;
+  if (!isManaged() || !process.env.ORK_PIN_ORCH_LITTLE) return;
   const cs = detectCoreSets();
   if (!cs) return;
   if (taskset(process.pid, cs.little))

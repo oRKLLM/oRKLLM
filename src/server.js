@@ -113,34 +113,46 @@ await fastify.register(adminRoutes, { prefix: '/api/admin' });
 await fastify.register(authRoutes, { prefix: '/auth' });
 
 // Setup WebSockets
-// 1. Metrics WebSocket
-fastify.get('/ws/metrics', { websocket: true }, async (connection, req) => {
-  fastify.log.info('[WebSocket] Client connected to /ws/metrics');
-  const socket = connection.socket || connection;
-  
-  // Initial fetch
-  getSystemMetrics().then(m => {
-    m.stats = getStats();
-    socket.send(JSON.stringify(m));
-  }).catch(() => {});
-
-  // Polling every 1 second
-  const interval = setInterval(async () => {
+// 1. Metrics WebSocket — ONE shared 1s telemetry gather broadcast to all connected dashboard
+// clients. Previously each client ran its own setInterval(getSystemMetrics), so CPU scaled with
+// the number of open tabs (~50% of a core each → multiple tabs pegged the event loop and dragged
+// the whole UI). Now getSystemMetrics() runs once per tick regardless of client count.
+const metricsClients = new Set();
+let metricsTimer = null;
+function startMetricsPump() {
+  if (metricsTimer) return;
+  metricsTimer = setInterval(async () => {
+    if (metricsClients.size === 0) return;
+    let payload;
     try {
       const m = await getSystemMetrics();
       m.stats = getStats();
-      if (socket.readyState === 1) {
-        socket.send(JSON.stringify(m));
-      }
+      payload = JSON.stringify(m);
     } catch (err) {
-      // ignore
+      return;   // skip this tick on error
+    }
+    for (const s of metricsClients) {
+      if (s.readyState === 1) { try { s.send(payload); } catch {} }
     }
   }, 1000);
+}
+fastify.get('/ws/metrics', { websocket: true }, async (connection, req) => {
+  fastify.log.info('[WebSocket] Client connected to /ws/metrics');
+  const socket = connection.socket || connection;
+  metricsClients.add(socket);
+  startMetricsPump();
+
+  // Initial fetch for this client so it doesn't wait up to 1s for the first frame.
+  getSystemMetrics().then(m => {
+    m.stats = getStats();
+    if (socket.readyState === 1) socket.send(JSON.stringify(m));
+  }).catch(() => {});
 
   await new Promise((resolve) => {
     socket.on('close', () => {
       fastify.log.info('[WebSocket] Client disconnected from /ws/metrics');
-      clearInterval(interval);
+      metricsClients.delete(socket);
+      if (metricsClients.size === 0 && metricsTimer) { clearInterval(metricsTimer); metricsTimer = null; }
       resolve();
     });
   });
