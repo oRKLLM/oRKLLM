@@ -4,7 +4,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { MODELS_DIR, LIBRKLLMRT_PATH, RUNTIMES_DIR, LLAMA_RUNTIME_DIR, parseRuntimeVersion, getNpuCoreCount } from './config.js';
 import { dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings, dbListEnabledMcpServers } from './db.js';
-import { applyPerformance } from './perf_governor.js';
+import { applyPerformance, pinWorkerToBig } from './perf_governor.js';
 import { syncRuntimes, hasRuntime } from './runtime_sync.js';
 import { syncLlamaRuntime, isLlamaRuntimeAvailable } from './llama_sync.js';
 import { eagle3Generate } from './eagle.js';
@@ -528,6 +528,7 @@ class EnginePool {
         orkQuant: options.ork_quant,
         orkHybrid: options.ork_hybrid,
       }) });
+      pinWorkerToBig(slot.worker.pid);   // inference belongs on the big cores (orchestration is pinned little)
 
       // Persistent guards so a worker that dies mid-inference can never crash the
       // whole server. Without an 'error' listener, an IPC failure (e.g.
@@ -697,6 +698,7 @@ class EnginePool {
     const workerPath = path.join(__dirname, 'worker.js');
     if (slot === 'draft') {
       this.draftWorker = fork(workerPath, { serialization: 'advanced', env: workerEnv() });
+      pinWorkerToBig(this.draftWorker.pid);   // EAGLE draft worker also infers → big cores
       // Guard against unhandled 'error' (IPC failure) crashing the server.
       this.draftWorker.on('error', (err) => {
         console.error(`[EnginePool] Draft worker IPC error: ${err.message}`);

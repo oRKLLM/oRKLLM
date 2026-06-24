@@ -17,7 +17,7 @@ import { getStats } from './stats.js';
 import pool from './pool.js';
 import { MODELS_DIR } from './config.js';
 import { syncRuntimes } from './runtime_sync.js';
-import { applyPerformance } from './perf_governor.js';
+import { applyPerformance, pinOrchestrationToLittle } from './perf_governor.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -298,6 +298,10 @@ const start = async () => {
     // manage_performance is on, so the box is performance-ready immediately after
     // a reboot (not only once a model loads). Self-gates on the setting/platform.
     applyPerformance();
+    // Keep this orchestration process (event loop + dashboard metrics polling) OFF the
+    // big cores — inference runs in forked workers (pinned big at fork). Prevents our
+    // frequent metrics wakes from preempting a co-resident NPU runtime's submit thread.
+    pinOrchestrationToLittle();
     migrateMisplacedCache();  // fix empty cache_dir path bug from earlier versions
     await autoLoadPinnedModel();
     // Background runtime sync (non-blocking)

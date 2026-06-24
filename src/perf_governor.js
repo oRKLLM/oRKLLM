@@ -14,6 +14,7 @@
 
 import fs from 'fs';
 import os from 'os';
+import { execFileSync } from 'child_process';
 import { dbGetSetting } from './db.js';
 
 const DMC_GOVERNOR = '/sys/class/devfreq/dmc/governor';
@@ -92,4 +93,63 @@ export function restoreGovernor() {
 // State for /api/admin/status so the UI knows whether to show the manual warning.
 export function getState() {
   return { enabled: isManaged(), applied, failed: !!lastError, reason: lastError };
+}
+
+// ── CPU affinity (big.LITTLE core management) ────────────────────────────────
+// Inference runs in forked WORKER processes; this orchestration process (the
+// event loop + the dashboard's metrics polling) never infers. But if orchestration
+// sits on a big core it preempts the latency-sensitive NPU-submit thread of ANY
+// co-resident NPU runtime (ork-driver / llama.cpp) — decode there is thousands of
+// tiny per-token submits, each waking a thread that then waits behind our frequent
+// metrics wakes → ~40× decode slowdown (measured: tg 4.0 → <0.1 tok/s on RK3588).
+// So: orchestration → little cores; inference workers → big cores. Big.LITTLE is
+// detected from cpu_capacity, so this no-ops cleanly on uniform-core SoCs.
+let coreSets;   // undefined=undetected, null=not big.LITTLE, else {little:"0-3", big:"4-7"}
+
+function detectCoreSets() {
+  if (coreSets !== undefined) return coreSets;
+  coreSets = null;
+  try {
+    const cpus = fs.readdirSync(CPU_BASE).filter((d) => /^cpu\d+$/.test(d))
+      .map((d) => parseInt(d.slice(3), 10)).sort((a, b) => a - b);
+    const cap = {};
+    for (const c of cpus) {
+      const p = `${CPU_BASE}/cpu${c}/cpu_capacity`;
+      if (fs.existsSync(p)) cap[c] = parseInt(fs.readFileSync(p, 'utf-8').trim(), 10);
+    }
+    const caps = Object.values(cap);
+    if (caps.length === cpus.length && new Set(caps).size > 1) {   // heterogeneous → big.LITTLE
+      const max = Math.max(...caps);
+      coreSets = {
+        little: cpus.filter((c) => cap[c] !== max).join(','),
+        big:    cpus.filter((c) => cap[c] === max).join(','),
+      };
+    }
+  } catch { /* leave null */ }
+  return coreSets;
+}
+
+function taskset(pid, cores) {
+  try { execFileSync('taskset', ['-acp', cores, String(pid)], { stdio: 'ignore' }); return true; }
+  catch (e) { console.warn(`[perf] affinity pin (pid ${pid} -> cpus ${cores}) failed: ${e.message}`); return false; }
+}
+
+// Pin THIS process (orchestration: all its threads) to the little cores, yielding
+// the big cores to inference workers + any co-resident NPU runtime. Call once at startup.
+export function pinOrchestrationToLittle() {
+  if (!isManaged()) return;
+  const cs = detectCoreSets();
+  if (!cs) return;
+  if (taskset(process.pid, cs.little))
+    console.log(`[perf] orchestration pinned to little cores (${cs.little}) — big cores reserved for inference`);
+}
+
+// Pin an inference worker process to the big cores (overrides the little-core mask it
+// inherited from this parent). Call right after fork()ing a worker.
+export function pinWorkerToBig(pid) {
+  if (!isManaged() || !pid) return;
+  const cs = detectCoreSets();
+  if (!cs) return;
+  if (taskset(pid, cs.big))
+    console.log(`[perf] inference worker ${pid} pinned to big cores (${cs.big})`);
 }
