@@ -768,11 +768,12 @@
                     <div v-else-if="!repoState(model.id).variants.length" class="text-caption text-grey py-2">No downloadable model files in this repo.</div>
                     <v-list v-else class="pa-0" bg-color="transparent">
                       <v-list-item v-for="v in repoState(model.id).variants" :key="v.key" class="px-0">
-                        <v-list-item-title class="text-body-2 font-mono d-flex align-center" style="gap: 8px;">
+                        <v-list-item-title class="text-body-2 font-mono d-flex align-center flex-wrap" style="gap: 6px;">
                           <v-chip v-if="v.quant" size="x-small" color="primary" variant="tonal">{{ v.quant }}</v-chip>
+                          <v-chip v-if="v.size" size="x-small" color="grey" variant="tonal"><v-icon start size="11">mdi-harddisk</v-icon>{{ formatBytes(v.size) }}</v-chip>
+                          <v-chip v-if="v.fileCount > 1" size="x-small" color="grey" variant="tonal"><v-icon start size="11">mdi-file-multiple-outline</v-icon>{{ v.fileCount }} files</v-chip>
                           <span class="text-truncate">{{ v.label }}</span>
                         </v-list-item-title>
-                        <v-list-item-subtitle v-if="v.size" class="text-caption">{{ formatBytes(v.size) }}</v-list-item-subtitle>
                         <template #append>
                           <v-btn size="small" color="primary" variant="flat" :loading="v.downloading" @click="downloadVariant(model.id, v)">
                             <v-icon start size="16">mdi-download</v-icon>Download
@@ -948,7 +949,7 @@
           </v-card>
 
           <!-- Downloads queue grouped by repo -->
-          <v-card v-if="dlJobs.length" class="glass-card pa-5">
+          <v-card v-if="dlJobs.length" ref="downloadsCard" class="glass-card pa-5">
             <div class="d-flex align-center justify-space-between mb-3">
               <div class="text-subtitle-1 font-weight-bold d-flex align-center">
                 <v-icon start color="primary">mdi-tray-arrow-down</v-icon>
@@ -1693,8 +1694,9 @@ export default {
         const variants = Object.values(groups).map(g => ({
           key: g.key,
           quant: this.quantOf(g.files[0].name),
-          label: g.files.length > 1 ? `${g.key} · ${g.files.length} shards` : g.files[0].name,
+          label: g.files.length > 1 ? g.key : g.files[0].name,   // shard count shown as a chip
           size: g.size,
+          fileCount: g.files.length,
           files: g.files,
           companion,
           downloading: false,
@@ -1709,8 +1711,14 @@ export default {
       try {
         const toGet = [...variant.files, ...(variant.companion || [])];
         await Promise.all(toGet.map(f => this._postDownload(repoId, f.name)));
-        this.startPollDownloadStatus();
+        // Surface the in-progress files in the bottom Downloads queue card (populate immediately,
+        // then scroll there) — the accordion is just the catalog; downloads live in the queue.
+        await this.refreshDownloadQueue();
         this.$notify(`Started downloading ${variant.label}`, 'success');
+        this.$nextTick(() => {
+          const el = this.$refs.downloadsCard?.$el || this.$refs.downloadsCard;
+          if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
       } catch (e) {
         this.$notify('Network error: ' + e.message, 'error');
       } finally {
