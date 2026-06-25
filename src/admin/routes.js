@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
+import { spawn, spawnSync } from 'child_process';
 import { getStats, clearSessionStats, clearAllTimeStats } from '../stats.js';
 import { getMetricsSnapshot } from '../monitor.js';
 import { supportsThinkingToggle } from '../gguf.js';
@@ -86,6 +87,89 @@ function logAudit(request, action, resource) {
       ipAddress: request.ip ?? null,
     });
   } catch (e) {}
+}
+
+// --- accelerated downloads via aria2c (apt package `aria2`, binary `aria2c`) ---
+// 16-connection, resumable HF downloads — far faster than a single Node stream on a
+// fat .gguf/.safetensors over a high-latency link. Falls back to the Node stream when
+// aria2c isn't on PATH. Pattern follows the well-known hfd HF fast-download helper.
+let _aria2Avail = null;
+function hasAria2() {
+  if (_aria2Avail === null) {
+    try { _aria2Avail = spawnSync('aria2c', ['--version'], { stdio: 'ignore' }).status === 0; }
+    catch { _aria2Avail = false; }
+  }
+  return _aria2Avail;
+}
+function _toBps(n, unit) {
+  const u = { B: 1, KiB: 1024, MiB: 1048576, GiB: 1073741824, KB: 1000, MB: 1e6, GB: 1e9 };
+  return Math.round(n * (u[unit] || 1));
+}
+// Download `url` into `dir/outName` with aria2c; updates job.{bytesDown,speedBps} from aria2's
+// progress readout (job.totalBytes is the denominator, set by the caller's HEAD). Resolves on
+// success; on job.status==='cancelled' kills aria2c and cleans up; rejects on non-zero exit.
+function downloadWithAria2({ url, dir, outName, token, job }) {
+  return new Promise((resolve, reject) => {
+    const args = ['-c', '-x16', '-s16', '-k1M', '--file-allocation=none', '--summary-interval=1',
+      '--console-log-level=warn', '--auto-file-renaming=false', '--allow-overwrite=true',
+      '--max-tries=5', '--retry-wait=2', '-d', dir, '-o', outName];
+    if (token) args.push(`--header=Authorization: Bearer ${token}`);
+    args.push(url);
+    const child = spawn('aria2c', args);
+    job._proc = child;   // so pause/cancel can signal it
+    const onData = (buf) => {
+      const s = buf.toString();
+      const pm = s.match(/\((\d+)%\)/);
+      if (pm && job.totalBytes > 0) job.bytesDown = Math.round(job.totalBytes * (+pm[1]) / 100);
+      const dm = s.match(/DL:([\d.]+)([KMG]i?B|B)?/);
+      if (dm) job.speedBps = _toBps(+dm[1], dm[2] || 'B');
+    };
+    child.stdout.on('data', onData);
+    child.stderr.on('data', onData);
+    // kill on pause OR cancel; the .tmp + .aria2 control file are KEPT (aria2c -c resumes from them)
+    const iv = setInterval(() => { if (job.status === 'cancelled' || job.status === 'paused') { try { child.kill('SIGTERM'); } catch {} } }, 300);
+    child.on('error', (e) => { clearInterval(iv); job._proc = null; reject(e); });   // ENOENT etc. -> caller may fall back
+    child.on('close', (code) => {
+      clearInterval(iv); job._proc = null; job.speedBps = 0;
+      if (job.status === 'paused') return resolve();   // leave .tmp + .aria2 for resume
+      if (job.status === 'cancelled') {
+        try { fs.unlinkSync(path.join(dir, outName)); } catch {}
+        try { fs.unlinkSync(path.join(dir, outName + '.aria2')); } catch {}
+        return resolve();
+      }
+      if (code === 0) { job.bytesDown = job.totalBytes || job.bytesDown; resolve(); }
+      else reject(new Error(`aria2c exited ${code}`));
+    });
+  });
+}
+// Single-connection Node-stream download (fallback when aria2c is unavailable). Resumable via a
+// Range request from the existing .tmp size; pause stops cleanly and keeps the .tmp for resume.
+async function downloadNodeStream({ url, headers, tmpPath, job }) {
+  let start = 0; try { start = fs.statSync(tmpPath).size; } catch {}
+  const h = { ...headers };
+  if (start > 0) h['Range'] = `bytes=${start}-`;
+  let res = await fetch(url, { headers: h });
+  while (res.status >= 300 && res.status < 400 && res.headers.get('location')) res = await fetch(res.headers.get('location'), { headers: h });
+  if (res.status === 416) return;                       // already complete
+  if (!res.ok && res.status !== 206) throw new Error(`HTTP ${res.status}`);
+  const append = res.status === 206;                    // server honored Range
+  if (!append) start = 0;
+  if (!job.totalBytes) job.totalBytes = parseInt(res.headers.get('content-length') || '0', 10) + start;
+  job.bytesDown = start;
+  const fileStream = fs.createWriteStream(tmpPath, { flags: append ? 'a' : 'w' });
+  const reader = res.body.getReader();
+  let lastCheck = Date.now(), base = start;
+  while (true) {
+    if (job.status === 'cancelled') { reader.cancel(); fileStream.close(); fs.unlink(tmpPath, () => {}); return; }
+    if (job.status === 'paused') { reader.cancel(); await new Promise(r => fileStream.end(r)); job.speedBps = 0; return; }  // keep .tmp
+    const { value, done } = await reader.read();
+    if (done) break;
+    fileStream.write(Buffer.from(value));
+    job.bytesDown += value.length;
+    const now = Date.now();
+    if (now - lastCheck >= 500) { job.speedBps = Math.round((job.bytesDown - base) / ((now - lastCheck) / 1000)); base = job.bytesDown; lastCheck = now; }
+  }
+  await new Promise((rs, rj) => fileStream.end(err => err ? rj(err) : rs()));
 }
 
 export default async function adminRoutes(fastify, options) {
@@ -1156,47 +1240,34 @@ export default async function adminRoutes(fastify, options) {
     const job = { id, repoId, filename, status: 'downloading', bytesDown: 0, totalBytes: 0, speedBps: 0, startedAt: Date.now(), error: null, _dest: destPath };
     downloadJobs.set(id, job);
 
-    // Stream download in background
-    (async () => {
+    // Download in background — aria2c (16-conn, resumable) when available, else Node stream.
+    // Defined as a re-invokable thunk so /resume can re-enter it (aria2c -c / Range continues).
+    const run = async () => {
       const encodedRepo = repoId.split('/').map(encodeURIComponent).join('/');
       const url = `https://huggingface.co/${encodedRepo}/resolve/main/${encodeURIComponent(filename)}`;
       const headers = { 'User-Agent': 'oRKLLM/1.0' };
       if (hfToken) headers['Authorization'] = `Bearer ${hfToken}`;
+      const tmpPath = destPath + '.tmp';
 
       try {
-        let res = await fetch(url, { headers });
-        // Follow redirects manually to preserve auth header
-        while (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
-          res = await fetch(res.headers.get('location'), { headers });
+        // content-length via HEAD (follow redirects, preserve auth) — the progress denominator
+        try {
+          let h = await fetch(url, { method: 'HEAD', headers, redirect: 'manual' });
+          for (let n = 0; n < 5 && h.status >= 300 && h.status < 400 && h.headers.get('location'); n++)
+            h = await fetch(h.headers.get('location'), { method: 'HEAD', headers, redirect: 'manual' });
+          job.totalBytes = parseInt(h.headers.get('content-length') || '0', 10);
+        } catch {}
+
+        if (hasAria2()) {
+          console.log(`[Download] aria2c -x16 ${filename}`);
+          await downloadWithAria2({ url, dir: repoDir, outName: path.basename(tmpPath), token: hfToken, job });
+        } else {
+          console.log(`[Download] node-stream (aria2c unavailable) ${filename}`);
+          await downloadNodeStream({ url, headers, tmpPath, job });
         }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (job.status === 'cancelled') { try { fs.unlinkSync(tmpPath); } catch {} return; }
+        if (job.status === 'paused') return;   // stopped mid-flight; .tmp kept for /resume
 
-        job.totalBytes = parseInt(res.headers.get('content-length') || '0', 10);
-
-        const tmpPath = destPath + '.tmp';
-        const fileStream = fs.createWriteStream(tmpPath);
-        const reader = res.body.getReader();
-
-        let lastCheck = Date.now();
-        let bytesAtLastCheck = 0;
-
-        while (true) {
-          if (job.status === 'cancelled') { reader.cancel(); fileStream.close(); fs.unlink(tmpPath, () => {}); return; }
-          const { value, done } = await reader.read();
-          if (done) break;
-          fileStream.write(Buffer.from(value));
-          job.bytesDown += value.length;
-
-          // Update speed every 500ms
-          const now = Date.now();
-          if (now - lastCheck >= 500) {
-            job.speedBps = Math.round(((job.bytesDown - bytesAtLastCheck) / ((now - lastCheck) / 1000)));
-            bytesAtLastCheck = job.bytesDown;
-            lastCheck = now;
-          }
-        }
-
-        await new Promise((res, rej) => fileStream.end(err => err ? rej(err) : res()));
         fs.renameSync(tmpPath, destPath);
         console.log(`[Download] Completed: ${filename}`);
 
@@ -1222,12 +1293,15 @@ export default async function adminRoutes(fastify, options) {
         job.speedBps = 0;
         job.finishedAt = Date.now();
       } catch (e) {
+        if (job.status === 'paused' || job.status === 'cancelled') return;  // expected stop, not an error
         job.status = 'error';
         job.error = e.message;
         try { fs.unlinkSync(destPath + '.tmp'); } catch {}
         console.error(`[Download] Failed ${filename}: ${e.message}`);
       }
-    })();
+    };
+    job._run = run;
+    run();
 
     return { success: true, id, message: `Downloading ${filename}` };
   });
@@ -1253,12 +1327,34 @@ export default async function adminRoutes(fastify, options) {
     return [...downloadJobs.values()].map(jobSummary).reverse();
   });
 
-  // DELETE /api/admin/download/:id — cancel or clear a job
+  // POST /api/admin/download/:id/pause — stop an in-flight download, keep the partial for resume
+  fastify.post('/download/:id/pause', async (request, reply) => {
+    const job = downloadJobs.get(request.params.id);
+    if (!job) return reply.status(404).send({ error: 'Job not found' });
+    if (job.status === 'downloading') { job.status = 'paused'; job.speedBps = 0; try { job._proc?.kill('SIGTERM'); } catch {} }
+    return { success: true, status: job.status };
+  });
+
+  // POST /api/admin/download/:id/resume — re-enter the download thunk (aria2c -c / Range continues)
+  fastify.post('/download/:id/resume', async (request, reply) => {
+    const job = downloadJobs.get(request.params.id);
+    if (!job) return reply.status(404).send({ error: 'Job not found' });
+    if (job.status === 'paused' && typeof job._run === 'function') { job.status = 'downloading'; job.error = null; job._run(); }
+    return { success: true, status: job.status };
+  });
+
+  // DELETE /api/admin/download/:id — cancel an in-flight/paused job (kill + clean partial) or clear a finished one
   fastify.delete('/download/:id', async (request, reply) => {
     const job = downloadJobs.get(request.params.id);
     if (!job) return reply.status(404).send({ error: 'Job not found' });
-    if (job.status === 'downloading') job.status = 'cancelled';
-    else downloadJobs.delete(request.params.id);
+    if (job.status === 'downloading') {
+      job.status = 'cancelled';                       // running thunk kills the proc + removes .tmp on close
+      try { job._proc?.kill('SIGTERM'); } catch {}
+    } else {
+      // paused/done/error/cancelled: drop the job and clean any leftover partial + aria2 control file
+      if (job._dest) { try { fs.unlinkSync(job._dest + '.tmp'); } catch {} try { fs.unlinkSync(job._dest + '.tmp.aria2'); } catch {} }
+      downloadJobs.delete(request.params.id);
+    }
     return { success: true };
   });
 

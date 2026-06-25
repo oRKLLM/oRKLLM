@@ -975,26 +975,34 @@
                     </span>
                     <v-chip
                       size="x-small"
-                      :color="job.status === 'done' ? 'success' : job.status === 'error' ? 'error' : job.status === 'cancelled' ? 'grey' : 'primary'"
+                      :color="job.status === 'done' ? 'success' : job.status === 'error' ? 'error' : job.status === 'cancelled' ? 'grey' : job.status === 'paused' ? 'warning' : 'primary'"
                       variant="tonal"
                     >{{ job.status }}</v-chip>
+                    <!-- pause while downloading / resume while paused -->
+                    <v-btn v-if="job.status === 'downloading'" icon size="x-small" variant="text" color="grey" @click="pauseJob(job.id)" title="Pause">
+                      <v-icon size="14">mdi-pause</v-icon>
+                    </v-btn>
+                    <v-btn v-if="job.status === 'paused'" icon size="x-small" variant="text" color="primary" @click="resumeJob(job.id)" title="Resume">
+                      <v-icon size="14">mdi-play</v-icon>
+                    </v-btn>
+                    <!-- clear when finished, cancel while in-flight or paused -->
                     <v-btn v-if="job.status === 'done' || job.status === 'error' || job.status === 'cancelled'"
-                      icon size="x-small" variant="text" color="grey" @click="removeJob(job.id)">
+                      icon size="x-small" variant="text" color="grey" @click="removeJob(job.id)" title="Clear">
                       <v-icon size="14">mdi-close</v-icon>
                     </v-btn>
-                    <v-btn v-else icon size="x-small" variant="text" color="error" @click="cancelJob(job.id)">
+                    <v-btn v-else icon size="x-small" variant="text" color="error" @click="cancelJob(job.id)" title="Cancel">
                       <v-icon size="14">mdi-stop</v-icon>
                     </v-btn>
                   </div>
                 </div>
                 <v-progress-linear
                   :model-value="job.progress"
-                  :color="job.status === 'done' ? 'success' : job.status === 'error' ? 'error' : 'primary'"
+                  :color="job.status === 'done' ? 'success' : job.status === 'error' ? 'error' : job.status === 'paused' ? 'warning' : 'primary'"
                   rounded height="5"
                   :indeterminate="job.status === 'downloading' && job.totalBytes === 0"
                 ></v-progress-linear>
                 <div class="d-flex justify-space-between mt-1">
-                  <span class="text-caption text-grey">{{ job.status === 'downloading' ? formatBytes(job.bytesDown) + ' / ' + (job.totalBytes ? formatBytes(job.totalBytes) : '?') : job.error ?? '' }}</span>
+                  <span class="text-caption text-grey">{{ (job.status === 'downloading' || job.status === 'paused') ? formatBytes(job.bytesDown) + ' / ' + (job.totalBytes ? formatBytes(job.totalBytes) : '?') : job.error ?? '' }}</span>
                   <span class="text-caption text-grey">{{ job.progress }}%</span>
                 </div>
               </div>
@@ -1859,13 +1867,22 @@ export default {
     },
     async cancelJob(id) {
       await fetch(`/api/admin/download/${id}`, { method: 'DELETE' }).catch(() => {});
+      this.refreshDownloadQueue();
+    },
+    async pauseJob(id) {
+      await fetch(`/api/admin/download/${id}/pause`, { method: 'POST' }).catch(() => {});
+      this.refreshDownloadQueue();   // reflect 'paused' immediately
+    },
+    async resumeJob(id) {
+      await fetch(`/api/admin/download/${id}/resume`, { method: 'POST' }).catch(() => {});
+      this.refreshDownloadQueue();   // back to 'downloading' + restart the active status poller
     },
     async removeJob(id) {
       await fetch(`/api/admin/download/${id}`, { method: 'DELETE' }).catch(() => {});
       this.dlJobs = this.dlJobs.filter(j => j.id !== id);
     },
     async clearFinishedJobs() {
-      const finished = this.dlJobs.filter(j => j.status !== 'downloading');
+      const finished = this.dlJobs.filter(j => j.status !== 'downloading' && j.status !== 'paused');
       await Promise.all(finished.map(j => fetch(`/api/admin/download/${j.id}`, { method: 'DELETE' }).catch(() => {})));
       this.dlJobs = this.dlJobs.filter(j => j.status === 'downloading');
     },

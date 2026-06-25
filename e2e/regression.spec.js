@@ -771,3 +771,48 @@ test('Downloader: search-result accordion lazy-loads files and downloads a varia
   await panel.locator('.v-list-item', { hasText: 'model-Q4_K_M.gguf' }).locator('button:has-text("Download")').click();
   await expect.poll(() => downloaded).toContain('model-Q4_K_M.gguf');
 });
+
+// Regression: an in-flight download exposes per-file Pause / Resume / Cancel (wired to the aria2c -c
+// resumable backend). Pause stops it and the UI flips to a 'paused' chip + Resume control; Resume
+// re-enters it (back to 'downloading'); Cancel issues the DELETE. Status is driven by the polled
+// /download/status, so the mock flips the reported status as the control endpoints are hit.
+test('Downloader: in-flight download can be paused, resumed, and cancelled', async ({ page }) => {
+  let jobStatus = 'downloading';
+  const calls = { pause: 0, resume: 0, cancel: 0 };
+  await page.route('**/api/admin/download/**', route => {
+    const url = route.request().url();
+    const method = route.request().method();
+    const ok = (body) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+    if (url.endsWith('/status')) {
+      return ok([{ id: 'job1', repoId: 'test/Repo', filename: 'model.gguf', status: jobStatus,
+        bytesDown: 5e8, totalBytes: 1e9, progress: 50, speedBps: 5e7, elapsed: 10, error: null }]);
+    }
+    if (url.endsWith('/pause'))  { calls.pause++;  jobStatus = 'paused';      return ok({ success: true, status: 'paused' }); }
+    if (url.endsWith('/resume')) { calls.resume++; jobStatus = 'downloading'; return ok({ success: true, status: 'downloading' }); }
+    if (method === 'DELETE')     { calls.cancel++; jobStatus = 'cancelled';   return ok({ success: true }); }
+    return ok({});
+  });
+
+  await login(page);
+  await page.goto('/models');
+  await page.click('.v-tab:has-text("Downloader")');
+
+  // The injected in-flight job shows in the Downloads card with a Pause control (poll is 5s).
+  await expect(page.getByText('model.gguf')).toBeVisible({ timeout: 12000 });
+  await expect(page.locator('button:has(.mdi-pause)')).toBeVisible({ timeout: 12000 });
+
+  // Pause -> POST /pause; status flips to 'paused' and a Resume control appears.
+  await page.locator('button:has(.mdi-pause)').click();
+  await expect.poll(() => calls.pause, { timeout: 12000 }).toBeGreaterThan(0);
+  await expect(page.locator('.v-chip:has-text("paused")')).toBeVisible({ timeout: 12000 });
+  await expect(page.locator('button:has(.mdi-play)')).toBeVisible({ timeout: 12000 });
+
+  // Resume -> POST /resume; back to 'downloading' (Pause control returns).
+  await page.locator('button:has(.mdi-play)').click();
+  await expect.poll(() => calls.resume, { timeout: 12000 }).toBeGreaterThan(0);
+  await expect(page.locator('button:has(.mdi-pause)')).toBeVisible({ timeout: 12000 });
+
+  // Cancel -> DELETE /download/:id.
+  await page.locator('button:has(.mdi-stop)').click();
+  await expect.poll(() => calls.cancel, { timeout: 12000 }).toBeGreaterThan(0);
+});
