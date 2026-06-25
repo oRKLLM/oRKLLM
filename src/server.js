@@ -15,6 +15,7 @@ import authRoutes from './auth/routes.js';
 import { getSystemMetrics } from './monitor.js';
 import { getStats } from './stats.js';
 import pool from './pool.js';
+import { initConversionScheduler } from './conversion.js';
 import { MODELS_DIR } from './config.js';
 import { syncRuntimes } from './runtime_sync.js';
 import { applyPerformance, pinOrchestrationToLittle } from './perf_governor.js';
@@ -316,6 +317,13 @@ const start = async () => {
     pinOrchestrationToLittle();
     migrateMisplacedCache();  // fix empty cache_dir path bug from earlier versions
     await autoLoadPinnedModel();
+    // .orkpack conversion scheduler: enqueue every unconverted .gguf and convert serially during idle
+    // (so models load fast from a pre-tiled cache). Default on; disable with ork_autoconvert=0.
+    if (dbGetSetting('ork_autoconvert') !== '0') {
+      const sched = initConversionScheduler(pool);
+      sched.scanAndEnqueue();
+      fastify.log.info(`[conversion] scheduler started — ${JSON.stringify(sched.status())}`);
+    }
     // Background runtime sync (non-blocking)
     if (dbGetSetting('auto_download_runtimes') === '1') {
       syncRuntimes().catch(e => fastify.log.error(`[RuntimeSync] ${e.message}`));

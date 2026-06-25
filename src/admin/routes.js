@@ -2,6 +2,7 @@ import { getCredentials, saveCredentials, verifyCredentials, hashPassword, check
 import { signCookie, verifyCookie, issueSessionCookie } from '../auth/session.js';
 import { clearAllCache, getCacheStats } from '../cache.js';
 import pool from '../pool.js';
+import { getConversionScheduler } from '../conversion.js';
 import crypto from 'crypto';
 import os from 'os';
 import fs from 'fs';
@@ -398,6 +399,7 @@ export default async function adminRoutes(fastify, options) {
     // reset the connection — the client then sees a spurious "Network error"
     // and the PWA falls back to its offline shell. The client polls
     // GET /api/admin/status for { loading, loadError, isLoaded } instead.
+    getConversionScheduler()?.preempt();   // yield the NPU: kill any in-flight .orkpack conversion
     pool.beginLoad(model, options || {});
     return reply.status(202).send({ accepted: true, model });
   });

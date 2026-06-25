@@ -10,6 +10,7 @@ import { syncLlamaRuntime, isLlamaRuntimeAvailable } from './llama_sync.js';
 import { eagle3Generate } from './eagle.js';
 import { getAggregatedTools } from './mcp.js';
 import { buildToolSystemPrompt } from './mcp_inference.js';
+import { orkpackPathFor, hasOrkpack } from './conversion.js';
 import { isRecurrentArch, supportsThinkingToggle } from './gguf.js';
 import { cacheKey, getCachePath, tmpCachePath, putCachePath, isCacheEnabled } from './cache.js';
 
@@ -43,7 +44,7 @@ function ggufQuantBits(name) {
   return m ? parseInt(m[1], 10) : 4; // unknown → assume 4-bit (the common case)
 }
 
-function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null } = {}) {
+function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, orkPersist = null } = {}) {
   const dirs = [LLAMA_RUNTIME_DIR, RUNTIMES_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean);
   const env = { ...process.env, LD_LIBRARY_PATH: dirs.join(':') };
   // Keep the GPU idle unless something explicitly wants it (TurboQuant KV). With
@@ -59,6 +60,9 @@ function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null } 
   // (the native-INT4 runtime defaults hybrid off). Must be set at fork time.
   if (orkQuant) env.ORK_QUANT = String(orkQuant);
   if (orkHybrid) env.ORK_HYBRID = '1';
+  // .orkpack: when a converted cache exists for this model, point ggml-ork at it so the worker loads
+  // pre-tiled weights straight into NPU DMA (no dequant/quant/tile) — read at backend init, fork time.
+  if (orkPersist) { env.ORK_PERSIST = orkPersist; env.ORK_EVICT_SRC = '1'; }
   return env;
 }
 
@@ -527,6 +531,8 @@ class EnginePool {
         disableVulkan: !usesTurbo,
         orkQuant: options.ork_quant,
         orkHybrid: options.ork_hybrid,
+        // auto-load a pre-built .orkpack for this model (fast pre-tiled load); none → normal pack path
+        orkPersist: hasOrkpack(modelPath) ? orkpackPathFor(modelPath) : null,
       }) });
       pinWorkerToBig(slot.worker.pid);   // inference belongs on the big cores (orchestration is pinned little)
 

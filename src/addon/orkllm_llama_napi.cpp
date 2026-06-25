@@ -403,6 +403,13 @@ Napi::Value InitModel(const Napi::CallbackInfo& info) {
     // buffers with no second copy. Pool defaults this to false for the gguf path.
     mpar.use_mmap = opts.Has("use_mmap") && opts.Get("use_mmap").IsBoolean()
                     ? opts.Get("use_mmap").As<Napi::Boolean>().Value() : true;
+    // --no-repack equivalent: keep weights in HOST buffers so the ggml-ork NPU matmul offload fires.
+    // The aarch64 repack buffer-type (default on) re-tiles Q4_0/Q4_K weights into a non-host GEMM buffer,
+    // which fails ggml-ork's is_host offload gate → Q4_K matmuls silently fall back to CPU. Disabling
+    // extra bufts is the in-process equivalent of llama-completion's --no-repack and is required for the
+    // NPU path (and for .orkpack conversions to pack via ggml-ork) on repackable quants like Q4_K.
+    mpar.use_extra_bufts = opts.Has("use_extra_bufts") && opts.Get("use_extra_bufts").IsBoolean()
+                    ? opts.Get("use_extra_bufts").As<Napi::Boolean>().Value() : false;
 
     g_model = fn_model_load(s_modelPath.c_str(), mpar);
     if (!g_model) return Napi::Number::New(env, -1);
