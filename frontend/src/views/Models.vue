@@ -212,8 +212,11 @@
                   </div>
 
                   <!-- Right side: Actions -->
-                  <div v-if="!head.embeddingsPresent" class="d-flex align-center" style="flex-shrink: 0;">
-                    <v-btn size="x-small" variant="tonal" color="purple" @click="openEmbedDialog(head)">Add embeddings</v-btn>
+                  <div class="d-flex align-center gap-1" style="flex-shrink: 0;">
+                    <v-btn v-if="!head.embeddingsPresent" size="x-small" variant="tonal" color="purple" @click="openEmbedDialog(head)">Add embeddings</v-btn>
+                    <v-btn icon size="x-small" variant="text" color="error" title="Delete head" @click="openDirDelete(head.dir, 'Eagle-3 draft head')">
+                      <v-icon size="16">mdi-delete-outline</v-icon>
+                    </v-btn>
                   </div>
                 </div>
               </v-list-item>
@@ -252,6 +255,9 @@
                       </v-chip>
                     </div>
                   </div>
+                  <v-btn icon size="x-small" variant="text" color="error" style="flex-shrink: 0;" title="Delete base model" @click="openDirDelete(b.dir, 'base model')">
+                    <v-icon size="16">mdi-delete-outline</v-icon>
+                  </v-btn>
                 </div>
               </v-list-item>
               <div v-if="library.base.length === 0" class="text-center py-6 text-grey">
@@ -657,6 +663,25 @@
             </v-card>
           </v-dialog>
 
+          <!-- Delete a base model / Eagle-3 head directory -->
+          <v-dialog v-model="dirDeleteDialog" max-width="400">
+            <v-card class="glass-card" v-if="dirDeleteTarget">
+              <v-card-title class="pa-4 d-flex align-center">
+                <v-icon color="error" class="mr-2">mdi-alert-circle-outline</v-icon>
+                Delete {{ dirDeleteTarget.label }}
+              </v-card-title>
+              <v-card-text class="pa-4 pt-0">
+                <p class="mb-1">Permanently delete this directory and all its files:</p>
+                <p class="font-weight-bold text-truncate">{{ dirDeleteTarget.dir }}</p>
+                <p class="text-caption text-grey mt-2">This removes the entire repo folder from disk. This cannot be undone.</p>
+              </v-card-text>
+              <v-card-actions class="pa-4 justify-end gap-2">
+                <v-btn variant="text" color="grey" @click="dirDeleteDialog = false">Cancel</v-btn>
+                <v-btn variant="flat" color="error" :loading="dirDeleteLoading" @click="confirmDirDelete">Delete</v-btn>
+              </v-card-actions>
+            </v-card>
+          </v-dialog>
+
         </v-tabs-window-item>
 
         <!-- Downloader Tab -->
@@ -955,7 +980,15 @@
                 <v-icon start color="primary">mdi-tray-arrow-down</v-icon>
                 Downloads
               </div>
-              <v-btn size="x-small" variant="text" color="grey" @click="clearFinishedJobs">Clear finished</v-btn>
+              <div class="d-flex align-center gap-1">
+                <v-btn v-if="dlHasActive" size="x-small" variant="text" color="warning" @click="pauseAllJobs" title="Pause all downloads">
+                  <v-icon size="14" start>mdi-pause-circle-outline</v-icon>Pause all
+                </v-btn>
+                <v-btn v-if="dlHasActive" size="x-small" variant="text" color="error" @click="abortAllJobs" title="Abort all downloads">
+                  <v-icon size="14" start>mdi-stop-circle-outline</v-icon>Abort all
+                </v-btn>
+                <v-btn size="x-small" variant="text" color="grey" @click="clearFinishedJobs">Clear finished</v-btn>
+              </div>
             </div>
 
             <div v-for="(jobs, repoId) in dlJobsByRepo" :key="repoId" class="mb-5">
@@ -975,11 +1008,11 @@
                     </span>
                     <v-chip
                       size="x-small"
-                      :color="job.status === 'done' ? 'success' : job.status === 'error' ? 'error' : job.status === 'cancelled' ? 'grey' : job.status === 'paused' ? 'warning' : 'primary'"
+                      :color="job.status === 'done' ? 'success' : job.status === 'error' ? 'error' : job.status === 'cancelled' ? 'grey' : job.status === 'paused' ? 'warning' : job.status === 'queued' ? 'info' : 'primary'"
                       variant="tonal"
                     >{{ job.status }}</v-chip>
-                    <!-- pause while downloading / resume while paused -->
-                    <v-btn v-if="job.status === 'downloading'" icon size="x-small" variant="text" color="grey" @click="pauseJob(job.id)" title="Pause">
+                    <!-- pause while downloading or queued / resume while paused -->
+                    <v-btn v-if="job.status === 'downloading' || job.status === 'queued'" icon size="x-small" variant="text" color="grey" @click="pauseJob(job.id)" title="Pause">
                       <v-icon size="14">mdi-pause</v-icon>
                     </v-btn>
                     <v-btn v-if="job.status === 'paused'" icon size="x-small" variant="text" color="primary" @click="resumeJob(job.id)" title="Resume">
@@ -1123,6 +1156,9 @@ export default {
     deleteDialog: false,
     deleteTarget: null,
     deleteLoading: false,
+    dirDeleteDialog: false,
+    dirDeleteTarget: null,
+    dirDeleteLoading: false,
 
     // Downloader
     dlRepoId: '',
@@ -1202,6 +1238,9 @@ export default {
         groups[key].push(job);
       }
       return groups;
+    },
+    dlHasActive() {
+      return this.dlJobs.some(j => j.status === 'downloading' || j.status === 'queued' || j.status === 'paused');
     },
     dlStatusColor() {
       if (!this.dlStatus) return 'grey';
@@ -1423,6 +1462,32 @@ export default {
     openDeleteConfirm(model) {
       this.deleteTarget = model;
       this.deleteDialog = true;
+    },
+    openDirDelete(dir, label) {
+      this.dirDeleteTarget = { dir, label };
+      this.dirDeleteDialog = true;
+    },
+    async confirmDirDelete() {
+      if (!this.dirDeleteTarget) return;
+      this.dirDeleteLoading = true;
+      try {
+        const rel = this.dirDeleteTarget.dir.split('/').map(encodeURIComponent).join('/');
+        const res = await fetch(`/api/admin/library/${rel}`, { method: 'DELETE' });
+        if (res.ok) {
+          this.dirDeleteDialog = false;
+          this.dirDeleteTarget = null;
+          await this.fetchLibrary();
+          await this.fetchEagle3Heads();
+          await this.fetchModels();
+        } else {
+          const data = await res.json().catch(() => ({}));
+          this.$notify(data.error || 'Failed to delete directory', 'error');
+        }
+      } catch (e) {
+        this.$notify('Failed to delete directory', 'error');
+      } finally {
+        this.dirDeleteLoading = false;
+      }
     },
     async confirmDelete() {
       if (!this.deleteTarget) return;
@@ -1845,7 +1910,7 @@ export default {
         if (!res.ok) return;
         this.dlJobs = await res.json();
         // Restart poller if there are active downloads
-        const anyActive = this.dlJobs.some(j => j.status === 'downloading');
+        const anyActive = this.dlJobs.some(j => j.status === 'downloading' || j.status === 'queued');
         if (anyActive) this.startPollDownloadStatus();
       } catch (e) {}
     },
@@ -1856,7 +1921,7 @@ export default {
           const res = await fetch('/api/admin/download/status');
           if (!res.ok) return;
           this.dlJobs = await res.json();
-          const anyActive = this.dlJobs.some(j => j.status === 'downloading');
+          const anyActive = this.dlJobs.some(j => j.status === 'downloading' || j.status === 'queued');
           if (!anyActive) {
             clearInterval(this.dlPollTimer);
             this.dlPollTimer = null;
@@ -1882,9 +1947,18 @@ export default {
       this.dlJobs = this.dlJobs.filter(j => j.id !== id);
     },
     async clearFinishedJobs() {
-      const finished = this.dlJobs.filter(j => j.status !== 'downloading' && j.status !== 'paused');
+      const active = ['downloading', 'paused', 'queued'];
+      const finished = this.dlJobs.filter(j => !active.includes(j.status));
       await Promise.all(finished.map(j => fetch(`/api/admin/download/${j.id}`, { method: 'DELETE' }).catch(() => {})));
-      this.dlJobs = this.dlJobs.filter(j => j.status === 'downloading');
+      this.dlJobs = this.dlJobs.filter(j => active.includes(j.status));
+    },
+    async pauseAllJobs() {
+      await fetch('/api/admin/download/pause-all', { method: 'POST' }).catch(() => {});
+      this.refreshDownloadQueue();
+    },
+    async abortAllJobs() {
+      await fetch('/api/admin/download/abort-all', { method: 'POST' }).catch(() => {});
+      this.refreshDownloadQueue();
     },
     formatSpeed(bps) {
       if (!bps) return '';

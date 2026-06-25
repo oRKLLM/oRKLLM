@@ -110,7 +110,7 @@ function _toBps(n, unit) {
 // success; on job.status==='cancelled' kills aria2c and cleans up; rejects on non-zero exit.
 function downloadWithAria2({ url, dir, outName, token, job }) {
   return new Promise((resolve, reject) => {
-    const args = ['-c', '-x16', '-s16', '-k1M', '--file-allocation=none', '--summary-interval=1',
+    const args = ['-c', '-x8', '-s8', '-k1M', '--file-allocation=none', '--summary-interval=1',
       '--console-log-level=warn', '--auto-file-renaming=false', '--allow-overwrite=true',
       '--max-tries=5', '--retry-wait=2', '-d', dir, '-o', outName];
     if (token) args.push(`--header=Authorization: Bearer ${token}`);
@@ -1121,6 +1121,31 @@ export default async function adminRoutes(fastify, options) {
   // In-memory job store: { [id]: { id, repoId, filename, status, bytesDown, totalBytes, speedBps, startedAt, finishedAt, error } }
   const downloadJobs = new Map();
 
+  // Cap concurrent downloads — the cap depends on the transfer path. aria2c already
+  // opens 8 connections per file (-x8), so running many at once (e.g. 15 safetensors
+  // shards) saturates the link; limit it to 2 (≈16 connections). The Node-stream
+  // fallback is single-connection per file, so a higher cap (6) gives more useful
+  // parallelism. Enqueue jobs as 'queued' and promote the next (FIFO — the Map
+  // preserves insertion order) whenever a slot frees.
+  function maxConcurrentDownloads() {
+    return hasAria2() ? 2 : 6;
+  }
+  function activeDownloadCount() {
+    let n = 0;
+    for (const j of downloadJobs.values()) if (j.status === 'downloading') n++;
+    return n;
+  }
+  function pumpDownloadQueue() {
+    while (activeDownloadCount() < maxConcurrentDownloads()) {
+      let next = null;
+      for (const j of downloadJobs.values()) if (j.status === 'queued') { next = j; break; }
+      if (!next || typeof next._run !== 'function') break;
+      next.status = 'downloading';
+      next.startedAt = Date.now();
+      Promise.resolve().then(() => next._run()).finally(() => pumpDownloadQueue());
+    }
+  }
+
   function jobSummary(job) {
     const elapsed = (Date.now() - job.startedAt) / 1000;
     return {
@@ -1237,7 +1262,7 @@ export default async function adminRoutes(fastify, options) {
     const destPath = path.join(repoDir, path.basename(filename));
     const hfToken = tokenOverride || (dbGetSetting('hf_token') ?? '');
 
-    const job = { id, repoId, filename, status: 'downloading', bytesDown: 0, totalBytes: 0, speedBps: 0, startedAt: Date.now(), error: null, _dest: destPath };
+    const job = { id, repoId, filename, status: 'queued', bytesDown: 0, totalBytes: 0, speedBps: 0, startedAt: Date.now(), error: null, _dest: destPath };
     downloadJobs.set(id, job);
 
     // Download in background — aria2c (16-conn, resumable) when available, else Node stream.
@@ -1259,7 +1284,7 @@ export default async function adminRoutes(fastify, options) {
         } catch {}
 
         if (hasAria2()) {
-          console.log(`[Download] aria2c -x16 ${filename}`);
+          console.log(`[Download] aria2c -x8 ${filename}`);
           await downloadWithAria2({ url, dir: repoDir, outName: path.basename(tmpPath), token: hfToken, job });
         } else {
           console.log(`[Download] node-stream (aria2c unavailable) ${filename}`);
@@ -1301,9 +1326,9 @@ export default async function adminRoutes(fastify, options) {
       }
     };
     job._run = run;
-    run();
+    pumpDownloadQueue();   // starts now if a slot is free, else stays 'queued'
 
-    return { success: true, id, message: `Downloading ${filename}` };
+    return { success: true, id, message: `${job.status === 'queued' ? 'Queued' : 'Downloading'} ${filename}` };
   });
 
   // POST /api/admin/eagle3/embeddings — give an Eagle-3 head its base-model
@@ -1331,7 +1356,8 @@ export default async function adminRoutes(fastify, options) {
   fastify.post('/download/:id/pause', async (request, reply) => {
     const job = downloadJobs.get(request.params.id);
     if (!job) return reply.status(404).send({ error: 'Job not found' });
-    if (job.status === 'downloading') { job.status = 'paused'; job.speedBps = 0; try { job._proc?.kill('SIGTERM'); } catch {} }
+    if (job.status === 'downloading') { job.status = 'paused'; job.speedBps = 0; try { job._proc?.kill('SIGTERM'); } catch {} pumpDownloadQueue(); }
+    else if (job.status === 'queued') { job.status = 'paused'; job.speedBps = 0; }   // not started yet
     return { success: true, status: job.status };
   });
 
@@ -1339,7 +1365,7 @@ export default async function adminRoutes(fastify, options) {
   fastify.post('/download/:id/resume', async (request, reply) => {
     const job = downloadJobs.get(request.params.id);
     if (!job) return reply.status(404).send({ error: 'Job not found' });
-    if (job.status === 'paused' && typeof job._run === 'function') { job.status = 'downloading'; job.error = null; job._run(); }
+    if (job.status === 'paused' && typeof job._run === 'function') { job.status = 'queued'; job.error = null; pumpDownloadQueue(); }   // respects the concurrency cap
     return { success: true, status: job.status };
   });
 
@@ -1351,11 +1377,35 @@ export default async function adminRoutes(fastify, options) {
       job.status = 'cancelled';                       // running thunk kills the proc + removes .tmp on close
       try { job._proc?.kill('SIGTERM'); } catch {}
     } else {
-      // paused/done/error/cancelled: drop the job and clean any leftover partial + aria2 control file
+      // queued/paused/done/error/cancelled: drop the job and clean any leftover partial + aria2 control file
       if (job._dest) { try { fs.unlinkSync(job._dest + '.tmp'); } catch {} try { fs.unlinkSync(job._dest + '.tmp.aria2'); } catch {} }
       downloadJobs.delete(request.params.id);
     }
+    pumpDownloadQueue();   // a freed/cancelled slot lets the next queued job start
     return { success: true };
+  });
+
+  // POST /api/admin/download/pause-all — pause every active/queued download (partials kept for resume)
+  fastify.post('/download/pause-all', async (request, reply) => {
+    let n = 0;
+    for (const job of downloadJobs.values()) {
+      if (job.status === 'downloading') { job.status = 'paused'; job.speedBps = 0; try { job._proc?.kill('SIGTERM'); } catch {} n++; }
+      else if (job.status === 'queued') { job.status = 'paused'; job.speedBps = 0; n++; }
+    }
+    return { success: true, paused: n };
+  });
+
+  // POST /api/admin/download/abort-all — cancel everything: kill procs, drop jobs, clean partials
+  fastify.post('/download/abort-all', async (request, reply) => {
+    let n = 0;
+    for (const [id, job] of [...downloadJobs.entries()]) {
+      if (job.status === 'downloading') { job.status = 'cancelled'; try { job._proc?.kill('SIGTERM'); } catch {} n++; }
+      else {
+        if (job._dest) { try { fs.unlinkSync(job._dest + '.tmp'); } catch {} try { fs.unlinkSync(job._dest + '.tmp.aria2'); } catch {} }
+        downloadJobs.delete(id); n++;
+      }
+    }
+    return { success: true, aborted: n };
   });
 
   // DELETE /api/admin/models/* — supports subdirectory paths e.g. RepoName/model.rkllm
@@ -1377,6 +1427,22 @@ export default async function adminRoutes(fastify, options) {
     }
     fs.unlinkSync(modelPath);
     dbDeleteModelSettings(modelId);
+    return { success: true };
+  });
+
+  // DELETE /api/admin/library/* — remove a whole repo directory (base model or Eagle-3 head),
+  // identified by its path relative to MODELS_DIR (the `dir` shown on the Models page).
+  fastify.delete('/library/*', async (request, reply) => {
+    const rel = request.params['*'];
+    if (!rel || rel.includes('..')) return reply.status(400).send({ error: 'Invalid path' });
+    const dirPath = path.resolve(MODELS_DIR, rel);
+    if (!dirPath.startsWith(path.resolve(MODELS_DIR) + path.sep)) return reply.status(400).send({ error: 'Invalid path' });
+    if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) return reply.status(404).send({ error: 'Directory not found' });
+    // Guard: refuse if the currently-loaded model lives inside this directory.
+    const loaded = pool.getStatus().model;
+    if (loaded && (path.resolve(MODELS_DIR, loaded) + '').startsWith(dirPath + path.sep))
+      return reply.status(409).send({ error: 'Cannot delete: contains the currently loaded model. Unload it first.' });
+    fs.rmSync(dirPath, { recursive: true, force: true });
     return { success: true };
   });
 

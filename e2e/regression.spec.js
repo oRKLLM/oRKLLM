@@ -816,3 +816,35 @@ test('Downloader: in-flight download can be paused, resumed, and cancelled', asy
   await page.locator('button:has(.mdi-stop)').click();
   await expect.poll(() => calls.cancel, { timeout: 12000 }).toBeGreaterThan(0);
 });
+
+test('Downloader: queued jobs show a queued chip and Pause all / Abort all work', async ({ page }) => {
+  const calls = { pauseAll: 0, abortAll: 0 };
+  await page.route('**/api/admin/download/**', route => {
+    const url = route.request().url();
+    const ok = (body) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+    if (url.endsWith('/status')) {
+      return ok([
+        { id: 'j1', repoId: 'test/Repo', filename: 'a.safetensors', status: 'downloading', bytesDown: 1e8, totalBytes: 1e9, progress: 10, speedBps: 5e7, elapsed: 5, error: null },
+        { id: 'j2', repoId: 'test/Repo', filename: 'b.safetensors', status: 'queued', bytesDown: 0, totalBytes: 0, progress: 0, speedBps: 0, elapsed: 0, error: null },
+      ]);
+    }
+    if (url.endsWith('/pause-all')) { calls.pauseAll++; return ok({ success: true, paused: 2 }); }
+    if (url.endsWith('/abort-all')) { calls.abortAll++; return ok({ success: true, aborted: 2 }); }
+    return ok({});
+  });
+
+  await login(page);
+  await page.goto('/models');
+  await page.click('.v-tab:has-text("Downloader")');
+
+  // A second file sits 'queued' (max-2 concurrency) and renders an info chip.
+  await expect(page.locator('.v-chip:has-text("queued")')).toBeVisible({ timeout: 12000 });
+
+  // Pause all -> POST /download/pause-all
+  await page.getByRole('button', { name: /Pause all/ }).click();
+  await expect.poll(() => calls.pauseAll, { timeout: 12000 }).toBeGreaterThan(0);
+
+  // Abort all -> POST /download/abort-all
+  await page.getByRole('button', { name: /Abort all/ }).click();
+  await expect.poll(() => calls.abortAll, { timeout: 12000 }).toBeGreaterThan(0);
+});
