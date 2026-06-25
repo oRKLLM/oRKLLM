@@ -54,8 +54,11 @@ function extractTarGz(tarGzBuf, destDir) {
       const baseName = path.basename(name);
       const dest = path.join(destDir, baseName);
       fs.writeFileSync(dest, tar.slice(off, off + size));
-      // preserve execute bit for .so files
-      if (baseName.endsWith('.so') || baseName.includes('.so.')) fs.chmodSync(dest, 0o755);
+      // Honor the tar header's execute bit so bundled BINARIES are runnable, not just .so libs — the
+      // .orkpack conversion scheduler spawns the bundled `llama-completion`, which needs +x. (Mode is
+      // the octal field at header offset 100.) Keep the .so fallback for archives without a mode set.
+      const mode = parseInt(header.slice(100, 108).toString('utf8').replace(/\0.*/, '').trim(), 8) || 0;
+      if ((mode & 0o111) || baseName.endsWith('.so') || baseName.includes('.so.')) fs.chmodSync(dest, 0o755);
     } else if (typeFlag === '2' && name) {
       // Symlink entry (e.g. libllama.so -> libllama.so.0 -> libllama.so.0.0.X).
       // We extract flat, so point the link at the target's basename in this dir.
