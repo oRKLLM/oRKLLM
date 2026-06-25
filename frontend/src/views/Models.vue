@@ -74,11 +74,42 @@
           <!-- Wide screens: model list (left) beside the Eagle-3 / auto-unload sidebar (right) -->
           <v-row>
           <v-col cols="12" lg="8">
+          <!-- Models Summary -->
+          <v-card class="glass-card pa-5 mb-5">
+            <div class="text-h6 font-weight-bold d-flex align-center mb-3">
+              <v-icon start color="primary">mdi-chart-box-outline</v-icon>
+              Models Summary
+            </div>
+            <v-row dense>
+              <v-col cols="6" sm="3">
+                <div class="text-h5 font-weight-bold">{{ models.length }}</div>
+                <div class="text-caption text-grey">servable models</div>
+              </v-col>
+              <v-col cols="6" sm="3">
+                <div class="text-h5 font-weight-bold">{{ library.base.length }}</div>
+                <div class="text-caption text-grey">base models</div>
+              </v-col>
+              <v-col cols="6" sm="3">
+                <div class="text-h5 font-weight-bold">{{ library.eagle3.length }}</div>
+                <div class="text-caption text-grey">draft heads</div>
+              </v-col>
+              <v-col cols="6" sm="3">
+                <div class="text-h5 font-weight-bold text-primary">{{ formatBytes(totalStorageBytes) }}</div>
+                <div class="text-caption text-grey">total storage</div>
+              </v-col>
+            </v-row>
+            <div v-if="library.disk" class="text-caption text-grey mt-3 d-flex align-center">
+              <v-icon size="14" start>mdi-harddisk</v-icon>
+              {{ formatBytes(library.disk.freeBytes) }} free of {{ formatBytes(library.disk.totalBytes) }} on disk
+            </div>
+          </v-card>
+
           <v-card class="glass-card pa-5 mb-5">
             <div class="d-flex align-center justify-space-between mb-4">
               <div class="text-h6 font-weight-bold d-flex align-center">
                 <v-icon start color="primary">mdi-folder-open-outline</v-icon>
                 Available Models
+                <span class="text-caption text-grey ml-2 font-weight-regular">{{ formatBytes(modelsTotalBytes) }}</span>
               </div>
               <v-btn icon size="small" variant="text" color="grey" title="Rescan models directory" :loading="scanningModels" @click="rescanModels">
                 <v-icon>mdi-refresh</v-icon>
@@ -180,6 +211,7 @@
               <div class="text-h6 font-weight-bold d-flex align-center">
                 <v-icon start color="purple">mdi-lightning-bolt-outline</v-icon>
                 Eagle-3 Draft Heads
+                <span class="text-caption text-grey ml-2 font-weight-regular">{{ formatBytes(eagle3TotalBytes) }}</span>
               </div>
               <v-btn icon size="small" variant="text" color="grey" title="Rescan" @click="fetchEagle3Heads(); fetchLibrary();">
                 <v-icon>mdi-refresh</v-icon>
@@ -235,6 +267,7 @@
               <div class="text-h6 font-weight-bold d-flex align-center">
                 <v-icon start color="teal">mdi-database-outline</v-icon>
                 Base Models
+                <span class="text-caption text-grey ml-2 font-weight-regular">{{ formatBytes(baseTotalBytes) }}</span>
               </div>
               <v-btn icon size="small" variant="text" color="grey" title="Rescan" @click="fetchLibrary">
                 <v-icon>mdi-refresh</v-icon>
@@ -1241,6 +1274,18 @@ export default {
     },
     dlHasActive() {
       return this.dlJobs.some(j => j.status === 'downloading' || j.status === 'queued' || j.status === 'paused');
+    },
+    modelsTotalBytes() {
+      return this.models.reduce((s, m) => s + (m.size || 0), 0);
+    },
+    baseTotalBytes() {
+      return (this.library.base || []).reduce((s, b) => s + (b.sizeBytes || 0), 0);
+    },
+    eagle3TotalBytes() {
+      return (this.library.eagle3 || []).reduce((s, h) => s + (h.sizeBytes || 0), 0);
+    },
+    totalStorageBytes() {
+      return this.modelsTotalBytes + this.baseTotalBytes + this.eagle3TotalBytes;
     },
     dlStatusColor() {
       if (!this.dlStatus) return 'grey';

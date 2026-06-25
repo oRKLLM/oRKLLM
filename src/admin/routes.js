@@ -811,6 +811,17 @@ export default async function adminRoutes(fastify, options) {
     const readJson = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } };
     const listFiles = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; } };
     const sizeOf = (p) => { try { return fs.statSync(p).size; } catch { return null; } };
+    const dirSizeOf = (dir) => {
+      let total = 0;
+      try {
+        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+          const p = path.join(dir, e.name);
+          if (e.isDirectory()) total += dirSizeOf(p);
+          else { try { total += fs.statSync(p).size; } catch {} }
+        }
+      } catch {}
+      return total;
+    };
 
     // Servable models: every .rkllm or .gguf anywhere under MODELS_DIR.
     // .rkllm → rkllm runtime; .gguf → llama runtime (open NPU stack).
@@ -855,12 +866,16 @@ export default async function adminRoutes(fastify, options) {
           hasConfig: !!cfg,
           targetModelType: cfg?.target_model_type || null,
           embeddingsPresent: names.includes('embeddings.safetensors'),
+          sizeBytes: dirSizeOf(abs),
         });
       } else {
-        base.push({ dir: rel, arch: arch || null, hasEmbeddings: localBaseHasEmbeddings(abs) });
+        base.push({ dir: rel, arch: arch || null, hasEmbeddings: localBaseHasEmbeddings(abs), sizeBytes: dirSizeOf(abs) });
       }
     }
-    return { available, base, eagle3 };
+    // Disk usage of the models volume (best-effort; statfsSync needs Node ≥ 18.15).
+    let disk = null;
+    try { const s = fs.statfsSync(MODELS_DIR); disk = { freeBytes: s.bavail * s.bsize, totalBytes: s.blocks * s.bsize }; } catch {}
+    return { available, base, eagle3, disk };
   });
 
   // GET /api/admin/cache-stats — lightweight hot/cold prefix-cache stats for
