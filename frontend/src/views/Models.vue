@@ -76,9 +76,14 @@
           <v-col cols="12" lg="8">
           <!-- Models Summary -->
           <v-card class="glass-card pa-5 mb-5">
-            <div class="text-h6 font-weight-bold d-flex align-center mb-3">
-              <v-icon start color="primary">mdi-chart-box-outline</v-icon>
-              Models Summary
+            <div class="d-flex align-center justify-space-between mb-3">
+              <div class="text-h6 font-weight-bold d-flex align-center">
+                <v-icon start color="primary">mdi-chart-box-outline</v-icon>
+                Models Summary
+              </div>
+              <v-btn icon size="small" variant="text" color="grey" title="Refresh all cards" :loading="scanningModels" @click="rescanModels">
+                <v-icon>mdi-refresh</v-icon>
+              </v-btn>
             </div>
             <v-row dense>
               <v-col cols="6" sm="3">
@@ -135,6 +140,26 @@
                         <v-chip size="x-small" :color="model.runtime === 'llama' ? 'teal' : 'primary'" variant="tonal">
                           {{ model.runtime === 'llama' ? 'llama / .gguf' : 'rkllm / .rkllm' }}
                         </v-chip>
+                        <v-chip v-if="model.orkConversion?.status === 'done'" size="x-small" color="success" variant="tonal"
+                                title="Pre-packed into the NPU-native format — loads fast (no on-load conversion)">
+                          <v-icon start size="12">mdi-check-decagram</v-icon>ork-gguf converted
+                        </v-chip>
+                        <v-chip v-else-if="model.orkConversion?.status === 'queued'" size="x-small" color="info" variant="tonal"
+                                title="Waiting for idle time to pre-pack for the NPU">
+                          <v-icon start size="12">mdi-clock-outline</v-icon>ORK conversion queued
+                        </v-chip>
+                        <v-chip v-else-if="model.orkConversion?.status === 'error'" size="x-small" color="error" variant="tonal"
+                                title="Pre-pack failed — will convert on next load">
+                          <v-icon start size="12">mdi-alert-outline</v-icon>ORK conversion failed
+                        </v-chip>
+                      </div>
+                      <!-- Live conversion progress (GGUF → NPU-native pack). Foregrounded if the user hits Load. -->
+                      <div v-if="model.orkConversion?.status === 'converting'" class="mt-2" style="max-width: 360px;">
+                        <div class="d-flex align-center justify-space-between mb-1">
+                          <span class="text-caption text-grey">Converting to ORK format…</span>
+                          <span class="text-caption text-grey">{{ model.orkConversion.progress }}%</span>
+                        </div>
+                        <v-progress-linear :model-value="model.orkConversion.progress" color="primary" height="6" rounded />
                       </div>
                     </div>
                   </div>
@@ -190,6 +215,9 @@
                       variant="tonal"
                       :loading="loadingModelId === model.id"
                       :disabled="loadingModelId !== null && loadingModelId !== model.id"
+                      :title="model.orkConversion && model.orkConversion.status !== 'done' && model.orkConversion.status !== 'none'
+                        ? 'Loads now — finishes the ORK conversion in the foreground first, so this load takes longer'
+                        : 'Load model'"
                       @click="loadModel(model.id)"
                     >
                       Load
@@ -213,7 +241,7 @@
                 Eagle-3 Draft Heads
                 <span class="text-caption text-grey ml-2 font-weight-regular">{{ formatBytes(eagle3TotalBytes) }}</span>
               </div>
-              <v-btn icon size="small" variant="text" color="grey" title="Rescan" @click="fetchEagle3Heads(); fetchLibrary();">
+              <v-btn icon size="small" variant="text" color="grey" title="Refresh all cards" :loading="scanningModels" @click="rescanModels">
                 <v-icon>mdi-refresh</v-icon>
               </v-btn>
             </div>
@@ -269,7 +297,7 @@
                 Base Models
                 <span class="text-caption text-grey ml-2 font-weight-regular">{{ formatBytes(baseTotalBytes) }}</span>
               </div>
-              <v-btn icon size="small" variant="text" color="grey" title="Rescan" @click="fetchLibrary">
+              <v-btn icon size="small" variant="text" color="grey" title="Refresh all cards" :loading="scanningModels" @click="rescanModels">
                 <v-icon>mdi-refresh</v-icon>
               </v-btn>
             </div>
@@ -1014,8 +1042,11 @@
                 Downloads
               </div>
               <div class="d-flex align-center gap-1">
-                <v-btn v-if="dlHasActive" size="x-small" variant="text" color="warning" @click="pauseAllJobs" title="Pause all downloads">
+                <v-btn v-if="dlHasActive && !dlAllPaused" size="x-small" variant="text" color="warning" @click="pauseAllJobs" title="Pause all downloads">
                   <v-icon size="14" start>mdi-pause-circle-outline</v-icon>Pause all
+                </v-btn>
+                <v-btn v-if="dlAllPaused" size="x-small" variant="text" color="primary" @click="resumeAllJobs" title="Resume all downloads">
+                  <v-icon size="14" start>mdi-play-circle-outline</v-icon>Resume all
                 </v-btn>
                 <v-btn v-if="dlHasActive" size="x-small" variant="text" color="error" @click="abortAllJobs" title="Abort all downloads">
                   <v-icon size="14" start>mdi-stop-circle-outline</v-icon>Abort all
@@ -1275,6 +1306,11 @@ export default {
     dlHasActive() {
       return this.dlJobs.some(j => j.status === 'downloading' || j.status === 'queued' || j.status === 'paused');
     },
+    dlAllPaused() {
+      // every still-active job is paused (nothing downloading/queued) → offer Resume all instead of Pause all
+      const active = this.dlJobs.filter(j => ['downloading', 'queued', 'paused'].includes(j.status));
+      return active.length > 0 && active.every(j => j.status === 'paused');
+    },
     modelsTotalBytes() {
       return this.models.reduce((s, m) => s + (m.size || 0), 0);
     },
@@ -1310,8 +1346,15 @@ export default {
     this.fetchEagle3Heads();
     this.fetchLibrary();
     this.refreshDownloadQueue();
-    // Poll server state so the loaded-model indicator stays current across tabs
-    this.statusPoller = setInterval(() => this.fetchStatus(), 5000);
+    // Poll server state so the loaded-model indicator stays current across tabs.
+    // While a model is converting/queued for ORK packing, also refresh the model list so the
+    // conversion progress bar animates; this stops re-fetching once nothing is converting.
+    this.statusPoller = setInterval(() => {
+      this.fetchStatus();
+      if (this.models.some(m => m.orkConversion && (m.orkConversion.status === 'converting' || m.orkConversion.status === 'queued'))) {
+        this.fetchModels();
+      }
+    }, 5000);
   },
   beforeUnmount() {
     if (this.dlPollTimer) clearInterval(this.dlPollTimer);
@@ -1394,11 +1437,16 @@ export default {
       }
     },
     async rescanModels() {
+      // Full refresh: updates every card (Summary, Available Models, Eagle-3 Heads, Base Models).
+      // All refresh buttons call this so any one of them brings the whole page current.
       this.scanningModels = true;
       try {
-        await this.fetchModels();
-        await this.fetchAllModelSettings();
-        await this.fetchLibrary();
+        await Promise.all([
+          this.fetchModels(),
+          this.fetchAllModelSettings(),
+          this.fetchLibrary(),
+          this.fetchEagle3Heads(),
+        ]);
       } finally {
         this.scanningModels = false;
       }
@@ -1729,11 +1777,28 @@ export default {
         this.searchResults = data;
         this.searchOffset = data.length;
         this.searchHasMore = data.length >= this.searchPageSize;
+        this.fetchSearchSizes(data);
       } catch (e) {
         this.searchError = 'Network error: ' + e.message;
       } finally {
         this.searchLoading = false;
       }
+    },
+    async fetchSearchSizes(results) {
+      // HF's search/list API carries no repo size, so fetch usedStorage per result lazily (a few in
+      // flight) and fill model.storageBytes — the search row shows it once it arrives (Vue 3 reactive).
+      const targets = (results || []).filter(m => m && m.storageBytes == null);
+      let i = 0;
+      const worker = async () => {
+        while (i < targets.length) {
+          const m = targets[i++];
+          try {
+            const res = await fetch(`/api/admin/hf/model-size?repoId=${encodeURIComponent(m.id)}`);
+            if (res.ok) { const d = await res.json(); if (d.storageBytes != null) m.storageBytes = d.storageBytes; }
+          } catch {}
+        }
+      };
+      await Promise.all([worker(), worker(), worker()]);   // cap at 3 concurrent HF calls
     },
     async loadMoreSearch() {
       if (this.searchLoadingMore || !this.searchHasMore) return;
@@ -1744,6 +1809,7 @@ export default {
         const data = await res.json();
         this.searchResults = [...this.searchResults, ...data];
         this.searchOffset += data.length;
+        this.fetchSearchSizes(data);
         this.searchHasMore = data.length >= this.searchPageSize;
       } catch { /* silent */ } finally {
         this.searchLoadingMore = false;
@@ -1999,6 +2065,10 @@ export default {
     },
     async pauseAllJobs() {
       await fetch('/api/admin/download/pause-all', { method: 'POST' }).catch(() => {});
+      this.refreshDownloadQueue();
+    },
+    async resumeAllJobs() {
+      await fetch('/api/admin/download/resume-all', { method: 'POST' }).catch(() => {});
       this.refreshDownloadQueue();
     },
     async abortAllJobs() {

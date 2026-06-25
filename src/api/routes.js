@@ -113,6 +113,20 @@ export default async function apiRoutes(fastify, options) {
           }
         }
 
+        // ORK conversion state (.gguf only): the offline scheduler pre-packs GGUF weights into the
+        // NPU-native arena format and persists it next to the model. Reflect filesystem state only —
+        // `<model>.orkpack` present → done; sidecar `<model>.orkpack.json` → queued/converting/error.
+        let orkConversion;
+        if (isGguf) {
+          const packPath = path.join(MODELS_DIR, file).replace(/\.gguf$/i, '.orkpack');
+          try { const st = fs.statSync(packPath); if (st.size > 0) orkConversion = { status: 'done', packedBytes: st.size }; } catch {}
+          if (!orkConversion) {
+            try { const s = JSON.parse(fs.readFileSync(packPath + '.json', 'utf8'));
+              if (s && s.status) orkConversion = { status: s.status, progress: Math.max(0, Math.min(100, Math.round(s.progress || 0))) }; } catch {}
+          }
+          if (!orkConversion) orkConversion = { status: 'none' };
+        }
+
         return {
           id: file,
           object: 'model',
@@ -121,6 +135,7 @@ export default async function apiRoutes(fastify, options) {
           size: stats.size,
           runtime,
           runtimeVersion: runtimeVersion ?? (dbGetModelSettings(file)?.runtimeVersion ?? null),
+          ...(orkConversion ? { orkConversion } : {}),
         };
       });
 

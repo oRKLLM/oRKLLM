@@ -822,6 +822,17 @@ export default async function adminRoutes(fastify, options) {
       } catch {}
       return total;
     };
+    // ORK conversion state for a .gguf: the offline scheduler pre-packs GGUF weights into the
+    // NPU-native arena format and persists it next to the model. We reflect filesystem state only —
+    // the scheduler owns the actual conversion. `<model>.orkpack` present → done; a sidecar
+    // `<model>.orkpack.json` ({status,progress}) → queued/converting/error; neither → none.
+    const orkConversionState = (ggufPath) => {
+      const packPath = ggufPath.replace(/\.gguf$/i, '.orkpack');
+      try { const st = fs.statSync(packPath); if (st.size > 0) return { status: 'done', packedBytes: st.size }; } catch {}
+      const s = readJson(packPath + '.json');
+      if (s && s.status) return { status: s.status, progress: Math.max(0, Math.min(100, Math.round(s.progress || 0))) };
+      return { status: 'none' };
+    };
 
     // Servable models: every .rkllm or .gguf anywhere under MODELS_DIR.
     // .rkllm → rkllm runtime; .gguf → llama runtime (open NPU stack).
@@ -834,7 +845,7 @@ export default async function adminRoutes(fastify, options) {
         // (Qwen3+ yes, LFM2.5-MoE no). The UI hides the Enable-Thinking setting
         // when false so it isn't offered where it can't take effect.
         else if (/\.rkllm$/i.test(e.name)) available.push({ id: rel, sizeBytes: sizeOf(path.join(dir, e.name)), runtime: 'rkllm', thinkingToggle: true });
-        else if (/\.gguf$/i.test(e.name))  available.push({ id: rel, sizeBytes: sizeOf(path.join(dir, e.name)), runtime: 'llama', thinkingToggle: supportsThinkingToggle(path.join(dir, e.name)) });
+        else if (/\.gguf$/i.test(e.name))  available.push({ id: rel, sizeBytes: sizeOf(path.join(dir, e.name)), runtime: 'llama', thinkingToggle: supportsThinkingToggle(path.join(dir, e.name)), orkConversion: orkConversionState(path.join(dir, e.name)) });
       }
     })(MODELS_DIR);
 
@@ -1216,6 +1227,25 @@ export default async function adminRoutes(fastify, options) {
     return { id, source: label };
   }
 
+  // GET /api/admin/hf/model-size?repoId=<id> — total repo storage (usedStorage), for the search-row
+  // size badge. HF's list/search API has no size field, so the search results fetch this per-result.
+  fastify.get('/hf/model-size', async (request, reply) => {
+    const { repoId } = request.query;
+    if (!repoId) return reply.status(400).send({ error: 'repoId required' });
+    const hfToken = dbGetSetting('hf_token') ?? '';
+    const headers = { 'User-Agent': 'oRKLLM/1.0' };
+    if (hfToken) headers['Authorization'] = `Bearer ${hfToken}`;
+    try {
+      const encodedId = repoId.split('/').map(encodeURIComponent).join('/');
+      const res = await fetch(`https://huggingface.co/api/models/${encodedId}?full=true`, { headers });
+      if (!res.ok) return reply.status(res.status).send({ error: `HF API error: ${res.status}` });
+      const data = await res.json();
+      return { storageBytes: data.usedStorage ?? null };
+    } catch (e) {
+      return reply.status(500).send({ error: e.message });
+    }
+  });
+
   // GET /api/admin/hf/files?repoId=<id> — list downloadable files in a HF repo
   // (weight files + companion config.json)
   fastify.get('/hf/files', async (request, reply) => {
@@ -1408,6 +1438,16 @@ export default async function adminRoutes(fastify, options) {
       else if (job.status === 'queued') { job.status = 'paused'; job.speedBps = 0; n++; }
     }
     return { success: true, paused: n };
+  });
+
+  // POST /api/admin/download/resume-all — resume every paused download (re-queued; concurrency cap applies)
+  fastify.post('/download/resume-all', async (request, reply) => {
+    let n = 0;
+    for (const job of downloadJobs.values()) {
+      if (job.status === 'paused' && typeof job._run === 'function') { job.status = 'queued'; job.error = null; n++; }
+    }
+    pumpDownloadQueue();
+    return { success: true, resumed: n };
   });
 
   // POST /api/admin/download/abort-all — cancel everything: kill procs, drop jobs, clean partials
