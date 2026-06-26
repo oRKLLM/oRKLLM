@@ -208,6 +208,17 @@ test('Models page: Expand all / Collapse all toggles the Available card accordio
   // toggle reads "Collapse all".
   const nestedRow = card.locator('.model-tree-leaf').filter({ hasText: 'nested_demo' });
   await expect(nestedRow).toBeVisible();
+
+  // Hierarchy reads as a tree: a nested level is tabbed in (greater left padding)
+  // relative to its parent folder header — not flush-left. (Regression guard: the
+  // Vuetify `px-4` utility used to win over the inline depth padding with
+  // `!important`, pinning every level at 16px.)
+  const padLeft = (loc) =>
+    loc.evaluate((el) => parseFloat(getComputedStyle(el).paddingLeft));
+  const folderPad = await padLeft(folder);
+  const nestedPad = await padLeft(nestedRow);
+  expect(nestedPad).toBeGreaterThan(folderPad);
+
   const toggle = card.getByRole('button', { name: /Collapse all|Expand all/ });
   await expect(toggle).toHaveText(/Collapse all/);
 

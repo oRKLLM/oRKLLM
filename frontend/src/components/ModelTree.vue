@@ -4,7 +4,7 @@
       <!-- Folder node: collapsible header + recursive children (and its own leaf, if any) -->
       <div v-if="node.isFolder" class="model-tree-folder">
         <div
-          class="model-tree-folder-header d-flex align-center px-4 py-2 border-bottom"
+          class="model-tree-folder-header d-flex align-center pr-4 py-2 border-bottom"
           :style="{ paddingLeft: indentPx }"
           role="button"
           tabindex="0"
