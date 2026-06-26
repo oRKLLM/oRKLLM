@@ -152,6 +152,96 @@ export function localBaseHasEmbeddings(baseDir) {
   try { locateLocal(baseDir); return true; } catch { return false; }
 }
 
+// ── Reuse an already-extracted embeddings.safetensors ──────────────────────
+//
+// Every draft head of the SAME target shares one identical embed_tokens table.
+// Once one draft has its `embeddings.safetensors`, another draft of the same
+// target can reuse the byte-identical tensor instead of re-extracting (a 1+ GB
+// download/slice). We match on the embed_tokens.weight {shape, dtype}, which
+// uniquely identifies the table for a given target (vocab × hidden_size).
+
+// Read just the embed_tokens.weight metadata ({shape, dtype, nbytes}) from a
+// single-tensor (or any) safetensors file. Returns null if absent/unreadable.
+export function readEmbeddingsMeta(file) {
+  try {
+    const { header } = readLocalHeader(file);
+    const key = Object.keys(header).find(k => k.endsWith(EMBED_SUFFIX));
+    if (!key) return null;
+    const t = header[key];
+    const [begin, end] = t.data_offsets;
+    return { shape: t.shape, dtype: t.dtype, nbytes: end - begin };
+  } catch { return null; }
+}
+
+// Two embed tables are interchangeable iff identical shape + dtype.
+export function embeddingsMetaMatch(a, b) {
+  if (!a || !b || a.dtype !== b.dtype) return false;
+  if (!Array.isArray(a.shape) || !Array.isArray(b.shape) || a.shape.length !== b.shape.length) return false;
+  return a.shape.every((d, i) => d === b.shape[i]);
+}
+
+// Find existing embeddings.safetensors files under modelsDir (in any draft-head
+// dir) that could supply a draft's embeddings. `excludeDir` is the requesting
+// draft's own dir (relative to modelsDir) so it isn't offered to itself.
+// Returns [{ dir, path, shape, dtype, nbytes }] — `dir` relative to modelsDir.
+// Bounded-depth walk mirroring the model scan in admin/routes.js.
+export function findReusableEmbeddings(modelsDir, excludeDir = null) {
+  const out = [];
+  const exclude = excludeDir ? path.normalize(excludeDir) : null;
+  (function walk(dir, rel = '', depth = 0) {
+    if (depth > 4) return;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.isDirectory()) { walk(path.join(dir, e.name), rel ? `${rel}/${e.name}` : e.name, depth + 1); continue; }
+      if (e.name !== 'embeddings.safetensors') continue;
+      if (exclude && path.normalize(rel) === exclude) continue;
+      const file = path.join(dir, e.name);
+      const meta = readEmbeddingsMeta(file);
+      if (meta) out.push({ dir: rel, path: file, shape: meta.shape, dtype: meta.dtype, nbytes: meta.nbytes });
+    }
+  })(modelsDir);
+  return out;
+}
+
+// Copy an existing embeddings.safetensors into destPath, validating that its
+// embed_tokens.weight {shape,dtype} matches `expect` (when given). Within one
+// filesystem this hardlinks (instant, no extra 1 GB on disk; the runtime opens
+// it read-only so a shared inode is safe); across filesystems it streams a copy.
+export async function copyEmbeddings({ srcPath, destPath, expect = null, job }) {
+  const meta = readEmbeddingsMeta(srcPath);
+  if (!meta) throw new Error(`source has no embed_tokens.weight: ${srcPath}`);
+  if (expect && !embeddingsMetaMatch(meta, expect))
+    throw new Error(`shape/dtype mismatch: source ${meta.dtype}${JSON.stringify(meta.shape)} vs expected ${expect.dtype}${JSON.stringify(expect.shape)}`);
+
+  let total = 0;
+  try { total = fs.statSync(srcPath).size; } catch {}
+  if (job) { job.totalBytes = total; job.bytesDown = 0; }
+
+  const tmp = destPath + '.tmp';
+  try { fs.unlinkSync(tmp); } catch {}
+  // Fast path: hardlink within the same filesystem.
+  try {
+    fs.linkSync(srcPath, tmp);
+    fs.renameSync(tmp, destPath);
+    if (job) { job.bytesDown = total; job.linked = true; }
+    return { linked: true, bytes: total };
+  } catch { try { fs.unlinkSync(tmp); } catch {} }
+
+  // Fallback: stream-copy across filesystems.
+  await new Promise((resolve, reject) => {
+    const rd = fs.createReadStream(srcPath);
+    const wr = fs.createWriteStream(tmp);
+    rd.on('error', reject); wr.on('error', reject);
+    rd.on('data', (chunk) => { if (job) job.bytesDown += chunk.length; });
+    wr.on('finish', resolve);
+    rd.pipe(wr);
+  });
+  fs.renameSync(tmp, destPath);
+  if (job) job.linked = false;
+  return { linked: false, bytes: total };
+}
+
 // Extract the embed tensor from a locally-downloaded base model into destPath.
 export async function extractLocalEmbeddings({ baseDir, destPath, job }) {
   const { shardFile, tensor, dataStart } = locateLocal(baseDir);

@@ -22,7 +22,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { isLlamaRuntimeAvailable, getLlamaRuntimeInfo, getLlamaReleases, syncLlamaRuntime, getLlamaSyncState } from '../llama_sync.js';
 import { getDramStatus, getCpuStatus } from '../monitor.js';
 import { getState as getPerfState } from '../perf_governor.js';
-import { fetchBaseEmbeddings, extractLocalEmbeddings, localBaseHasEmbeddings } from '../hf_embeddings.js';
+import { fetchBaseEmbeddings, extractLocalEmbeddings, localBaseHasEmbeddings, findReusableEmbeddings, readEmbeddingsMeta, copyEmbeddings } from '../hf_embeddings.js';
 import { convertPtToSafetensors } from '../pt_to_safetensors.js';
 import { activeStreams } from '../streams.js';
 
@@ -913,6 +913,26 @@ export default async function adminRoutes(fastify, options) {
         base.push({ dir: rel, arch: arch || null, hasEmbeddings: localBaseHasEmbeddings(abs), sizeBytes: dirSizeOf(abs) });
       }
     }
+    // Reuse candidates: every existing embeddings.safetensors under MODELS_DIR.
+    // A draft of the SAME target shares the byte-identical embed_tokens table, so
+    // a draft that's missing embeddings can copy/hardlink an existing one instead
+    // of re-extracting (a 1+ GB slice). Attach to each embeddings-missing draft
+    // the shape-distinct candidates from OTHER drafts (excluding itself).
+    const allEmbeddings = findReusableEmbeddings(MODELS_DIR);
+    for (const d of drafts) {
+      if (d.embeddingsPresent) continue;
+      const seen = new Set();
+      const cands = [];
+      for (const c of allEmbeddings) {
+        if (c.dir === d.dir) continue;
+        const sig = `${c.dtype}|${(c.shape || []).join('x')}`;
+        if (seen.has(sig)) continue;     // one representative per distinct shape/dtype
+        seen.add(sig);
+        cands.push({ sourceDir: c.dir, shape: c.shape, dtype: c.dtype, sizeBytes: c.nbytes });
+      }
+      d.reuseCandidates = cands;
+    }
+
     // Disk usage of the models volume (best-effort; statfsSync needs Node ≥ 18.15).
     let disk = null;
     try { const s = fs.statfsSync(MODELS_DIR); disk = { freeBytes: s.bavail * s.bsize, totalBytes: s.blocks * s.bsize }; } catch {}
@@ -1218,9 +1238,13 @@ export default async function adminRoutes(fastify, options) {
     };
   }
 
-  // Extract an Eagle-3 head's base-model embeddings into the head directory
-  // (headDirName under MODELS_DIR) as a download-queue job. The base is chosen
+  // Give a draft head (EAGLE-3 or DFlash — the embed table is target-specific,
+  // not draft-type-specific) its target's embeddings into the head directory
+  // (headDirName under MODELS_DIR) as a download-queue job. The source is chosen
   // explicitly — no derivation — from one of:
+  //   source.reuseDir   : copy/hardlink an existing embeddings.safetensors from
+  //                        another draft of the same target (shape-validated) —
+  //                        cheapest; no re-extraction
   //   source.baseRepoId : range-download only the embed tensor from a HF repo
   //   source.baseDir    : slice it out of an already-downloaded base model dir
   // Idempotent: skips when embeddings.safetensors exists or a job is in flight.
@@ -1230,10 +1254,20 @@ export default async function adminRoutes(fastify, options) {
     if (fs.existsSync(destPath)) return { skipped: 'exists' };
     for (const j of downloadJobs.values())
       if (j._dest === destPath && j.status === 'downloading') return { skipped: 'in-progress' };
+
+    const fromReuse = !!source.reuseDir;
+    // Validate the reuse source up-front so a bad request fails synchronously
+    // (422) rather than as a queued-job error.
+    let reuseSrcPath = null;
+    if (fromReuse) {
+      reuseSrcPath = path.join(MODELS_DIR, source.reuseDir, 'embeddings.safetensors');
+      if (!fs.existsSync(reuseSrcPath)) return { error: `no embeddings.safetensors in ${source.reuseDir}` };
+      if (!readEmbeddingsMeta(reuseSrcPath)) return { error: `source has no embed_tokens.weight: ${source.reuseDir}` };
+    }
     if (!fs.existsSync(repoDir)) fs.mkdirSync(repoDir, { recursive: true });
 
     const fromRepo = !!source.baseRepoId;
-    const label = fromRepo ? source.baseRepoId : `local:${source.baseDir}`;
+    const label = fromReuse ? `reuse:${source.reuseDir}` : fromRepo ? source.baseRepoId : `local:${source.baseDir}`;
     const id = uuidv4();
     const job = { id, repoId: label, filename: `${headDirName}/embeddings.safetensors`, status: 'downloading',
                   bytesDown: 0, totalBytes: 0, speedBps: 0, startedAt: Date.now(), error: null, _dest: destPath };
@@ -1241,7 +1275,9 @@ export default async function adminRoutes(fastify, options) {
 
     (async () => {
       try {
-        if (fromRepo) {
+        if (fromReuse) {
+          await copyEmbeddings({ srcPath: reuseSrcPath, destPath, job });
+        } else if (fromRepo) {
           await fetchBaseEmbeddings({ baseRepoId: source.baseRepoId, destPath, hfToken, job });
         } else {
           await extractLocalEmbeddings({ baseDir: path.join(MODELS_DIR, source.baseDir), destPath, job });
@@ -1406,18 +1442,22 @@ export default async function adminRoutes(fastify, options) {
     return { success: true, id, message: `${job.status === 'queued' ? 'Queued' : 'Downloading'} ${filename}` };
   });
 
-  // POST /api/admin/eagle3/embeddings — give an Eagle-3 head its base-model
-  // embeddings. The base is chosen explicitly (no name derivation):
+  // POST /api/admin/eagle3/embeddings — give a draft head (EAGLE-3 or DFlash; the
+  // endpoint is draft-type-agnostic) its target's embeddings. The source is chosen
+  // explicitly (no name derivation):
+  //   { headDir, reuseDir }    → copy/hardlink an existing embeddings.safetensors
+  //                              from another draft of the same target (cheapest)
   //   { headDir, baseRepoId }  → range-download just embed_tokens from a HF repo
   //   { headDir, baseDir }     → slice it from an already-downloaded base model
   // Runs as a download-queue job (progress visible in the queue).
   fastify.post('/eagle3/embeddings', async (request, reply) => {
-    const { headDir, baseRepoId, baseDir, hfToken: tokenOverride } = request.body || {};
+    const { headDir, baseRepoId, baseDir, reuseDir, hfToken: tokenOverride } = request.body || {};
     if (!headDir) return reply.status(400).send({ error: 'headDir required' });
-    if (!baseRepoId && !baseDir) return reply.status(400).send({ error: 'baseRepoId or baseDir required' });
-    if (headDir.includes('..') || (baseDir && baseDir.includes('..'))) return reply.status(400).send({ error: 'invalid path' });
+    if (!baseRepoId && !baseDir && !reuseDir) return reply.status(400).send({ error: 'reuseDir, baseRepoId or baseDir required' });
+    if (headDir.includes('..') || (baseDir && baseDir.includes('..')) || (reuseDir && reuseDir.includes('..')))
+      return reply.status(400).send({ error: 'invalid path' });
     const hfToken = tokenOverride || (dbGetSetting('hf_token') ?? '');
-    const r = startEmbeddingsJob(headDir, { baseRepoId, baseDir }, hfToken);
+    const r = startEmbeddingsJob(headDir, { reuseDir, baseRepoId, baseDir }, hfToken);
     if (r.error) return reply.status(422).send(r);
     return { success: true, ...r };
   });

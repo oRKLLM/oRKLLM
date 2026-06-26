@@ -376,12 +376,21 @@
               </v-card-subtitle>
               <v-card-text>
                 <v-radio-group v-model="embedSource" density="compact" hide-details class="mb-3">
+                  <v-radio value="reuse" label="Reuse existing embeddings (from another draft of the same target)" :disabled="(embedTarget?.reuseCandidates||[]).length===0"></v-radio>
                   <v-radio value="local" label="Use a downloaded base model" :disabled="library.base.filter(b=>b.hasEmbeddings).length===0"></v-radio>
                   <v-radio value="repo" label="Fetch the embedding slice from a base repo (~778 MB)"></v-radio>
                 </v-radio-group>
 
                 <v-select
-                  v-if="embedSource === 'local'"
+                  v-if="embedSource === 'reuse'"
+                  v-model="embedReuseDir"
+                  :items="(embedTarget?.reuseCandidates||[]).map(c=>({ title: `${c.sourceDir} — ${c.dtype} [${(c.shape||[]).join(', ')}]`, value: c.sourceDir }))"
+                  label="Existing embeddings table"
+                  density="compact" variant="outlined" hide-details
+                ></v-select>
+
+                <v-select
+                  v-else-if="embedSource === 'local'"
                   v-model="embedBaseDir"
                   :items="library.base.filter(b=>b.hasEmbeddings).map(b=>b.dir)"
                   label="Base model"
@@ -396,15 +405,16 @@
                   density="compact" variant="outlined" hide-details
                 ></v-text-field>
                 <div class="text-caption text-grey mt-2">
-                  Only the embedding tensor is fetched, not the whole model.
+                  <span v-if="embedSource === 'reuse'">Copies (or hardlinks, when on the same disk) the matching table — no re-extraction.</span>
+                  <span v-else>Only the embedding tensor is fetched, not the whole model.</span>
                 </div>
               </v-card-text>
               <v-card-actions>
                 <v-spacer></v-spacer>
                 <v-btn variant="text" @click="embedDialog = false">Cancel</v-btn>
                 <v-btn color="purple" variant="flat" :loading="embedSubmitting"
-                  :disabled="embedSource === 'local' ? !embedBaseDir : !embedBaseRepo.trim()"
-                  @click="submitEmbeddings">Fetch embeddings</v-btn>
+                  :disabled="embedSource === 'reuse' ? !embedReuseDir : embedSource === 'local' ? !embedBaseDir : !embedBaseRepo.trim()"
+                  @click="submitEmbeddings">{{ embedSource === 'reuse' ? 'Reuse embeddings' : 'Fetch embeddings' }}</v-btn>
               </v-card-actions>
             </v-card>
           </v-dialog>
@@ -1210,8 +1220,9 @@ export default {
     library: { available: [], base: [], drafts: [] },
     // "Add embeddings" dialog for an Eagle-3 head
     embedDialog: false,
-    embedTarget: null,          // the eagle3 head row
-    embedSource: 'local',       // 'local' (downloaded base) | 'repo' (HF slice)
+    embedTarget: null,          // the draft head row (eagle3 / dflash)
+    embedSource: 'local',       // 'reuse' (existing table) | 'local' (downloaded base) | 'repo' (HF slice)
+    embedReuseDir: null,        // selected source draft dir (reuse source)
     embedBaseDir: null,         // selected base model dir (local source)
     embedBaseRepo: '',          // base repo id (repo source)
     embedSubmitting: false,
@@ -1479,9 +1490,18 @@ export default {
     },
     openEmbedDialog(head) {
       this.embedTarget = head;
-      // Default to a local base model if one with embeddings is available.
+      const candidates = head.reuseCandidates || [];
       const localBase = this.library.base.find(b => b.hasEmbeddings);
-      this.embedSource = localBase ? 'local' : 'repo';
+      // Prefer reusing an already-extracted table (cheapest — no re-extraction);
+      // if exactly one shape-compatible table exists, default-select it. Else
+      // fall back to a downloaded base, then the HF slice.
+      if (candidates.length > 0) {
+        this.embedSource = 'reuse';
+        this.embedReuseDir = candidates.length === 1 ? candidates[0].sourceDir : null;
+      } else {
+        this.embedSource = localBase ? 'local' : 'repo';
+        this.embedReuseDir = null;
+      }
       this.embedBaseDir = localBase ? localBase.dir : null;
       this.embedBaseRepo = '';
       this.embedDialog = true;
@@ -1489,7 +1509,10 @@ export default {
     async submitEmbeddings() {
       if (!this.embedTarget) return;
       const body = { headDir: this.embedTarget.dir };
-      if (this.embedSource === 'local') {
+      if (this.embedSource === 'reuse') {
+        if (!this.embedReuseDir) return;
+        body.reuseDir = this.embedReuseDir;
+      } else if (this.embedSource === 'local') {
         if (!this.embedBaseDir) return;
         body.baseDir = this.embedBaseDir;
       } else {
@@ -1504,7 +1527,9 @@ export default {
         const data = await res.json();
         if (!res.ok) { this.$notify(data.error || 'Failed to start embeddings download', 'error'); return; }
         this.embedDialog = false;
-        this.$notify('Fetching base-model embeddings — see the download queue.', 'info');
+        this.$notify(this.embedSource === 'reuse'
+          ? 'Reusing existing embeddings — see the download queue.'
+          : 'Fetching base-model embeddings — see the download queue.', 'info');
         this.tab = 'downloader';
         this.refreshDownloadQueue();
         // Refresh library once the job likely finished.

@@ -968,3 +968,66 @@ test('Downloader: "DFlash draft models only" appends dflash to the HF search que
   await expect.poll(() => lastQ).toContain('dflash');
   expect(lastQ).toContain('qwen');
 });
+
+// ── Draft-embeddings reuse ──────────────────────────────────────────────────
+// Two draft heads of the SAME target share one identical embed_tokens table, so
+// a draft that's missing embeddings should be able to copy/hardlink an existing
+// one (from another draft) instead of re-extracting a 1+ GB slice. We seed an
+// EAGLE-3 draft that already has embeddings.safetensors and a DFlash draft that
+// doesn't, then assert (a) the library surfaces the reuse candidate on the
+// missing draft and (b) the reuse endpoint lands a byte-identical table.
+test.describe('Draft embeddings reuse', () => {
+  // Single-tensor embed_tokens.weight safetensors (8-byte len prefix + JSON
+  // header (8-aligned) + raw data) — the shape hf_embeddings reads/writes.
+  function writeEmbeddings(file, { shape, dtype, nbytes }) {
+    const out = { 'model.embed_tokens.weight': { dtype, shape, data_offsets: [0, nbytes] } };
+    let json = JSON.stringify(out);
+    json += ' '.repeat((8 - ((8 + Buffer.byteLength(json)) % 8)) % 8);
+    const hdr = Buffer.from(json);
+    const len = Buffer.alloc(8); len.writeBigUInt64LE(BigInt(hdr.length));
+    const data = Buffer.alloc(nbytes); for (let i = 0; i < nbytes; i++) data[i] = i & 0xff;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, Buffer.concat([len, hdr, data]));
+  }
+
+  const srcDir = path.join(modelsDir, 'Qwen', 'eagle3-src');
+  const dstDir = path.join(modelsDir, 'Qwen', 'dflash-dst');
+  const srcEmbed = path.join(srcDir, 'embeddings.safetensors');
+  const dstEmbed = path.join(dstDir, 'embeddings.safetensors');
+  const META = { shape: [248320, 2048], dtype: 'BF16', nbytes: 512 };
+
+  test.beforeAll(() => {
+    writeEmbeddings(srcEmbed, META);
+    // The DFlash draft has its head but no embeddings table yet.
+    fs.mkdirSync(dstDir, { recursive: true });
+    fs.writeFileSync(path.join(dstDir, 'model.safetensors'), 'fake-head', 'utf-8');
+  });
+  test.afterAll(() => {
+    fs.rmSync(path.join(modelsDir, 'Qwen'), { recursive: true, force: true });
+  });
+
+  test('library surfaces the reuse candidate on the embeddings-missing draft', async ({ page }) => {
+    await login(page);
+    const res = await page.request.get('/api/admin/library');
+    expect(res.ok()).toBeTruthy();
+    const { drafts } = await res.json();
+    const dst = drafts.find(d => d.dir === 'Qwen/dflash-dst');
+    expect(dst).toBeTruthy();
+    expect(dst.embeddingsPresent).toBe(false);
+    const cand = (dst.reuseCandidates || []).find(c => c.sourceDir === 'Qwen/eagle3-src');
+    expect(cand).toBeTruthy();
+    expect(cand.dtype).toBe('BF16');
+    expect(cand.shape).toEqual([248320, 2048]);
+  });
+
+  test('reuse endpoint copies an existing table into the missing draft', async ({ page }) => {
+    await login(page);
+    const res = await page.request.post('/api/admin/eagle3/embeddings', {
+      data: { headDir: 'Qwen/dflash-dst', reuseDir: 'Qwen/eagle3-src' },
+    });
+    expect(res.ok()).toBeTruthy();
+    // The job runs in the download queue; poll until the table lands.
+    await expect.poll(() => fs.existsSync(dstEmbed), { timeout: 5000 }).toBe(true);
+    expect(fs.readFileSync(dstEmbed).equals(fs.readFileSync(srcEmbed))).toBe(true);
+  });
+});
