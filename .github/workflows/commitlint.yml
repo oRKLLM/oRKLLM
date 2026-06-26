@@ -1,0 +1,46 @@
+name: Commit Lint
+
+# Validate that commit messages are Conventional-Commits compliant — the same
+# ruleset semantic-release's commit-analyzer uses to decide releases. Catches
+# non-conforming types (e.g. "models UI:", "dashboard:") that semantic-release
+# silently classifies as "no release", so frontend/UI changes never reach the
+# apt channel. (Observed 2026-06-26: alpha.24's UI work failed to publish for
+# exactly this reason.)
+
+on:
+  pull_request:
+  push:
+    branches: [alpha, beta, main]
+
+permissions:
+  contents: read
+
+jobs:
+  commitlint:
+    name: Conventional Commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install commitlint
+        run: npm install --no-save @commitlint/cli @commitlint/config-conventional
+      - name: Validate commit messages
+        run: |
+          set -e
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            FROM="${{ github.event.pull_request.base.sha }}"
+            TO="${{ github.event.pull_request.head.sha }}"
+          else
+            FROM="${{ github.event.before }}"
+            TO="${{ github.sha }}"
+          fi
+          # New branch or zeroed base → lint just the tip commit.
+          if [ -z "$FROM" ] || [ "$FROM" = "0000000000000000000000000000000000000000" ] || ! git rev-parse --quiet --verify "$FROM^{commit}" >/dev/null 2>&1; then
+            FROM="$TO~1"
+          fi
+          echo "Linting commit messages in $FROM..$TO"
+          npx commitlint --from "$FROM" --to "$TO" --verbose

@@ -1,0 +1,4 @@
+{
+  "extends": ["@commitlint/config-conventional"],
+  "helpUrl": "https://www.conventionalcommits.org/ — type must be one of: feat, fix, perf, docs, style, refactor, test, build, ci, chore, revert (only feat/fix/perf cut a semantic-release version). e.g. 'feat(ui): ...', 'fix: ...'"
+}
