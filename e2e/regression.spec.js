@@ -682,6 +682,48 @@ test.describe('Dual-runtime (rkllm + llama)', () => {
     await expect(page.locator('text=Inference Engines')).toBeVisible({ timeout: 6000 });
     await expect(page.locator('text=Llama (Open NPU)')).toBeVisible({ timeout: 6000 });
   });
+
+  // The engine list is a fixed render order in Dashboard.vue: "Llama (Open NPU)" must
+  // appear ABOVE the "RKLLM" subsection (open stack first).
+  test('Dashboard lists Llama (Open NPU) engine above RKLLM', async ({ page }) => {
+    await login(page);
+    await page.goto('/');
+    const card = page.locator('.glass-card', { hasText: 'Inference Engines' });
+    await expect(card).toBeVisible({ timeout: 6000 });
+    const overlines = card.locator('.text-overline');
+    await expect(overlines.first()).toHaveText(/Llama \(Open NPU\)/);
+    await expect(overlines.nth(1)).toHaveText(/RKLLM/);
+  });
+
+  // The open-NPU engine description must be the current accurate copy (clean-room open
+  // stack, no librknnrt, w8a8 + mixed int4/int8) — not the stale "Serves .gguf …" line.
+  test('Dashboard open-NPU engine has the updated clean-room description', async ({ page }) => {
+    await login(page);
+    // The description only renders when the llama runtime reports available; force that in
+    // the mock path by injecting an available llamaRuntime into the /status response.
+    await page.route('**/api/admin/status', async (route) => {
+      const res = await route.fetch();
+      const json = await res.json();
+      json.llamaRuntime = { available: true, llamaVersion: 'b0000', orkDriverVersion: '0.0.0' };
+      await route.fulfill({ response: res, json });
+    });
+    await page.goto('/');
+    const card = page.locator('.glass-card', { hasText: 'Inference Engines' });
+    await expect(card).toContainText('clean-room open stack', { timeout: 6000 });
+    await expect(card).toContainText('no proprietary librknnrt');
+    await expect(card).not.toContainText('Serves .gguf models via the open ggml-ork NPU backend.');
+  });
+
+  // The accelerator devices table splits the CPU into the two big.LITTLE clusters:
+  // CPU (big / A76) and CPU (little / A55), in addition to the NPU and GPU rows.
+  test('Dashboard devices table shows CPU big + little cluster rows', async ({ page }) => {
+    await login(page);
+    await page.goto('/');
+    const table = page.locator('.telemetry-table');
+    await expect(table).toBeVisible({ timeout: 6000 });
+    await expect(table.locator('tr', { hasText: 'CPU (big / A76)' })).toBeVisible();
+    await expect(table.locator('tr', { hasText: 'CPU (little / A55)' })).toBeVisible();
+  });
 });
 
 // Regression: the manual "Find Files" path (fetchRepoFiles) once treated the

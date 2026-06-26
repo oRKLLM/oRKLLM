@@ -241,7 +241,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="dev in acceleratorDevices" :key="dev.type">
+                  <tr v-for="dev in acceleratorDevices" :key="dev.name">
                     <td>{{ dev.name }}</td>
                     <td>
                       <v-chip size="x-small" :color="dev.color" variant="tonal">{{ dev.type }}</v-chip>
@@ -431,6 +431,27 @@
                 @click="fetchRuntimes">Refresh</v-btn>
             </div>
 
+            <!-- Llama subsection -->
+            <div class="mb-4">
+              <div class="text-overline text-grey-darken-1 mb-2" style="letter-spacing:0.08em">Llama (Open NPU)</div>
+              <div v-if="status.llamaRuntime?.available">
+                <div class="d-flex flex-wrap gap-2 mb-1">
+                  <v-chip size="small" color="teal" variant="tonal">
+                    llama.cpp {{ status.llamaRuntime.llamaVersion || status.llamaRuntime.tag || '—' }}
+                  </v-chip>
+                  <v-chip v-if="status.llamaRuntime.orkDriverVersion" size="small" color="teal" variant="tonal">
+                    ork-driver v{{ status.llamaRuntime.orkDriverVersion }}
+                  </v-chip>
+                </div>
+                <div class="text-caption text-grey">Runs GGUF models on the Rockchip NPU via the clean-room open stack (ork-driver + ggml-ork) — no proprietary librknnrt — with w8a8 and mixed int4/int8 (NF4) weight packing and .orkpack persistence.</div>
+              </div>
+              <div v-else class="text-caption text-grey">
+                Not installed. Sync via Settings → Llama Runtime.
+              </div>
+            </div>
+
+            <v-divider class="mb-3" />
+
             <!-- RKLLM subsection -->
             <div class="mb-4">
               <div class="text-overline text-grey-darken-1 mb-2" style="letter-spacing:0.08em">RKLLM</div>
@@ -469,27 +490,6 @@
               <div v-else class="text-caption text-grey">
                 No versioned runtimes. Enable auto-download in Settings or place
                 <code>librkllmrt-aarch64-vX.Y.Z.so</code> files in the runtimes directory.
-              </div>
-            </div>
-
-            <v-divider class="mb-3" />
-
-            <!-- Llama subsection -->
-            <div class="mb-4">
-              <div class="text-overline text-grey-darken-1 mb-2" style="letter-spacing:0.08em">Llama (Open NPU)</div>
-              <div v-if="status.llamaRuntime?.available">
-                <div class="d-flex flex-wrap gap-2 mb-1">
-                  <v-chip size="small" color="teal" variant="tonal">
-                    llama.cpp {{ status.llamaRuntime.llamaVersion || status.llamaRuntime.tag || '—' }}
-                  </v-chip>
-                  <v-chip v-if="status.llamaRuntime.orkDriverVersion" size="small" color="teal" variant="tonal">
-                    ork-driver v{{ status.llamaRuntime.orkDriverVersion }}
-                  </v-chip>
-                </div>
-                <div class="text-caption text-grey">Serves .gguf models via the open ggml-ork NPU backend.</div>
-              </div>
-              <div v-else class="text-caption text-grey">
-                Not installed. Sync via Settings → Llama Runtime.
               </div>
             </div>
 
@@ -589,7 +589,22 @@ export default {
         load: this.metrics.gpu,
         color: 'orange',
       };
-      return [npu, gpu];
+      // CPU split into the big.LITTLE clusters (RK3588: A76 perf cores 4-7, A55 eff cores 0-3).
+      // Per-cluster load/freq come from the telemetry `cpuClusters` field; fall back to the
+      // aggregate CPU load / em-dash when per-cluster data isn't available (non-big.LITTLE host).
+      const clusters = this.metrics.cpuClusters || {};
+      const cpuDriver = fmtDriver(drivers?.cpu);
+      const cpuRow = (label, coreRange, c) => ({
+        type: 'CPU',
+        name: label,
+        detail: c?.freqMhz ? `cores ${coreRange} · ${c.freqMhz} MHz` : `cores ${coreRange}`,
+        driver: cpuDriver,
+        load: c && typeof c.load === 'number' ? c.load : this.metrics.cpu,
+        color: 'green',
+      });
+      const cpuBig = cpuRow('CPU (big / A76)', '4–7', clusters.big);
+      const cpuLittle = cpuRow('CPU (little / A55)', '0–3', clusters.little);
+      return [cpuBig, cpuLittle, npu, gpu];
     },
     // Disk-read gauge ring, scaled to the session peak (self-calibrating, since a
     // disk has no meaningful fixed max throughput to scale against).

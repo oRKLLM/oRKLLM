@@ -69,12 +69,17 @@ export async function getSystemMetrics() {
   // core's load by its max clock (compute capacity), so the figure is "% of total CPU
   // throughput in use". Falls back to the flat mean when per-core data/weights are unavailable.
   let cpuLoad = 0;
+  let cpuLoadData = null;
   try {
-    const loadData = await si.currentLoad();
-    cpuLoad = weightedCpuLoad(loadData);
+    cpuLoadData = await si.currentLoad();
+    cpuLoad = weightedCpuLoad(cpuLoadData);
   } catch (e) {
     // fallback
   }
+  // Per-cluster (big.LITTLE) CPU breakdown for the devices table: split the cores into
+  // the performance (A76, cpu4-7 on RK3588) and efficiency (A55, cpu0-3) clusters and
+  // report each one's average load + current clock separately.
+  const cpuClusters = getCpuClusters(cpuLoadData);
 
   // 2. RAM + Swap Usage
   let totalMem = 0;
@@ -218,6 +223,7 @@ export async function getSystemMetrics() {
 
   const metrics = {
     cpu: Math.round(cpuLoad),
+    cpuClusters,
     ram: {
       total: totalMem,
       used: usedMem,
@@ -585,6 +591,50 @@ export function weightedCpuLoad(loadData, weights = getCpuCoreWeights()) {
     den += w[i];
   }
   return den > 0 ? num / den : flat;
+}
+
+// Per-cluster (big.LITTLE) CPU breakdown for the devices table. Cores are grouped by their
+// static cpuinfo_max_freq weight: the highest-clock group is the performance cluster (A76,
+// cpu4-7 on RK3588) and the rest are the efficiency cluster (A55, cpu0-3). For each cluster we
+// report the average per-core load and the current clock (mean of the cores' scaling_cur_freq).
+// Returns { big, little } where each is { cores:[...], load, freqMhz } — or nulls when per-core
+// data/weights aren't available (non-Linux, or a non-big.LITTLE SoC where only one group exists).
+export function getCpuClusters(loadData, weights = getCpuCoreWeights()) {
+  const w = weights;
+  const cpus = loadData?.cpus;
+  if (!Array.isArray(w) || w.length === 0) return { big: null, little: null };
+  const uniq = [...new Set(w.filter(v => v > 0))].sort((a, b) => b - a);
+  const bigW = uniq[0];                       // highest max clock = performance cluster
+  const cluster = (members) => {
+    if (!members.length) return null;
+    // Average per-core load across the cluster's cores (when per-core load is available).
+    let loadPct = null;
+    if (Array.isArray(cpus) && cpus.length === w.length) {
+      let sum = 0, n = 0;
+      for (const i of members) {
+        const l = typeof cpus[i]?.load === 'number' ? cpus[i].load : null;
+        if (l != null) { sum += l; n++; }
+      }
+      if (n > 0) loadPct = Math.round(sum / n);
+    }
+    // Current clock = mean of the members' scaling_cur_freq (kHz → MHz).
+    let freqMhz = null;
+    if (os.platform() === 'linux') {
+      const base = '/sys/devices/system/cpu';
+      let sum = 0, n = 0;
+      for (const i of members) {
+        const f = readIntFile(`${base}/cpu${i}/cpufreq/scaling_cur_freq`);
+        if (f != null) { sum += f; n++; }
+      }
+      if (n > 0) freqMhz = Math.round(sum / n / 1000);
+    }
+    return { cores: members, load: loadPct, freqMhz };
+  };
+  const bigCores = [], littleCores = [];
+  for (let i = 0; i < w.length; i++) {
+    if (w[i] === bigW && bigW > 0) bigCores.push(i); else littleCores.push(i);
+  }
+  return { big: cluster(bigCores), little: cluster(littleCores) };
 }
 
 // Small sysfs read helpers.
