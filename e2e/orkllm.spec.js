@@ -44,21 +44,27 @@ async function login(page, username = ADMIN_USER, password = ADMIN_PASS) {
   await expect(page).toHaveURL(/http:\/\/127.0.0.1:18000\/?$/, { timeout: 8000 });
 }
 
+// Model rows in the Manager tab render via the recursive ModelTree accordion
+// (frontend/src/components/ModelTree.vue): each model is a `.model-tree-leaf`
+// row (no longer a Vuetify `.v-list-item`). A model id with no '/' is a pure
+// leaf and always visible; nested ids would live under expandable folders.
+const modelRow = (page, name) => page.locator('.model-tree-leaf').filter({ hasText: name });
+
 async function loadModel(page) {
   await page.goto('/models');
   // Wait for the model list to render (at least the dummy model row appears)
-  await expect(page.locator('.v-list-item').filter({ hasText: dummyModelName }).first()).toBeVisible({ timeout: 5000 });
-  const unloadBtn = page.locator(`.v-list-item:has-text("${dummyModelName}") button:has-text("Unload")`);
+  await expect(modelRow(page, dummyModelName).first()).toBeVisible({ timeout: 5000 });
+  const unloadBtn = modelRow(page, dummyModelName).getByRole('button', { name: 'Unload', exact: true });
   if (await unloadBtn.isVisible()) return; // already loaded
-  const loadBtn = page.locator(`.v-list-item:has-text("${dummyModelName}") button:has-text("Load")`);
+  const loadBtn = modelRow(page, dummyModelName).getByRole('button', { name: 'Load', exact: true });
   await loadBtn.click();
   await expect(page.locator('.v-alert')).toContainText(`Loaded: ${dummyModelName}`, { timeout: 10000 });
 }
 
 async function unloadModel(page) {
   await page.goto('/models');
-  await expect(page.locator('.v-list-item').filter({ hasText: dummyModelName }).first()).toBeVisible({ timeout: 5000 });
-  const unloadBtn = page.locator(`.v-list-item:has-text("${dummyModelName}") button:has-text("Unload")`);
+  await expect(modelRow(page, dummyModelName).first()).toBeVisible({ timeout: 5000 });
+  const unloadBtn = modelRow(page, dummyModelName).getByRole('button', { name: 'Unload', exact: true });
   if (!await unloadBtn.isVisible()) return; // already unloaded
   await unloadBtn.click();
   await expect(page.locator('.v-alert')).toContainText('No active model', { timeout: 5000 });
@@ -165,14 +171,14 @@ test('Models page: model list, load, and unload', async ({ page }) => {
   await login(page);
   await page.goto('/models');
 
-  await expect(page.locator('.v-list-item').filter({ hasText: dummyModelName }).first()).toBeVisible();
+  await expect(modelRow(page, dummyModelName).first()).toBeVisible();
 
-  await page.click(`.v-list-item:has-text("${dummyModelName}") button:has-text("Load")`);
+  await modelRow(page, dummyModelName).getByRole('button', { name: 'Load', exact: true }).click();
   const alert = page.locator('.v-alert');
   await expect(alert).toContainText(`Loaded: ${dummyModelName}`, { timeout: 10000 });
   await expect(alert).toContainText('Mock Engine');
 
-  await page.click(`.v-list-item:has-text("${dummyModelName}") button:has-text("Unload")`);
+  await modelRow(page, dummyModelName).getByRole('button', { name: 'Unload', exact: true }).click();
   await expect(alert).toContainText('No active model', { timeout: 5000 });
 });
 
@@ -999,7 +1005,7 @@ test('Model settings dialog shows Advanced and Speculative Decoding panels', asy
   await page.goto('/models');
 
   // Open settings for the dummy model
-  const settingsBtn = page.locator(`.v-list-item:has-text("${dummyModelName}") button[title="Model Settings"]`);
+  const settingsBtn = modelRow(page, dummyModelName).locator('button[title="Model Settings"]');
   await expect(settingsBtn).toBeVisible({ timeout: 5000 });
   await settingsBtn.click();
 

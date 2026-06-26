@@ -44,12 +44,15 @@ function navBtn(page, label) {
   return page.locator(`.v-app-bar .v-btn:has-text("${label}")`);
 }
 
+// Model rows render via the ModelTree accordion (.model-tree-leaf), not v-list-item.
+const modelRow = (page, name) => page.locator('.model-tree-leaf').filter({ hasText: name });
+
 async function loadModel(page) {
   await page.goto('/models');
-  await expect(page.locator('.v-list-item').filter({ hasText: dummyModelName }).first()).toBeVisible({ timeout: 5000 });
-  const unloadBtn = page.locator(`.v-list-item:has-text("${dummyModelName}") button:has-text("Unload")`);
+  await expect(modelRow(page, dummyModelName).first()).toBeVisible({ timeout: 5000 });
+  const unloadBtn = modelRow(page, dummyModelName).getByRole('button', { name: 'Unload', exact: true });
   if (await unloadBtn.isVisible()) return; // already loaded
-  await page.locator(`.v-list-item:has-text("${dummyModelName}") button:has-text("Load")`).click();
+  await modelRow(page, dummyModelName).getByRole('button', { name: 'Load', exact: true }).click();
   await expect(page.locator('.v-alert')).toContainText(`Loaded: ${dummyModelName}`, { timeout: 10000 });
 }
 
@@ -847,4 +850,79 @@ test('Downloader: queued jobs show a queued chip and Pause all / Abort all work'
   // Abort all -> POST /download/abort-all
   await page.getByRole('button', { name: /Abort all/ }).click();
   await expect.poll(() => calls.abortAll, { timeout: 12000 }).toBeGreaterThan(0);
+});
+
+// ---------------------------------------------------------------------------
+// Draft Models card (EAGLE-3 / DFlash) — coverage for the generalized draft UI.
+// The Manager-tab card was renamed "Eagle-3 Draft Heads" → "Draft Models"; the
+// backend /library bucket was renamed eagle3 → drafts and each draft entry now
+// carries a draftKind ('eagle3' | 'dflash'). The kind chip renders "EAGLE-3" vs
+// "DFlash" off draftKind. We mock /library so the assertions don't depend on
+// what's actually on disk.
+// ---------------------------------------------------------------------------
+test('Draft Models: kind chip renders EAGLE-3 vs DFlash and dflash lands in the Draft card', async ({ page }) => {
+  await page.route('**/api/admin/library', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      available: [],
+      base: [],
+      drafts: [
+        { draftKind: 'eagle3', dir: 'owner/My-Eagle-Head', headFile: 'owner/My-Eagle-Head/head.rkllm',
+          format: 'npu', hasConfig: true, targetModelType: null, embeddingsPresent: true, sizeBytes: 123456 },
+        { draftKind: 'dflash', dir: 'owner/My-DFlash-Head', headFile: 'owner/My-DFlash-Head/head.gguf',
+          format: 'gguf', hasConfig: false, targetModelType: null, embeddingsPresent: true, sizeBytes: 234567 },
+      ],
+      disk: null,
+    }),
+  }));
+
+  await login(page);
+  await page.goto('/models');
+
+  // The card heading is "Draft Models" (no longer "Eagle-3 Draft Heads"). Anchor
+  // on the card whose .text-h6 title is that text — the "Models Summary" card also
+  // contains the lowercase caption "draft models", so a plain substring filter on
+  // the whole card is ambiguous.
+  const cardByTitle = (title) => page.locator('.glass-card').filter({
+    has: page.locator('.text-h6', { hasText: title }),
+  });
+  const draftCard = cardByTitle('Draft Models');
+  await expect(draftCard).toBeVisible({ timeout: 6000 });
+  await expect(page.getByText('Eagle-3 Draft Heads')).toHaveCount(0);
+
+  // Each draft row carries a kind chip driven by draftKind.
+  const eagleRow = draftCard.locator('.model-tree-leaf').filter({ hasText: 'My-Eagle-Head' });
+  const dflashRow = draftCard.locator('.model-tree-leaf').filter({ hasText: 'My-DFlash-Head' });
+  await expect(eagleRow.locator('.v-chip', { hasText: 'EAGLE-3' })).toBeVisible({ timeout: 6000 });
+  await expect(dflashRow.locator('.v-chip', { hasText: 'DFlash' })).toBeVisible();
+
+  // The dflash draft is in the Draft Models card — NOT in Available or Base.
+  const availableCard = cardByTitle('Available Models');
+  const baseCard = cardByTitle('Base Models');
+  await expect(availableCard.getByText('My-DFlash-Head')).toHaveCount(0);
+  await expect(baseCard.getByText('My-DFlash-Head')).toHaveCount(0);
+});
+
+// The "DFlash draft models only" downloader checkbox appends "dflash" to the HF
+// search query (mirrors the existing "Eagle-3 draft heads only" filter, which
+// appends "eagle3"). We intercept the search request and read back q=.
+test('Downloader: "DFlash draft models only" appends dflash to the HF search query', async ({ page }) => {
+  let lastQ = null;
+  await page.route('**/api/admin/hf/search**', route => {
+    lastQ = new URL(route.request().url()).searchParams.get('q');
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
+  });
+
+  await login(page);
+  await page.goto('/models');
+  await page.click('.v-tab:has-text("Downloader")');
+
+  const searchField = page.locator('.v-text-field').filter({ hasText: /Search models/i }).first();
+  await searchField.locator('input').fill('qwen');
+
+  await page.locator('.v-checkbox').filter({ hasText: 'DFlash draft models only' }).click();
+  await searchField.locator('input').press('Enter');
+  await expect.poll(() => lastQ).toContain('dflash');
+  expect(lastQ).toContain('qwen');
 });
