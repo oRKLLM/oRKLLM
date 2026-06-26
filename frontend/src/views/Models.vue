@@ -116,13 +116,26 @@
                 Available Models
                 <span class="text-caption text-grey ml-2 font-weight-regular">{{ formatBytes(modelsTotalBytes) }}</span>
               </div>
-              <v-btn icon size="small" variant="text" color="grey" title="Rescan models directory" :loading="scanningModels" @click="rescanModels">
-                <v-icon>mdi-refresh</v-icon>
-              </v-btn>
+              <div class="d-flex align-center gap-1">
+                <v-btn
+                  v-if="treeHasFolders.available"
+                  size="small"
+                  variant="text"
+                  color="grey"
+                  :prepend-icon="treeExpanded.available ? 'mdi-unfold-less-horizontal' : 'mdi-unfold-more-horizontal'"
+                  :title="treeExpanded.available ? 'Collapse all folders' : 'Expand all folders'"
+                  @click="toggleTree('available')"
+                >
+                  {{ treeExpanded.available ? 'Collapse all' : 'Expand all' }}
+                </v-btn>
+                <v-btn icon size="small" variant="text" color="grey" title="Rescan models directory" :loading="scanningModels" @click="rescanModels">
+                  <v-icon>mdi-refresh</v-icon>
+                </v-btn>
+              </div>
             </div>
 
             <div class="border rounded">
-              <ModelTree :items="models" path-field="id">
+              <ModelTree ref="availableTree" :items="models" path-field="id">
                 <template #leaf="{ item: model }">
                 <div class="d-flex flex-column flex-sm-row align-start align-sm-center justify-space-between w-100 gap-3 py-3 pr-4">
                   <!-- Left side: Icon + Text -->
@@ -239,12 +252,25 @@
                 Draft Models
                 <span class="text-caption text-grey ml-2 font-weight-regular">{{ formatBytes(draftsTotalBytes) }}</span>
               </div>
-              <v-btn icon size="small" variant="text" color="grey" title="Refresh all cards" :loading="scanningModels" @click="rescanModels">
-                <v-icon>mdi-refresh</v-icon>
-              </v-btn>
+              <div class="d-flex align-center gap-1">
+                <v-btn
+                  v-if="treeHasFolders.drafts"
+                  size="small"
+                  variant="text"
+                  color="grey"
+                  :prepend-icon="treeExpanded.drafts ? 'mdi-unfold-less-horizontal' : 'mdi-unfold-more-horizontal'"
+                  :title="treeExpanded.drafts ? 'Collapse all folders' : 'Expand all folders'"
+                  @click="toggleTree('drafts')"
+                >
+                  {{ treeExpanded.drafts ? 'Collapse all' : 'Expand all' }}
+                </v-btn>
+                <v-btn icon size="small" variant="text" color="grey" title="Refresh all cards" :loading="scanningModels" @click="rescanModels">
+                  <v-icon>mdi-refresh</v-icon>
+                </v-btn>
+              </div>
             </div>
             <div class="border rounded">
-              <ModelTree :items="draftsTree" path-field="_treePath">
+              <ModelTree ref="draftsTree" :items="draftsTree" path-field="_treePath">
                 <template #leaf="{ item: head }">
                 <div class="d-flex flex-column flex-sm-row align-start align-sm-center justify-space-between w-100 gap-3 py-3 pr-4">
                   <!-- Left side: Icon + Text -->
@@ -296,12 +322,25 @@
                 Base Models
                 <span class="text-caption text-grey ml-2 font-weight-regular">{{ formatBytes(baseTotalBytes) }}</span>
               </div>
-              <v-btn icon size="small" variant="text" color="grey" title="Refresh all cards" :loading="scanningModels" @click="rescanModels">
-                <v-icon>mdi-refresh</v-icon>
-              </v-btn>
+              <div class="d-flex align-center gap-1">
+                <v-btn
+                  v-if="treeHasFolders.base"
+                  size="small"
+                  variant="text"
+                  color="grey"
+                  :prepend-icon="treeExpanded.base ? 'mdi-unfold-less-horizontal' : 'mdi-unfold-more-horizontal'"
+                  :title="treeExpanded.base ? 'Collapse all folders' : 'Expand all folders'"
+                  @click="toggleTree('base')"
+                >
+                  {{ treeExpanded.base ? 'Collapse all' : 'Expand all' }}
+                </v-btn>
+                <v-btn icon size="small" variant="text" color="grey" title="Refresh all cards" :loading="scanningModels" @click="rescanModels">
+                  <v-icon>mdi-refresh</v-icon>
+                </v-btn>
+              </div>
             </div>
             <div class="border rounded">
-              <ModelTree :items="library.base" path-field="dir">
+              <ModelTree ref="baseTree" :items="library.base" path-field="dir">
                 <template #leaf="{ item: b }">
                 <div class="d-flex align-start gap-3 py-3 pr-4" style="min-width: 0; width: 100%;">
                   <v-icon color="teal" class="mt-1" style="flex-shrink: 0;">mdi-cube-outline</v-icon>
@@ -1181,6 +1220,10 @@ export default {
     scanningModels: false,
     timeoutSlider: 5,
 
+    // Per-card accordion expand/collapse-all state. Trees default to fully
+    // expanded, so each toggle starts as "expanded" (shows "Collapse all").
+    treeExpanded: { available: true, drafts: true, base: true },
+
     loadingRepoId: null,
     showRuntimeSyncDialog: false,
     runtimeSyncState: { active: false, version: null, filename: null, bytesDown: 0, totalBytes: 0 },
@@ -1279,6 +1322,17 @@ export default {
     // the ModelTree (headFile when present — the full file path — otherwise the dir).
     draftsTree() {
       return this.library.drafts.map(h => ({ ...h, _treePath: h.headFile || h.dir }));
+    },
+    // Whether each card's tree has any collapsible folder (a path with a '/').
+    // Drives visibility of the per-card expand/collapse-all toggle.
+    treeHasFolders() {
+      const hasNest = (items, field) =>
+        (items || []).some(it => String(it[field] ?? '').split('/').filter(Boolean).length > 1);
+      return {
+        available: hasNest(this.models, 'id'),
+        drafts: hasNest(this.draftsTree, '_treePath'),
+        base: hasNest(this.library.base, 'dir'),
+      };
     },
     // KV Cache Compression options. The SSD-blob PolarQuant schemes (q8/pq8/pq4) apply
     // to both backends. The TurboQuant levels set the in-context V-cache type and are
@@ -1386,6 +1440,16 @@ export default {
     },
   },
   methods: {
+    // Flip a card's accordion between fully expanded and fully collapsed and
+    // record the new state (drives the toggle's label/icon). `key` is the card
+    // (available|drafts|base); the matching `$refs` entry is its ModelTree.
+    toggleTree(key) {
+      const tree = this.$refs[key + 'Tree'];
+      if (!tree || !tree.hasFolders?.()) return;
+      if (this.treeExpanded[key]) tree.collapseAll();
+      else tree.expandAll();
+      this.treeExpanded[key] = !this.treeExpanded[key];
+    },
     async fetchAuth() {
       try {
         const res = await fetch('/api/admin/auth-status');

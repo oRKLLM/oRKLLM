@@ -35,6 +35,7 @@
               <slot name="leaf" :item="node.item" />
             </div>
             <ModelTree
+              :ref="el => registerChild(node.key, el)"
               :items="node.children"
               :path-field="pathField"
               :depth="depth + 1"
@@ -75,6 +76,8 @@ export default {
     return {
       // Per-session expand/collapse state keyed by node key. Default: expanded.
       collapsed: {},
+      // Child ModelTree instances keyed by node key (for recursive expand/collapse-all).
+      childTrees: {},
     };
   },
   computed: {
@@ -127,6 +130,10 @@ export default {
       }
       return out;
     },
+    // Keys of folder nodes at this level (those with collapsible children).
+    folderKeys() {
+      return this.nodes.filter(n => n.isFolder).map(n => n.key);
+    },
   },
   methods: {
     isOpen(key) {
@@ -135,6 +142,30 @@ export default {
     },
     toggle(key) {
       this.collapsed = { ...this.collapsed, [key]: !this.collapsed[key] };
+    },
+    // Track child ModelTree instances so expand/collapse-all can recurse into them.
+    registerChild(key, el) {
+      if (el) this.childTrees[key] = el;
+      else delete this.childTrees[key];
+    },
+    // Does this subtree contain any collapsible folder at any depth?
+    hasFolders() {
+      return this.folderKeys.length > 0;
+    },
+    // Open every folder node in this subtree (recursing into children).
+    expandAll() {
+      this.collapsed = {};
+      this.$nextTick(() => {
+        for (const child of Object.values(this.childTrees)) child?.expandAll?.();
+      });
+    },
+    // Collapse every folder node in this subtree.
+    collapseAll() {
+      // Recurse first (while children are still mounted), then collapse this level.
+      for (const child of Object.values(this.childTrees)) child?.collapseAll?.();
+      const next = {};
+      for (const key of this.folderKeys) next[key] = true;
+      this.collapsed = next;
     },
   },
 };

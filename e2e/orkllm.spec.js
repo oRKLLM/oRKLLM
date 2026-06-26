@@ -16,17 +16,26 @@ if (!ADMIN_USER || !ADMIN_PASS) {
 const modelsDir = path.resolve('./models');
 const dummyModelName = 'qwen_1.8b.rkllm';
 const dummyModelPath = path.join(modelsDir, dummyModelName);
+// A nested model (id has a '/') so the Available Models ModelTree renders a
+// collapsible folder — exercises the per-card Expand all / Collapse all toggle.
+const nestedDir = path.join(modelsDir, 'orktest');
+const nestedModelPath = path.join(nestedDir, 'nested_demo.rkllm');
 
 test.beforeAll(() => {
   if (!fs.existsSync(modelsDir)) {
     fs.mkdirSync(modelsDir, { recursive: true });
   }
   fs.writeFileSync(dummyModelPath, 'fake-model-binary-data', 'utf-8');
+  fs.mkdirSync(nestedDir, { recursive: true });
+  fs.writeFileSync(nestedModelPath, 'fake-model-binary-data', 'utf-8');
 });
 
 test.afterAll(() => {
   if (fs.existsSync(dummyModelPath)) {
     fs.rmSync(dummyModelPath, { force: true });
+  }
+  if (fs.existsSync(nestedDir)) {
+    fs.rmSync(nestedDir, { recursive: true, force: true });
   }
 });
 
@@ -180,6 +189,37 @@ test('Models page: model list, load, and unload', async ({ page }) => {
 
   await modelRow(page, dummyModelName).getByRole('button', { name: 'Unload', exact: true }).click();
   await expect(alert).toContainText('No active model', { timeout: 5000 });
+});
+
+// ---------------------------------------------------------------------------
+// Test 4b: Models page - Expand all / Collapse all toggle on the Available card
+// ---------------------------------------------------------------------------
+test('Models page: Expand all / Collapse all toggles the Available card accordion', async ({ page }) => {
+  await login(page);
+  await page.goto('/models');
+
+  // Scope to the Available Models card (it holds the nested "orktest" folder).
+  const card = page.locator('.v-card').filter({ hasText: 'Available Models' }).first();
+  // The folder header for the nested model's directory.
+  const folder = card.locator('.model-tree-folder-header').filter({ hasText: 'orktest' });
+  await expect(folder).toBeVisible({ timeout: 5000 });
+
+  // Trees default to fully expanded → the nested leaf row is visible and the
+  // toggle reads "Collapse all".
+  const nestedRow = card.locator('.model-tree-leaf').filter({ hasText: 'nested_demo' });
+  await expect(nestedRow).toBeVisible();
+  const toggle = card.getByRole('button', { name: /Collapse all|Expand all/ });
+  await expect(toggle).toHaveText(/Collapse all/);
+
+  // Collapse all → nested folder rows close, label flips to "Expand all".
+  await toggle.click();
+  await expect(nestedRow).toBeHidden();
+  await expect(toggle).toHaveText(/Expand all/);
+
+  // Expand all → nested folder rows reopen, label flips back.
+  await toggle.click();
+  await expect(nestedRow).toBeVisible();
+  await expect(toggle).toHaveText(/Collapse all/);
 });
 
 // ---------------------------------------------------------------------------
