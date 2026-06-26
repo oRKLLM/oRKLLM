@@ -82,9 +82,13 @@ export class ConversionScheduler {
 
     const env = { ...process.env,
       ORK_PERSIST: pack, ORK_EVICT_SRC: '1',
+      // The release runtime ships BOTH ggml-vulkan (Mali) and ggml-ork (NPU); without this, -ngl
+      // offloads the layers to the GPU and ggml-ork packs ZERO weights → no .orkpack. Disabling
+      // Vulkan (same mechanism serving uses, read at backend registration) forces layers onto the NPU.
+      GGML_DISABLE_VULKAN: '1',
       LD_LIBRARY_PATH: [LLAMA_RUNTIME_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':') };
     // A single 1-token forward pass packs+dumps every weight; --no-repack keeps weights host so the
-    // ggml-ork matmul offload fires; -ngl 99 offloads all layers.
+    // ggml-ork matmul offload fires; -ngl 99 offloads all layers (to the NPU, per GGML_DISABLE_VULKAN).
     const args = ['-m', abs, '-ngl', '99', '-t', '4', '-c', '256', '--no-repack',
                   '-p', 'x', '-n', '1', '--temp', '0', '-no-cnv'];
     console.log(`[conversion] building ${rel}.orkpack …`);
