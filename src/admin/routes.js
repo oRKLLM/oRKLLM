@@ -806,10 +806,11 @@ export default async function adminRoutes(fastify, options) {
 
   // GET /api/admin/library — downloaded models sorted into three categories for
   // the Models page: servable `.rkllm` models, base models (safetensors source
-  // of Eagle-3 embeddings), and Eagle-3 draft heads. Classification is by the
+  // of draft-head embeddings), and draft models. Classification is by the
   // files present + each repo's config.json architecture (no name guessing).
+  // Each draft entry carries a `draftKind`: 'eagle3' or 'dflash'.
   fastify.get('/library', async () => {
-    const available = [], base = [], eagle3 = [];
+    const available = [], base = [], drafts = [];
     const readJson = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } };
     const listFiles = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; } };
     const sizeOf = (p) => { try { return fs.statSync(p).size; } catch { return null; } };
@@ -846,12 +847,36 @@ export default async function adminRoutes(fastify, options) {
         // enable_thinking natively; for gguf it depends on the chat template
         // (Qwen3+ yes, LFM2.5-MoE no). The UI hides the Enable-Thinking setting
         // when false so it isn't offered where it can't take effect.
-        else if (/\.rkllm$/i.test(e.name)) available.push({ id: rel, sizeBytes: sizeOf(path.join(dir, e.name)), runtime: 'rkllm', thinkingToggle: true });
-        else if (/\.gguf$/i.test(e.name))  available.push({ id: rel, sizeBytes: sizeOf(path.join(dir, e.name)), runtime: 'llama', thinkingToggle: supportsThinkingToggle(path.join(dir, e.name)), orkConversion: orkConversionState(path.join(dir, e.name)) });
+        else if (/\.(rkllm|gguf)$/i.test(e.name)) {
+          const abs = path.join(dir, e.name);
+          const isRk = /\.rkllm$/i.test(e.name);
+          // A draft head can ship as a loose .gguf/.rkllm (no safetensors repo dir, so the
+          // config-arch classifier below never sees it). Route it to the Draft Models card by
+          // name/path instead of dumping it among the servable models in Available. EAGLE-3
+          // (/eagle-?3/i, so "EAGLE3" with no hyphen is caught — same match the /eagle3-heads
+          // endpoint uses) and DFlash (/dflash/i) drafters both land here, tagged by draftKind.
+          const draftKind = /eagle-?3/i.test(rel) ? 'eagle3' : /dflash/i.test(rel) ? 'dflash' : null;
+          if (draftKind) {
+            drafts.push({
+              draftKind,
+              dir: rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : rel,
+              headFile: rel,
+              format: isRk ? 'npu' : 'gguf',
+              hasConfig: false,
+              targetModelType: null,
+              embeddingsPresent: true,   // a .gguf/.rkllm head is self-contained — no separate embeddings.safetensors
+              sizeBytes: sizeOf(abs),
+            });
+          } else if (isRk) {
+            available.push({ id: rel, sizeBytes: sizeOf(abs), runtime: 'rkllm', thinkingToggle: true });
+          } else {
+            available.push({ id: rel, sizeBytes: sizeOf(abs), runtime: 'llama', thinkingToggle: supportsThinkingToggle(abs), orkConversion: orkConversionState(abs) });
+          }
+        }
       }
     })(MODELS_DIR);
 
-    // Classify each repo directory that holds safetensors as base vs Eagle-3.
+    // Classify each repo directory that holds safetensors as base vs draft.
     // Downloads nest under {owner}/{repo}/… so we walk (bounded depth) and treat
     // any directory that DIRECTLY contains a .safetensors file as a repo dir; its
     // path relative to MODELS_DIR (e.g. "unsloth/Qwen3-1.7B") is the identifier,
@@ -869,10 +894,13 @@ export default async function adminRoutes(fastify, options) {
     for (const { rel, abs, names } of repoDirs) {
       const cfg = readJson(path.join(abs, 'config.json'));
       const arch = cfg?.architectures?.[0] || '';
-      const isEagle = /eagle3/i.test(arch) || /eagle-?3/i.test(rel);
-      if (isEagle) {
+      const draftKind = (/eagle3/i.test(arch) || /eagle-?3/i.test(rel)) ? 'eagle3'
+                      : (/dflash/i.test(arch) || /dflash/i.test(rel)) ? 'dflash'
+                      : null;
+      if (draftKind) {
         const head = names.find(n => /\.rkllm$/i.test(n)) || names.find(n => /\.safetensors$/i.test(n) && n !== 'embeddings.safetensors') || names.find(n => /\.gguf$/i.test(n));
-        eagle3.push({
+        drafts.push({
+          draftKind,
           dir: rel,
           headFile: head ? `${rel}/${head}` : null,
           format: head && /\.rkllm$/i.test(head) ? 'npu' : 'vulkan',
@@ -888,7 +916,7 @@ export default async function adminRoutes(fastify, options) {
     // Disk usage of the models volume (best-effort; statfsSync needs Node ≥ 18.15).
     let disk = null;
     try { const s = fs.statfsSync(MODELS_DIR); disk = { freeBytes: s.bavail * s.bsize, totalBytes: s.blocks * s.bsize }; } catch {}
-    return { available, base, eagle3, disk };
+    return { available, base, drafts, disk };
   });
 
   // GET /api/admin/cache-stats — lightweight hot/cold prefix-cache stats for

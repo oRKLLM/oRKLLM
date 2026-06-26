@@ -52,48 +52,6 @@
         </div>
       </v-alert>
 
-      <!-- Serving Stats Cards Row -->
-      <v-card class="glass-card pa-4 mb-6 w-100">
-        <div class="d-flex align-center justify-space-between mb-4 flex-wrap gap-2">
-          <div class="text-h6 font-weight-bold d-flex align-center">
-            <v-icon start color="primary">mdi-chart-bar</v-icon>
-            Serving Statistics
-          </div>
-          <div class="d-flex align-center gap-2">
-            <v-btn-toggle v-model="statsMode" mandatory density="compact" color="primary">
-              <v-btn value="session" size="small">Session</v-btn>
-              <v-btn value="allTime" size="small">All-Time</v-btn>
-            </v-btn-toggle>
-            <v-btn size="small" variant="outlined" color="error" @click="clearStats" prepend-icon="mdi-delete-sweep-outline">
-              Clear
-            </v-btn>
-          </div>
-        </div>
-
-        <v-row>
-          <v-col cols="12" sm="4" md="2">
-            <div class="text-caption text-grey">TOTAL REQUESTS</div>
-            <div class="text-h5 font-weight-bold">{{ currentStats.totalRequests }}</div>
-          </v-col>
-          <v-col cols="12" sm="4" md="2.5">
-            <div class="text-caption text-grey">PREFILL TOKENS</div>
-            <div class="text-h5 font-weight-bold">{{ currentStats.totalPrefillTokens }}</div>
-          </v-col>
-          <v-col cols="12" sm="4" md="2.5">
-            <div class="text-caption text-grey">GENERATED TOKENS</div>
-            <div class="text-h5 font-weight-bold">{{ currentStats.totalGeneratedTokens }}</div>
-          </v-col>
-          <v-col cols="12" sm="6" md="2.5">
-            <div class="text-caption text-grey">PROMPT PROCESSING SPEED</div>
-            <div class="text-h5 font-weight-bold text-success">{{ promptSpeed }} tok/s</div>
-          </v-col>
-          <v-col cols="12" sm="6" md="2.5">
-            <div class="text-caption text-grey">TOKEN GENERATION SPEED</div>
-            <div class="text-h5 font-weight-bold text-primary">{{ generateSpeed }} tok/s</div>
-          </v-col>
-        </v-row>
-      </v-card>
-
       <v-row class="align-start">
 
         <!-- Left Side: Telemetry & API Endpoints -->
@@ -352,8 +310,49 @@
 
         </v-col>
 
-        <!-- Right Side: Cache Observability + Runtime Versions -->
+        <!-- Right Side: Serving Statistics + Cache Observability + Runtime Versions -->
         <v-col cols="12" md="8" class="d-flex flex-column gap-6" style="min-width: 0;">
+
+          <!-- Serving Statistics -->
+          <v-card class="glass-card pa-4">
+            <div class="d-flex align-center justify-space-between mb-4 flex-wrap gap-2">
+              <div class="text-h6 font-weight-bold d-flex align-center">
+                <v-icon start color="primary">mdi-chart-bar</v-icon>
+                Serving Statistics
+              </div>
+              <div class="d-flex align-center gap-2">
+                <v-btn-toggle v-model="statsMode" mandatory density="compact" color="primary">
+                  <v-btn value="session" size="small">Session</v-btn>
+                  <v-btn value="allTime" size="small">All-Time</v-btn>
+                </v-btn-toggle>
+                <v-btn size="small" variant="outlined" color="error" @click="clearStats" prepend-icon="mdi-delete-sweep-outline">
+                  Clear
+                </v-btn>
+              </div>
+            </div>
+            <v-row>
+              <v-col cols="6" sm="4" md="2">
+                <div class="text-caption text-grey">TOTAL REQUESTS</div>
+                <div class="text-h5 font-weight-bold">{{ currentStats.totalRequests }}</div>
+              </v-col>
+              <v-col cols="6" sm="4" md="2.5">
+                <div class="text-caption text-grey">PREFILL TOKENS</div>
+                <div class="text-h5 font-weight-bold">{{ currentStats.totalPrefillTokens }}</div>
+              </v-col>
+              <v-col cols="6" sm="4" md="2.5">
+                <div class="text-caption text-grey">GENERATED TOKENS</div>
+                <div class="text-h5 font-weight-bold">{{ currentStats.totalGeneratedTokens }}</div>
+              </v-col>
+              <v-col cols="6" sm="6" md="2.5">
+                <div class="text-caption text-grey">PROMPT PROCESSING SPEED</div>
+                <div class="text-h5 font-weight-bold text-success">{{ promptSpeed }} tok/s</div>
+              </v-col>
+              <v-col cols="6" sm="6" md="2.5">
+                <div class="text-caption text-grey">TOKEN GENERATION SPEED</div>
+                <div class="text-h5 font-weight-bold text-primary">{{ generateSpeed }} tok/s</div>
+              </v-col>
+            </v-row>
+          </v-card>
 
           <!-- Prefix Cache Observability -->
           <v-card class="glass-card pa-5">

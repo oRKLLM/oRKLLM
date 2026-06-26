@@ -11,7 +11,7 @@
     <v-container fluid class="pt-6 px-6 page-container">
 
       <div class="text-h5 font-weight-bold mb-1">Models</div>
-      <div class="text-caption text-grey mb-5">Manage and download servable .rkllm models, base models, and Eagle-3 draft heads.</div>
+      <div class="text-caption text-grey mb-5">Manage and download servable .rkllm models, base models, and draft models (EAGLE-3 / DFlash).</div>
 
       <v-tabs v-model="tab" color="primary" class="mb-5">
         <v-tab value="manager">
@@ -95,8 +95,8 @@
                 <div class="text-caption text-grey">base models</div>
               </v-col>
               <v-col cols="6" sm="3">
-                <div class="text-h5 font-weight-bold">{{ library.eagle3.length }}</div>
-                <div class="text-caption text-grey">draft heads</div>
+                <div class="text-h5 font-weight-bold">{{ library.drafts.length }}</div>
+                <div class="text-caption text-grey">draft models</div>
               </v-col>
               <v-col cols="6" sm="3">
                 <div class="text-h5 font-weight-bold text-primary">{{ formatBytes(totalStorageBytes) }}</div>
@@ -121,13 +121,10 @@
               </v-btn>
             </div>
 
-            <v-list bg-color="transparent" class="pa-0 border rounded">
-              <v-list-item
-                v-for="model in models"
-                :key="model.id"
-                class="border-bottom py-3 px-4"
-              >
-                <div class="d-flex flex-column flex-sm-row align-start align-sm-center justify-space-between w-100 gap-3">
+            <div class="border rounded">
+              <ModelTree :items="models" path-field="id">
+                <template #leaf="{ item: model }">
+                <div class="d-flex flex-column flex-sm-row align-start align-sm-center justify-space-between w-100 gap-3 py-3 pr-4">
                   <!-- Left side: Icon + Text -->
                   <div class="d-flex align-start gap-3" style="min-width: 0; flex: 1; width: 100%;">
                     <v-icon color="grey-darken-1" class="mt-1" style="flex-shrink: 0;">mdi-file-code-outline</v-icon>
@@ -224,34 +221,32 @@
                     </v-btn>
                   </div>
                 </div>
-              </v-list-item>
+                </template>
+              </ModelTree>
               <div v-if="models.length === 0" class="text-center py-6 text-grey">
                 No models found in scan directory.
               </div>
-            </v-list>
+            </div>
           </v-card>
           </v-col>
 
           <v-col cols="12" lg="4">
-          <!-- Eagle-3 Draft Heads -->
+          <!-- Draft Models (EAGLE-3 / DFlash) -->
           <v-card class="glass-card pa-5 mb-5">
             <div class="d-flex align-center justify-space-between mb-4">
               <div class="text-h6 font-weight-bold d-flex align-center">
                 <v-icon start color="purple">mdi-lightning-bolt-outline</v-icon>
-                Eagle-3 Draft Heads
-                <span class="text-caption text-grey ml-2 font-weight-regular">{{ formatBytes(eagle3TotalBytes) }}</span>
+                Draft Models
+                <span class="text-caption text-grey ml-2 font-weight-regular">{{ formatBytes(draftsTotalBytes) }}</span>
               </div>
               <v-btn icon size="small" variant="text" color="grey" title="Refresh all cards" :loading="scanningModels" @click="rescanModels">
                 <v-icon>mdi-refresh</v-icon>
               </v-btn>
             </div>
-            <v-list bg-color="transparent" class="pa-0 border rounded">
-              <v-list-item
-                v-for="head in library.eagle3"
-                :key="head.dir"
-                class="border-bottom py-3 px-4"
-              >
-                <div class="d-flex flex-column flex-sm-row align-start align-sm-center justify-space-between w-100 gap-3">
+            <div class="border rounded">
+              <ModelTree :items="draftsTree" path-field="_treePath">
+                <template #leaf="{ item: head }">
+                <div class="d-flex flex-column flex-sm-row align-start align-sm-center justify-space-between w-100 gap-3 py-3 pr-4">
                   <!-- Left side: Icon + Text -->
                   <div class="d-flex align-start gap-3" style="min-width: 0; flex: 1; width: 100%;">
                     <v-icon color="purple" class="mt-1" style="flex-shrink: 0;">mdi-head-flash-outline</v-icon>
@@ -260,8 +255,11 @@
                         {{ head.dir }}
                       </div>
                       <div class="d-flex align-center flex-wrap gap-2 mt-1">
-                        <v-chip size="x-small" :color="head.format === 'npu' ? 'primary' : 'purple'" variant="tonal">
-                          {{ head.format === 'npu' ? 'NPU (.rkllm)' : 'Vulkan (.safetensors)' }}
+                        <v-chip size="x-small" :color="head.draftKind === 'dflash' ? 'deep-orange' : 'indigo'" variant="tonal">
+                          {{ head.draftKind === 'dflash' ? 'DFlash' : 'EAGLE-3' }}
+                        </v-chip>
+                        <v-chip size="x-small" :color="head.format === 'npu' ? 'primary' : head.format === 'gguf' ? 'teal' : 'purple'" variant="tonal">
+                          {{ head.format === 'npu' ? 'NPU (.rkllm)' : head.format === 'gguf' ? 'GGUF (draft)' : 'Vulkan (.safetensors)' }}
                         </v-chip>
                         <v-chip size="x-small" :color="head.embeddingsPresent ? 'success' : 'warning'" variant="tonal">
                           <v-icon start size="x-small">{{ head.embeddingsPresent ? 'mdi-check' : 'mdi-alert-outline' }}</v-icon>
@@ -274,16 +272,17 @@
                   <!-- Right side: Actions -->
                   <div class="d-flex align-center gap-1" style="flex-shrink: 0;">
                     <v-btn v-if="!head.embeddingsPresent" size="x-small" variant="tonal" color="purple" @click="openEmbedDialog(head)">Add embeddings</v-btn>
-                    <v-btn icon size="x-small" variant="text" color="error" title="Delete head" @click="openDirDelete(head.dir, 'Eagle-3 draft head')">
+                    <v-btn icon size="x-small" variant="text" color="error" title="Delete draft" @click="openDirDelete(head.dir, 'draft model')">
                       <v-icon size="16">mdi-delete-outline</v-icon>
                     </v-btn>
                   </div>
                 </div>
-              </v-list-item>
-              <div v-if="library.eagle3.length === 0" class="text-center py-6 text-grey">
-                No Eagle-3 draft heads found. Download a head with "Eagle-3" in its name or path.
+                </template>
+              </ModelTree>
+              <div v-if="library.drafts.length === 0" class="text-center py-6 text-grey">
+                No draft models found. Download a head with "Eagle-3" or "DFlash" in its name or path.
               </div>
-            </v-list>
+            </div>
             <div class="text-caption text-grey mt-2">
               Vulkan heads need their base model's embeddings (not shipped in the head repo).
             </div>
@@ -301,9 +300,10 @@
                 <v-icon>mdi-refresh</v-icon>
               </v-btn>
             </div>
-            <v-list bg-color="transparent" class="pa-0 border rounded">
-              <v-list-item v-for="b in library.base" :key="b.dir" class="border-bottom py-3 px-4">
-                <div class="d-flex align-start gap-3" style="min-width: 0; width: 100%;">
+            <div class="border rounded">
+              <ModelTree :items="library.base" path-field="dir">
+                <template #leaf="{ item: b }">
+                <div class="d-flex align-start gap-3 py-3 pr-4" style="min-width: 0; width: 100%;">
                   <v-icon color="teal" class="mt-1" style="flex-shrink: 0;">mdi-cube-outline</v-icon>
                   <div style="min-width: 0; flex: 1;">
                     <div class="font-weight-bold text-break text-body-1" style="word-break: break-all;">
@@ -320,11 +320,12 @@
                     <v-icon size="16">mdi-delete-outline</v-icon>
                   </v-btn>
                 </div>
-              </v-list-item>
+                </template>
+              </ModelTree>
               <div v-if="library.base.length === 0" class="text-center py-6 text-grey">
                 No base models downloaded. Download a base model to supply Eagle-3 embeddings.
               </div>
-            </v-list>
+            </div>
           </v-card>
 
           <!-- Add embeddings dialog -->
@@ -814,6 +815,13 @@
                 hide-details
                 color="primary"
               ></v-checkbox>
+              <v-checkbox
+                v-model="searchDflashOnly"
+                label="DFlash draft models only"
+                density="compact"
+                hide-details
+                color="primary"
+              ></v-checkbox>
             </div>
 
             <v-alert v-if="searchError" type="error" variant="tonal" density="compact" class="mb-3 text-caption">
@@ -1149,17 +1157,18 @@
 <script>
 import AppNav from '../components/AppNav.vue';
 import RuntimeSyncDialog from '../components/RuntimeSyncDialog.vue';
+import ModelTree from '../components/ModelTree.vue';
 
 export default {
   name: 'Models',
-  components: { AppNav, RuntimeSyncDialog },
+  components: { AppNav, RuntimeSyncDialog, ModelTree },
   data: () => ({
     user: { username: 'admin', role: 'admin', authProvider: 'local' },
     tab: 'manager',
     models: [],
     eagle3Heads: [],
     // Downloaded models sorted into categories (GET /api/admin/library)
-    library: { available: [], base: [], eagle3: [] },
+    library: { available: [], base: [], drafts: [] },
     // "Add embeddings" dialog for an Eagle-3 head
     embedDialog: false,
     embedTarget: null,          // the eagle3 head row
@@ -1243,6 +1252,7 @@ export default {
     searchRkllmOnly: false,
     searchPlatformOnly: true,
     searchEagle3Only: false,
+    searchDflashOnly: false,
     detectedPlatform: null,
     searchLoading: false,
     searchLoadingMore: false,
@@ -1264,6 +1274,11 @@ export default {
   computed: {
     isDark() {
       return this.themeName === 'customDarkTheme';
+    },
+    // Draft models (EAGLE-3 / DFlash), each given a single slash-path field for
+    // the ModelTree (headFile when present — the full file path — otherwise the dir).
+    draftsTree() {
+      return this.library.drafts.map(h => ({ ...h, _treePath: h.headFile || h.dir }));
     },
     // KV Cache Compression options. The SSD-blob PolarQuant schemes (q8/pq8/pq4) apply
     // to both backends. The TurboQuant levels set the in-context V-cache type and are
@@ -1317,11 +1332,11 @@ export default {
     baseTotalBytes() {
       return (this.library.base || []).reduce((s, b) => s + (b.sizeBytes || 0), 0);
     },
-    eagle3TotalBytes() {
-      return (this.library.eagle3 || []).reduce((s, h) => s + (h.sizeBytes || 0), 0);
+    draftsTotalBytes() {
+      return (this.library.drafts || []).reduce((s, h) => s + (h.sizeBytes || 0), 0);
     },
     totalStorageBytes() {
-      return this.modelsTotalBytes + this.baseTotalBytes + this.eagle3TotalBytes;
+      return this.modelsTotalBytes + this.baseTotalBytes + this.draftsTotalBytes;
     },
     dlStatusColor() {
       if (!this.dlStatus) return 'grey';
@@ -1748,9 +1763,10 @@ export default {
       }
     },
     _buildSearchParams(offset = 0) {
-      // Build query string: append eagle3/platform tags to user's query
+      // Build query string: append eagle3/dflash/platform tags to user's query
       let q = this.searchQuery.trim();
       if (this.searchEagle3Only) q = `${q} eagle3`.trim();
+      if (this.searchDflashOnly) q = `${q} dflash`.trim();
 
       const params = new URLSearchParams({
         q,
@@ -1764,7 +1780,7 @@ export default {
       return params;
     },
     async searchHf() {
-      if (!this.searchQuery.trim() && !this.searchRkllmOnly && !this.searchPlatformOnly && !this.searchEagle3Only) return;
+      if (!this.searchQuery.trim() && !this.searchRkllmOnly && !this.searchPlatformOnly && !this.searchEagle3Only && !this.searchDflashOnly) return;
       this.searchLoading = true;
       this.searchError = '';
       this.searchResults = [];
