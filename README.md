@@ -103,6 +103,28 @@ graph TD
 
 ---
 
+## 🧠 Choosing Edge Hardware
+
+oRKLLM is validated on the **Rockchip RK3588 (32 GB)**. If you're buying a board to run LLMs, the specs that
+actually decide *what you can run* are usually **not** the headline numbers — NPU "TOPS" sells the chip, but
+these decide whether a given model is usable:
+
+| What to check | Why it matters | RK3588 (validated baseline) |
+| :--- | :--- | :--- |
+| **Total RAM (unified)** | Caps the model size you can hold. On these SoCs the NPU/GPU/CPU share one memory pool, so RAM is the whole budget. | 32 GB → ~35B-class at mixed int4/int8 |
+| **Memory bandwidth** (LPDDR gen + channels) | Token generation (decode) is bandwidth-bound — bandwidth ≈ your tokens/sec ceiling. LPDDR5 ≫ LPDDR4. | LPDDR4/5 |
+| **NPU IOMMU addressable window** | How much weight the NPU can reach at once; larger models must be streamed or split across CPU/GPU. **Gotcha:** vendors often quote the IOMMU's *physical* address width (e.g. "40-bit"), which is **not** the *IOVA* window the NPU actually addresses. | 32-bit IOVA → **~4 GB**, despite the "40-bit" spec |
+| **Native NPU dtype support** | int8-only vs native int4 / w4a8 / w4a16. Native low-bit weights roughly halve memory + bandwidth for the same model. | int8 (int4 mode is lossy; int4 storage is synthesized in software) |
+| **NPU TOPS + cores** | Prompt-processing (prefill) speed. The *least* predictive of real serving throughput, despite being the headline. | ~6 TOPS int8, 3 cores |
+| **GPU + NVMe** | A capable GPU enables concurrent speculative drafting; fast NVMe helps stream models that exceed RAM. | Mali-G610 + PCIe NVMe |
+
+> **Practical takeaway:** the IOMMU window, memory bandwidth, and dtype support are what gate whether a
+> 35B-class model is usable — and they live in the SoC technical reference manual and the NPU kernel driver,
+> **not the product page**. Read those before buying. A board with more RAM and a wider IOMMU / native-int4 NPU
+> will run larger models far more comfortably than one chosen on TOPS alone.
+
+---
+
 ## 📦 Installing from a Release Package (Ubuntu / Armbian ARM64)
 
 Pre-built `.deb` packages for ARM64 are available via the oRKLLM APT repository or directly from the [GitHub Releases page](https://github.com/oRKLLM/oRKLLM/releases).
