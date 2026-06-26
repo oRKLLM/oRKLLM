@@ -11,3 +11,6 @@ build_stage/
 *.log
 .env
 llama-recurrent-state-fix.prompt.md
+
+# Local paper-planning notes — keep private, do not publish in advance
+papers-to-write.md
