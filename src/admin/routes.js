@@ -18,6 +18,7 @@ import {
   dbLogAudit, dbGetAuditLog, dbGetSchemaVersion,
   dbCreateBenchRun, dbListBenchRuns, dbDeleteBenchRun, dbClearBenchRuns,
 } from '../db.js';
+import { registerDraftEmbeddings, releaseDraftEmbeddings } from '../embeddings_store.js';
 import { v4 as uuidv4 } from 'uuid';
 import { isLlamaRuntimeAvailable, getLlamaRuntimeInfo, getLlamaReleases, syncLlamaRuntime, getLlamaSyncState } from '../llama_sync.js';
 import { getDramStatus, getCpuStatus } from '../monitor.js';
@@ -841,6 +842,7 @@ export default async function adminRoutes(fastify, options) {
     // .rkllm → rkllm runtime; .gguf → llama runtime (open NPU stack).
     (function scanModels(dir, prefix = '') {
       for (const e of listFiles(dir)) {
+        if (!prefix && e.name === '.embeddings') continue;   // the content-addressed store, not a model dir
         const rel = prefix ? `${prefix}/${e.name}` : e.name;
         if (e.isDirectory()) scanModels(path.join(dir, e.name), rel);
         // thinkingToggle: can the model's reasoning be turned off? rkllm honours
@@ -888,7 +890,7 @@ export default async function adminRoutes(fastify, options) {
       const entries = listFiles(dir);
       const names = entries.filter(f => f.isFile()).map(f => f.name);
       if (names.some(n => /\.safetensors$/i.test(n))) { if (rel) repoDirs.push({ rel, abs: dir, names }); return; }
-      for (const e of entries) if (e.isDirectory()) findRepoDirs(path.join(dir, e.name), rel ? `${rel}/${e.name}` : e.name, depth + 1);
+      for (const e of entries) if (e.isDirectory() && !(depth === 0 && e.name === '.embeddings')) findRepoDirs(path.join(dir, e.name), rel ? `${rel}/${e.name}` : e.name, depth + 1);
     })(MODELS_DIR);
 
     for (const { rel, abs, names } of repoDirs) {
@@ -906,7 +908,10 @@ export default async function adminRoutes(fastify, options) {
           format: head && /\.rkllm$/i.test(head) ? 'npu' : 'vulkan',
           hasConfig: !!cfg,
           targetModelType: cfg?.target_model_type || null,
-          embeddingsPresent: names.includes('embeddings.safetensors'),
+          // existsSync follows symlinks, so a table that's been centralized into
+          // the common store (draft holds a symlink, not a real file) still reads
+          // as present — the runtime opens it transparently through the link.
+          embeddingsPresent: fs.existsSync(path.join(abs, 'embeddings.safetensors')),
           sizeBytes: dirSizeOf(abs),
         });
       } else {
@@ -1282,8 +1287,17 @@ export default async function adminRoutes(fastify, options) {
         } else {
           await extractLocalEmbeddings({ baseDir: path.join(MODELS_DIR, source.baseDir), destPath, job });
         }
-        if (job.status !== 'cancelled') { job.status = 'done'; job.speedBps = 0; job.finishedAt = Date.now(); }
-        console.log(`[Embeddings] Completed: ${label} → ${headDirName}/embeddings.safetensors`);
+        if (job.status === 'cancelled') return;
+        // Centralize the freshly-produced table into the content-addressed common
+        // store: hash + dedup into <MODELS_DIR>/.embeddings/<sha256>.safetensors,
+        // register it + this draft's reference in the DB, and replace the draft's
+        // real file with a symlink into the store. Identical tables (e.g. another
+        // draft of the same target, or a reuse) collapse onto one store file.
+        // The runtime + /library read through the symlink unchanged.
+        const sourceTag = fromReuse ? 'reuse' : fromRepo ? 'base' : 'extract';
+        const { hash, deduped } = registerDraftEmbeddings(MODELS_DIR, headDirName, destPath, { source: sourceTag });
+        job.status = 'done'; job.speedBps = 0; job.finishedAt = Date.now();
+        console.log(`[Embeddings] Completed: ${label} → ${headDirName}/embeddings.safetensors → store ${hash.slice(0, 12)}${deduped ? ' (deduped)' : ''}`);
       } catch (e) {
         job.status = 'error';
         job.error = e.message;
@@ -1567,6 +1581,15 @@ export default async function adminRoutes(fastify, options) {
     const loaded = pool.getStatus().model;
     if (loaded && (path.resolve(MODELS_DIR, loaded) + '').startsWith(dirPath + path.sep))
       return reply.status(409).send({ error: 'Cannot delete: contains the currently loaded model. Unload it first.' });
+    // GC the draft's embeddings reference first: drop its DB ref and, if the
+    // store table it pointed at is now unreferenced by any other draft, delete
+    // the store file. A still-shared table is protected (refcount guard). `rel`
+    // is the registry key (draft dir relative to MODELS_DIR). Done before the
+    // dir removal so the symlink goes with the dir and the store stays consistent.
+    try {
+      const { freedHash } = releaseDraftEmbeddings(MODELS_DIR, rel);
+      if (freedHash) console.log(`[Embeddings] GC: freed store ${freedHash.slice(0, 12)} (0 refs after deleting ${rel})`);
+    } catch (e) { console.error(`[Embeddings] GC on delete ${rel} failed: ${e.message}`); }
     fs.rmSync(dirPath, { recursive: true, force: true });
     return { success: true };
   });

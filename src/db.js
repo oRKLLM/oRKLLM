@@ -224,6 +224,32 @@ const MIGRATIONS = [
       d.exec(`ALTER TABLE bench_runs ADD COLUMN spec_hardware TEXT;`);
     },
   },
+  {
+    version: 7,
+    description: 'Content-addressed embeddings store: embeddings + draft_embeddings tables',
+    up(d) {
+      d.exec(`
+        -- One row per distinct embed_tokens table, keyed by sha256 of its tensor
+        -- DATA (so identical tables from any source dedup to one store file).
+        CREATE TABLE IF NOT EXISTS embeddings (
+          hash TEXT PRIMARY KEY,
+          shape TEXT NOT NULL,
+          dtype TEXT NOT NULL,
+          nbytes INTEGER NOT NULL,
+          source TEXT,
+          created_at INTEGER NOT NULL
+        );
+        -- Which draft dirs reference which store table (the refcount, by rows).
+        -- draft_dir is relative to MODELS_DIR; a draft holds at most one table.
+        CREATE TABLE IF NOT EXISTS draft_embeddings (
+          draft_dir TEXT PRIMARY KEY,
+          hash TEXT NOT NULL REFERENCES embeddings(hash),
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_draft_embeddings_hash ON draft_embeddings(hash);
+      `);
+    },
+  },
 ];
 
 const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
@@ -419,7 +445,7 @@ export function dbDeleteModelSettings(modelId) {
 // Only used in test mode (ORKLLM_MOCK=1) to reset state between test runs
 export function dbResetForTesting() {
   withReconnect(d => {
-    d.exec('DELETE FROM auth; DELETE FROM users; DELETE FROM auth_provider_config; DELETE FROM audit_log; DELETE FROM settings; DELETE FROM model_settings;');
+    d.exec('DELETE FROM auth; DELETE FROM users; DELETE FROM auth_provider_config; DELETE FROM audit_log; DELETE FROM settings; DELETE FROM model_settings; DELETE FROM draft_embeddings; DELETE FROM embeddings;');
     d.exec(`INSERT OR IGNORE INTO stats (type) VALUES ('session'); INSERT OR IGNORE INTO stats (type) VALUES ('all_time');`);
     // Keep user_version intact — schema tables already exist, no need to re-migrate
   });
@@ -656,4 +682,72 @@ export function dbDeleteBenchRun(id) {
 
 export function dbClearBenchRuns() {
   return withReconnect(d => d.prepare('DELETE FROM bench_runs').run());
+}
+
+// --- Content-addressed embeddings store registry ---
+//
+// `embeddings` holds one row per distinct embed_tokens table (keyed by sha256 of
+// the tensor data); `draft_embeddings` maps each draft dir to the store hash it
+// uses. Refcount = number of draft_embeddings rows pointing at a hash; a store
+// file is GC-able once that drops to zero. All draft_dir values are paths
+// relative to MODELS_DIR.
+
+// Register a store table (idempotent — keeps the first-seen metadata).
+export function dbUpsertEmbedding({ hash, shape, dtype, nbytes, source }) {
+  return withReconnect(d => d.prepare(
+    `INSERT INTO embeddings (hash, shape, dtype, nbytes, source, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(hash) DO NOTHING`
+  ).run(hash, JSON.stringify(shape ?? null), dtype ?? null, nbytes ?? 0, source ?? null, Date.now()));
+}
+
+export function dbGetEmbedding(hash) {
+  const row = withReconnect(d => d.prepare('SELECT * FROM embeddings WHERE hash = ?').get(hash));
+  if (!row) return null;
+  let shape = null;
+  try { shape = JSON.parse(row.shape); } catch {}
+  return { hash: row.hash, shape, dtype: row.dtype, nbytes: row.nbytes, source: row.source, created_at: row.created_at };
+}
+
+// Point a draft dir at a store hash (replaces any prior mapping for that draft).
+export function dbSetDraftEmbedding(draftDir, hash) {
+  return withReconnect(d => d.prepare(
+    `INSERT INTO draft_embeddings (draft_dir, hash, created_at) VALUES (?, ?, ?)
+     ON CONFLICT(draft_dir) DO UPDATE SET hash = excluded.hash, created_at = excluded.created_at`
+  ).run(draftDir, hash, Date.now()));
+}
+
+export function dbGetDraftEmbedding(draftDir) {
+  const row = withReconnect(d => d.prepare('SELECT hash FROM draft_embeddings WHERE draft_dir = ?').get(draftDir));
+  return row ? row.hash : null;
+}
+
+// Remove a draft's reference. Returns the hash it pointed at (or null) so the
+// caller can decide whether the store file is now orphaned.
+export function dbDeleteDraftEmbedding(draftDir) {
+  return withReconnect(d => {
+    const row = d.prepare('SELECT hash FROM draft_embeddings WHERE draft_dir = ?').get(draftDir);
+    d.prepare('DELETE FROM draft_embeddings WHERE draft_dir = ?').run(draftDir);
+    return row ? row.hash : null;
+  });
+}
+
+// How many draft dirs currently reference this store hash.
+export function dbEmbeddingRefcount(hash) {
+  const row = withReconnect(d => d.prepare('SELECT COUNT(*) AS n FROM draft_embeddings WHERE hash = ?').get(hash));
+  return row?.n ?? 0;
+}
+
+// Drop a store-table registry row (call only after refcount hits 0 and the file
+// is deleted).
+export function dbDeleteEmbedding(hash) {
+  return withReconnect(d => d.prepare('DELETE FROM embeddings WHERE hash = ?').run(hash));
+}
+
+export function dbListEmbeddings() {
+  return withReconnect(d => d.prepare(
+    `SELECT e.hash, e.shape, e.dtype, e.nbytes, e.source, e.created_at,
+            (SELECT COUNT(*) FROM draft_embeddings de WHERE de.hash = e.hash) AS refcount
+     FROM embeddings e ORDER BY e.created_at ASC`
+  ).all()).map(r => { let shape = null; try { shape = JSON.parse(r.shape); } catch {} return { ...r, shape }; });
 }

@@ -19,6 +19,7 @@ import { initConversionScheduler } from './conversion.js';
 import { MODELS_DIR } from './config.js';
 import { syncRuntimes } from './runtime_sync.js';
 import { applyPerformance, pinOrchestrationToLittle } from './perf_governor.js';
+import { migrateExistingEmbeddings } from './embeddings_store.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -316,6 +317,15 @@ const start = async () => {
     // frequent metrics wakes from preempting a co-resident NPU runtime's submit thread.
     pinOrchestrationToLittle();
     migrateMisplacedCache();  // fix empty cache_dir path bug from earlier versions
+    // One-time: centralize any per-draft embeddings.safetensors that predate the
+    // common store into <MODELS_DIR>/.embeddings/<sha256>.safetensors, register
+    // them in the DB, and replace each draft's real file with a symlink.
+    // Idempotent — already-linked drafts are skipped.
+    try {
+      const s = migrateExistingEmbeddings(MODELS_DIR);
+      if (s.scanned > 0)
+        fastify.log.info(`[Embeddings] store migration: scanned=${s.scanned} migrated=${s.migrated} deduped=${s.deduped} alreadyLinked=${s.alreadyLinked} errors=${s.errors} storeFiles=${s.storeFiles}`);
+    } catch (e) { fastify.log.warn(`[Embeddings] store migration failed (non-fatal): ${e.message}`); }
     await autoLoadPinnedModel();
     // .orkpack conversion scheduler: enqueue every unconverted .gguf and convert serially during idle
     // (so models load fast from a pre-tiled cache). Default on; disable with ork_autoconvert=0.
