@@ -82,14 +82,14 @@ export class ConversionScheduler {
 
     const env = { ...process.env,
       ORK_PERSIST: pack, ORK_EVICT_SRC: '1',
-      // The release runtime ships BOTH ggml-vulkan (Mali) and ggml-ork (NPU); without this, -ngl
-      // offloads the layers to the GPU and ggml-ork packs ZERO weights → no .orkpack. Disabling
-      // Vulkan (same mechanism serving uses, read at backend registration) forces layers onto the NPU.
-      GGML_DISABLE_VULKAN: '1',
       LD_LIBRARY_PATH: [LLAMA_RUNTIME_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':') };
     // A single 1-token forward pass packs+dumps every weight; --no-repack keeps weights host so the
-    // ggml-ork matmul offload fires; -ngl 99 offloads all layers (to the NPU, per GGML_DISABLE_VULKAN).
-    const args = ['-m', abs, '-ngl', '99', '-t', '4', '-c', '256', '--no-repack',
+    // ggml-ork matmul offload fires; -ngl 99 offloads all layers. `--device ORK` PINS them to the NPU:
+    // the release runtime also ships ggml-vulkan (Mali), and ggml-ork is a BLAS-like ACCEL backend, so
+    // a bare -ngl assigns the layers to the first GPU device (Vulkan0) — weights land in Mali buffers,
+    // MUL_MAT runs on Vulkan, and ggml-ork packs ZERO weights → no .orkpack. Targeting the ORK device
+    // (rather than disabling Vulkan) routes the matmuls to the NPU while leaving the GPU available.
+    const args = ['-m', abs, '--device', 'ORK', '-ngl', '99', '-t', '4', '-c', '256', '--no-repack',
                   '-p', 'x', '-n', '1', '--temp', '0', '-no-cnv'];
     console.log(`[conversion] building ${rel}.orkpack …`);
     const proc = spawn(this.binPath, args, { env, stdio: 'ignore' });
