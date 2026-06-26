@@ -159,3 +159,36 @@ export function isRecurrentArch(filePath) {
   const arch = getGgufArchitecture(filePath);
   return arch !== '' && RECURRENT_ARCH_RE.test(arch);
 }
+
+// ── Split (sharded) GGUF grouping ────────────────────────────────────────────
+// `llama-gguf-split` writes a model as `<base>-NNNNN-of-MMMMM.gguf` (e.g.
+// `foo-00001-of-00002.gguf`). llama.cpp loads the whole model by pointing `-m`
+// at the FIRST shard (`-00001-of-`); it auto-pulls the rest from the split
+// metadata. So a split model is ONE logical model whose load target is shard 1 —
+// the trailing shards must never appear as separate loadable entries.
+const SHARD_RE = /-(\d{5})-of-(\d{5})\.gguf$/i;
+
+// Parse the shard suffix off a .gguf filename (basename or path-relative id).
+// Returns { base, index, total } where `base` is the name with the
+// `-NNNNN-of-MMMMM` suffix stripped (keeping any directory prefix), or null if
+// the name is not a split shard.
+export function parseGgufShard(name) {
+  const m = SHARD_RE.exec(name);
+  if (!m) return null;
+  return { base: name.slice(0, m.index), index: parseInt(m[1], 10), total: parseInt(m[2], 10) };
+}
+
+// Is this a shard OTHER than the first? Trailing shards (-00002-of-… etc.) must
+// be filtered out of every loadable-model enumeration. The first shard
+// (-00001-of-) is kept as the canonical load target.
+export function isTrailingGgufShard(name) {
+  const s = parseGgufShard(name);
+  return s !== null && s.index > 1;
+}
+
+// Display name for a model id: strips the `-NNNNN-of-MMMMM.gguf` shard suffix
+// (re-appending `.gguf`) for split models; returns the id unchanged otherwise.
+export function ggufDisplayName(name) {
+  const s = parseGgufShard(name);
+  return s ? `${s.base}.gguf` : name;
+}

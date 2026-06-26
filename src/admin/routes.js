@@ -10,7 +10,7 @@ import path from 'path';
 import { spawn, spawnSync } from 'child_process';
 import { getStats, clearSessionStats, clearAllTimeStats } from '../stats.js';
 import { getMetricsSnapshot } from '../monitor.js';
-import { supportsThinkingToggle } from '../gguf.js';
+import { supportsThinkingToggle, isTrailingGgufShard, ggufDisplayName } from '../gguf.js';
 import {
   dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings, dbDeleteModelSettings,
   dbCreateUser, dbGetUserById, dbGetUserByUsername, dbGetUserBySubject, dbListUsers, dbUpdateUser, dbUsersEmpty,
@@ -798,6 +798,7 @@ export default async function adminRoutes(fastify, options) {
         const rel = prefix ? `${prefix}/${e.name}` : e.name;
         if (e.isDirectory()) scan(path.join(dir, e.name), rel);
         else if (/EAGLE3|Eagle3Draft/i.test(rel) && /\.(rkllm|gguf|safetensors)$/i.test(e.name)) {
+          if (isTrailingGgufShard(e.name)) continue;   // split-GGUF head: only the first shard is loadable
           heads.push({ id: rel, format: /\.rkllm$/i.test(e.name) ? 'npu' : 'vulkan' });
         }
       }
@@ -850,6 +851,10 @@ export default async function adminRoutes(fastify, options) {
         // (Qwen3+ yes, LFM2.5-MoE no). The UI hides the Enable-Thinking setting
         // when false so it isn't offered where it can't take effect.
         else if (/\.(rkllm|gguf)$/i.test(e.name)) {
+          // Split (sharded) GGUF: the model loads from the FIRST shard
+          // (-00001-of-), which llama.cpp uses to auto-pull the rest. Trailing
+          // shards (-00002-of-…) are not separate models — skip them.
+          if (isTrailingGgufShard(e.name)) continue;
           const abs = path.join(dir, e.name);
           const isRk = /\.rkllm$/i.test(e.name);
           // A draft head can ship as a loose .gguf/.rkllm (no safetensors repo dir, so the
@@ -872,7 +877,7 @@ export default async function adminRoutes(fastify, options) {
           } else if (isRk) {
             available.push({ id: rel, sizeBytes: sizeOf(abs), runtime: 'rkllm', thinkingToggle: true });
           } else {
-            available.push({ id: rel, sizeBytes: sizeOf(abs), runtime: 'llama', thinkingToggle: supportsThinkingToggle(abs), orkConversion: orkConversionState(abs) });
+            available.push({ id: rel, displayName: ggufDisplayName(rel), sizeBytes: sizeOf(abs), runtime: 'llama', thinkingToggle: supportsThinkingToggle(abs), orkConversion: orkConversionState(abs) });
           }
         }
       }

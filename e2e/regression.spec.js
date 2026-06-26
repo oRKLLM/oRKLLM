@@ -969,6 +969,59 @@ test('Downloader: "DFlash draft models only" appends dflash to the HF search que
   expect(lastQ).toContain('qwen');
 });
 
+// ── Split (sharded) GGUF grouping ────────────────────────────────────────────
+// A model split with `llama-gguf-split` lands as <base>-NNNNN-of-MMMMM.gguf.
+// llama.cpp loads the whole model from the FIRST shard, so the model lists must
+// surface ONE entry (the -00001-of- shard, shown under its base name) and NOT the
+// trailing shards as separate loadable models.
+test.describe('Split (sharded) GGUF grouping', () => {
+  const shard1 = 'split_demo-00001-of-00002.gguf';
+  const shard2 = 'split_demo-00002-of-00002.gguf';
+  const shard1Path = path.join(modelsDir, shard1);
+  const shard2Path = path.join(modelsDir, shard2);
+
+  test.beforeAll(() => {
+    fs.writeFileSync(shard1Path, 'fake-gguf-shard-1', 'utf-8');
+    fs.writeFileSync(shard2Path, 'fake-gguf-shard-2', 'utf-8');
+  });
+  test.afterAll(() => {
+    for (const p of [shard1Path, shard2Path]) if (fs.existsSync(p)) fs.rmSync(p, { force: true });
+  });
+
+  test('/v1/models lists ONE entry for the split model (first shard, base displayName) and hides trailing shards', async ({ page }) => {
+    const res = await page.request.get('/v1/models');
+    expect(res.ok()).toBeTruthy();
+    const { data } = await res.json();
+    const matches = data.filter(m => m.id === shard1 || m.id === shard2);
+    expect(matches.length).toBe(1);            // exactly one loadable entry
+    expect(matches[0].id).toBe(shard1);        // load target is the first shard
+    expect(matches[0].displayName).toBe('split_demo.gguf'); // shown under the base name
+    expect(data.some(m => m.id === shard2)).toBe(false);    // trailing shard not listed
+  });
+
+  test('/api/admin/library lists ONE available entry, targeting the first shard', async ({ page }) => {
+    await login(page);
+    const res = await page.request.get('/api/admin/library');
+    expect(res.ok()).toBeTruthy();
+    const { available } = await res.json();
+    const matches = available.filter(m => m.id === shard1 || m.id === shard2);
+    expect(matches.length).toBe(1);
+    expect(matches[0].id).toBe(shard1);
+    expect(matches[0].displayName).toBe('split_demo.gguf');
+  });
+
+  test('Models page renders ONE Load row for the split model under its base name', async ({ page }) => {
+    await login(page);
+    await page.goto('/models');
+    // The row shows the base name (suffix stripped) — exactly once.
+    const row = page.locator('.model-tree-leaf').filter({ hasText: 'split_demo.gguf' });
+    await expect(row).toHaveCount(1, { timeout: 6000 });
+    await expect(row.getByRole('button', { name: 'Load', exact: true })).toBeVisible();
+    // The trailing shard must NOT appear as its own row.
+    await expect(page.locator('.model-tree-leaf').filter({ hasText: '00002-of-00002' })).toHaveCount(0);
+  });
+});
+
 // ── Draft-embeddings reuse ──────────────────────────────────────────────────
 // Two draft heads of the SAME target share one identical embed_tokens table, so
 // a draft that's missing embeddings should be able to copy/hardlink an existing

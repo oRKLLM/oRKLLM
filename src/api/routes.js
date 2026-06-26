@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { MODELS_DIR, parseRuntimeVersion } from '../config.js';
-import { supportsThinkingToggle, isRecurrentArch } from '../gguf.js';
+import { supportsThinkingToggle, isRecurrentArch, isTrailingGgufShard, ggufDisplayName } from '../gguf.js';
 import pool from '../pool.js';
 import { recordRequest } from '../stats.js';
 import { dbGetModelSettings, dbSetModelSettings, dbGetSetting, dbListEnabledMcpServers } from '../db.js';
@@ -91,6 +91,10 @@ export default async function apiRoutes(fastify, options) {
           if (entry.isDirectory()) {
             results.push(...scanDir(path.join(dir, entry.name), prefix ? `${prefix}/${entry.name}` : entry.name));
           } else if (entry.name.endsWith('.rkllm') || entry.name.endsWith('.gguf')) {
+            // Split (sharded) GGUF: llama.cpp loads the whole model from the FIRST
+            // shard (-00001-of-), so trailing shards (-00002-of-…) are not separate
+            // loadable models — skip them here.
+            if (isTrailingGgufShard(entry.name)) continue;
             results.push(prefix ? `${prefix}/${entry.name}` : entry.name);
           }
         }
@@ -129,6 +133,10 @@ export default async function apiRoutes(fastify, options) {
 
         return {
           id: file,
+          // For a split GGUF the load target (id) is the first shard; the UI
+          // shows the model under its base name (suffix stripped). Identical to
+          // `id` for non-split models.
+          displayName: ggufDisplayName(file),
           object: 'model',
           created: Math.floor(stats.birthtimeMs / 1000),
           owned_by: 'orkllm',

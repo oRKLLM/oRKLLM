@@ -143,7 +143,7 @@
                     <v-icon color="grey-darken-1" class="mt-1" style="flex-shrink: 0;">mdi-file-code-outline</v-icon>
                     <div style="min-width: 0; flex: 1;">
                       <div class="font-weight-bold text-break text-body-1" style="word-break: break-all;">
-                        {{ modelSettings[model.id]?.display_name || model.id }}
+                        {{ modelSettings[model.id]?.display_name || model.displayName || model.id }}
                       </div>
                       <div class="d-flex align-center flex-wrap gap-2 mt-1">
                         <span class="text-caption text-grey">{{ formatBytes(model.size) }}</span>

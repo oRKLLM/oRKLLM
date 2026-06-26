@@ -15,6 +15,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { MODELS_DIR, LLAMA_RUNTIME_DIR } from './config.js';
+import { isTrailingGgufShard } from './gguf.js';
 
 const RETRY_MS = 30_000;
 
@@ -50,7 +51,7 @@ export class ConversionScheduler {
       for (const e of ents) {
         const p = path.join(dir, e.name);
         if (e.isDirectory()) walk(p);
-        else if (/\.gguf$/i.test(e.name) && !hasOrkpack(p)) this.enqueue(path.relative(MODELS_DIR, p));
+        else if (/\.gguf$/i.test(e.name) && !isTrailingGgufShard(e.name) && !hasOrkpack(p)) this.enqueue(path.relative(MODELS_DIR, p));
       }
     };
     walk(MODELS_DIR);
