@@ -79,6 +79,7 @@ export class ConversionScheduler {
     if (hasOrkpack(abs)) { this.queued.delete(rel); this._pump(); return; }   // built since enqueue
     // progress sidecar — /v1/models reads <model>.orkpack.json → UI shows "converting"
     try { fs.writeFileSync(pack + '.json', JSON.stringify({ status: 'converting', progress: 0 })); } catch {}
+    let srcSize = 0; try { srcSize = fs.statSync(abs).size; } catch {}
 
     const env = { ...process.env,
       ORK_PERSIST: pack, ORK_EVICT_SRC: '1',
@@ -95,7 +96,19 @@ export class ConversionScheduler {
     const proc = spawn(this.binPath, args, { env, stdio: 'ignore' });
     this.current = { rel, abs, proc };
 
+    // Live progress: the conversion is one opaque subprocess, but ggml-ork streams the packed weights
+    // into <pack>.tmp as it goes — poll its growth against the source GGUF size for a moving bar
+    // (clamped <100% until the .orkpack is finalized). Without this the sidecar sat at 0 then jumped to done.
+    const tick = setInterval(() => {
+      try {
+        const w = fs.statSync(pack + '.tmp').size;
+        const p = srcSize > 0 ? Math.min(99, Math.round(100 * w / srcSize)) : 0;
+        fs.writeFileSync(pack + '.json', JSON.stringify({ status: 'converting', progress: p }));
+      } catch { /* .tmp not created yet (model still loading) — keep the last value */ }
+    }, 1500);
+
     const done = (ok) => {
+      clearInterval(tick);
       this.current = null;
       this.queued.delete(rel);
       try { fs.unlinkSync(pack + '.json'); } catch {}
