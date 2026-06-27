@@ -563,6 +563,7 @@ export default async function adminRoutes(fastify, options) {
         autoDownloadRuntimes: dbGetSetting('auto_download_runtimes') === '1',
         autoDownloadLlamaRuntime: dbGetSetting('auto_download_llama_runtime') === '1',
         npuPoolSize: parseInt(dbGetSetting('npu_pool_size') ?? '1'),
+        moeNpuOffload: dbGetSetting('moe_npu_offload') === '1',
         langfuseEnabled:    dbGetSetting('langfuse_enabled')    === '1',
         langfuseBaseUrl:    dbGetSetting('langfuse_base_url')   ?? '',
         langfusePublicKey:  dbGetSetting('langfuse_public_key') ?? '',
@@ -580,6 +581,7 @@ export default async function adminRoutes(fastify, options) {
             cacheEnabled, cacheHotLimitMB, cacheColdLimitMB, cacheDir, cacheMaxContextTokens,
             kvCacheQuant,
             localAuthDisabled, trustedProxy, autoDownloadRuntimes, autoDownloadLlamaRuntime, npuPoolSize,
+            moeNpuOffload,
             langfuseEnabled, langfuseBaseUrl, langfusePublicKey, langfuseSecretKey,
             mcpInferenceEnabled, managePerformance,
           } = request.body || {};
@@ -609,6 +611,9 @@ export default async function adminRoutes(fastify, options) {
     if (typeof autoDownloadLlamaRuntime === 'boolean') dbSetSetting('auto_download_llama_runtime', autoDownloadLlamaRuntime ? '1' : '0');
     if (typeof npuPoolSize === 'number' && npuPoolSize >= 1 && npuPoolSize <= 8)
       dbSetSetting('npu_pool_size', String(npuPoolSize));
+    // Experimental MoE-on-NPU expert offload (gguf/ggml-ork only). Default off;
+    // takes effect on next model (re)load. Not recommended on RK3588 (UI warns).
+    if (typeof moeNpuOffload === 'boolean') dbSetSetting('moe_npu_offload', moeNpuOffload ? '1' : '0');
     if (typeof langfuseEnabled   === 'boolean') dbSetSetting('langfuse_enabled',    langfuseEnabled ? '1' : '0');
     if (typeof langfuseBaseUrl   === 'string')  dbSetSetting('langfuse_base_url',   langfuseBaseUrl);
     if (typeof langfusePublicKey === 'string')  dbSetSetting('langfuse_public_key', langfusePublicKey);

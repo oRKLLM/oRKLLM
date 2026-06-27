@@ -44,7 +44,7 @@ function ggufQuantBits(name) {
   return m ? parseInt(m[1], 10) : 4; // unknown → assume 4-bit (the common case)
 }
 
-function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, orkPersist = null } = {}) {
+function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, orkPersist = null, orkMoeNpu = false } = {}) {
   const dirs = [LLAMA_RUNTIME_DIR, RUNTIMES_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean);
   const env = { ...process.env, LD_LIBRARY_PATH: dirs.join(':') };
   // Keep the GPU idle unless something explicitly wants it (TurboQuant KV). With
@@ -63,6 +63,12 @@ function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, o
   // .orkpack: when a converted cache exists for this model, point ggml-ork at it so the worker loads
   // pre-tiled weights straight into NPU DMA (no dequant/quant/tile) — read at backend init, fork time.
   if (orkPersist) { env.ORK_PERSIST = orkPersist; env.ORK_EVICT_SRC = '1'; }
+  // Experimental MoE-on-NPU expert offload (ggml-ork only): routes MoE expert
+  // matmuls (MUL_MAT_ID) onto the NPU. Default off — on RK3588 it loses ~3× vs
+  // CPU at M=1 decode (4 GiB IOVA cap + LPDDR4X bandwidth). Read at backend init,
+  // so it must be set at fork time. Only set when the user opts in (default off →
+  // unset → behavior unchanged); it's a no-op for the librkllmrt backend.
+  if (orkMoeNpu) env.ORK_MOE_NPU = '1';
   return env;
 }
 
@@ -314,12 +320,17 @@ class EnginePool {
         : (npuQuant === 'auto' && ggufQuantBits(modelName) >= 5) ? '8'
         : null; // null → inherit the runtime default (INT4)
       const orkHybrid = (options.npu_hybrid ?? saved.npu_hybrid ?? false) ? '1' : null;
+      // Experimental MoE-on-NPU expert offload (ORK_MOE_NPU) — a global app
+      // setting (default off), ggml-ork only. When off we leave it unset so the
+      // worker env is byte-for-byte unchanged. Not recommended on RK3588 (see UI).
+      const orkMoeNpu = dbGetSetting('moe_npu_offload') === '1';
       options = {
         ...options,
         kv_type_k: kvK,
         kv_type_v: kvV,
         ork_quant: orkQuant,
         ork_hybrid: orkHybrid,
+        ork_moe_npu: orkMoeNpu,
         // Default mmap for GGUF: file-backed mmap is fully reclaimable under memory
         // pressure and is necessary to load models >15B on a 32 GB board without OOM.
         // Overridable per-model via the `use_mmap` setting.
@@ -531,6 +542,8 @@ class EnginePool {
         disableVulkan: !usesTurbo,
         orkQuant: options.ork_quant,
         orkHybrid: options.ork_hybrid,
+        // experimental MoE-on-NPU expert offload (gguf/ggml-ork only; default off, set per-fork)
+        orkMoeNpu: options.ork_moe_npu,
         // auto-load a pre-built .orkpack for this model (fast pre-tiled load); none → normal pack path
         orkPersist: hasOrkpack(modelPath) ? orkpackPathFor(modelPath) : null,
       }) });

@@ -306,6 +306,29 @@
 
         <v-divider class="mb-4"></v-divider>
 
+        <div class="d-flex align-center justify-space-between mb-1">
+          <div class="text-subtitle-2 font-weight-medium">
+            MoE Expert Offload to NPU
+            <v-chip size="x-small" color="amber-darken-2" variant="flat" class="ml-2 font-weight-bold">Experimental</v-chip>
+          </div>
+          <v-switch v-model="settings.moeNpuOffload" color="primary" hide-details density="compact" class="ml-4 flex-shrink-0"></v-switch>
+        </div>
+        <div class="text-caption text-grey mb-2">
+          Routes Mixture-of-Experts expert matmuls (<code>MUL_MAT_ID</code>) onto the NPU for GGUF models on
+          the open NPU (ggml-ork) stack. No effect on the librkllmrt backend. Applies on the next model load.
+        </div>
+        <v-alert v-if="isRk3588" type="warning" variant="tonal" density="compact" class="mb-4 text-caption">
+          <strong>Not recommended on this NPU ({{ serverInfo.platform }}).</strong>
+          MoE-on-NPU expert offload loses roughly 3&times; vs CPU at M=1 decode due to the 4&nbsp;GiB IOVA cap
+          and LPDDR4X bandwidth. Intended for wider-IOVA / DDR5 devices or batched (M&gt;1) workloads.
+        </v-alert>
+        <v-alert v-else type="info" variant="tonal" density="compact" class="mb-4 text-caption">
+          Experimental and off by default. Benefit is hardware-dependent — best on wider-IOVA / DDR5 devices
+          or batched (M&gt;1) workloads. Verify it actually improves throughput on your board before relying on it.
+        </v-alert>
+
+        <v-divider class="mb-4"></v-divider>
+
         <div class="text-subtitle-2 font-weight-medium mb-1">Inactivity Auto-Unload Timeout</div>
         <div class="text-caption text-grey mb-3">Automatically unload the active model after this period of inactivity. Per-model TTL overrides this.</div>
         <v-row no-gutters class="align-center mb-1">
@@ -654,6 +677,7 @@ export default {
     settings: {
       idleTimeoutMinutes: 5,
       npuPoolSize: 1,
+      moeNpuOffload: false,
       temperature: 0.8,
       topP: 0.9,
       topK: 40,
@@ -718,6 +742,11 @@ export default {
       const disk = this.serverInfo.diskTotalMB;
       return disk ? Math.max(1024, Math.floor((disk * 0.8) / 1024) * 1024) : 102400;
     },
+    // RK3588 / RK3588S — gate the strong "not recommended" MoE-offload disclaimer.
+    // (The 4 GiB IOVA cap + LPDDR4X bandwidth are what make M=1 decode lose vs CPU.)
+    isRk3588() {
+      return /^rk3588/.test(String(this.serverInfo.platform || '').toLowerCase());
+    },
   },
   mounted() {
     this.fetchAuth();
@@ -758,6 +787,7 @@ export default {
         const s = data.settings || {};
         this.settings.idleTimeoutMinutes = s.idleTimeoutMinutes ?? 5;
         this.settings.npuPoolSize         = s.npuPoolSize         ?? 1;
+        this.settings.moeNpuOffload       = s.moeNpuOffload       ?? false;
         this.settings.temperature = s.temperature ?? 0.8;
         this.settings.topP = s.topP ?? 0.9;
         this.settings.topK = s.topK ?? 40;
