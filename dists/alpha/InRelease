@@ -8,28 +8,28 @@ Codename: alpha
 Architectures: arm64
 Components: main
 Description: oRKLLM APT Repository — OpenAI-compatible LLM inference for Rockchip NPU
-Date: Wed, 01 Jul 2026 13:34:21 +0000
+Date: Wed, 01 Jul 2026 14:45:40 +0000
 MD5Sum:
- 5fc87ef8fad3a07e62b7a39dd8e8120f 842 main/binary-arm64/Packages
- f3402b2b9af7513fbb09a25763deb159 637 main/binary-arm64/Packages.bz2
- be64587d396bf4d924fb57fb067bd989 579 main/binary-arm64/Packages.gz
+ 387ed4b5e4ed7fe4c293c8b8cc796783 842 main/binary-arm64/Packages
+ b5af55b5a7b76ebe177ef7e6161a3753 633 main/binary-arm64/Packages.bz2
+ 80e2fd1a2273e46a8f50ddfd944c246e 583 main/binary-arm64/Packages.gz
 SHA256:
- 236d0afa43e000d69ee5403ffc5cde7ec56d32c7c72133d6174c788e6ffa65f2 842 main/binary-arm64/Packages
- 0090932121ad00fe8a6ef6e1bacedafa123ed59fc41a88d5bf1ea4445917801e 637 main/binary-arm64/Packages.bz2
- 6efbd86ec4c22a19ad018d62d86d3987f4fcff0e631e5ba2b7517eeaffc37933 579 main/binary-arm64/Packages.gz
+ b9bc401f1ea84046b947c2f4d35ab0bd490ebfc35f57fe8152d5efb3b56d4e78 842 main/binary-arm64/Packages
+ efad05ed5d41ea0545ddc306afeb492f4f681f4e2268a410ed0c690b13dc5894 633 main/binary-arm64/Packages.bz2
+ 33a39092efa6ebaabf6b0df0130cd7c0c1a8e34fa374249bd2492c1dba314d1c 583 main/binary-arm64/Packages.gz
 -----BEGIN PGP SIGNATURE-----
 
-iQIzBAEBCgAdFiEEjp2Wca5u0JcYtaE/MGfg+E4PQEUFAmpFF10ACgkQMGfg+E4P
-QEWkMw//Q8uNj+nsiCWdbeaYBuG7ZRHS5UxblFHAQ8uTXebS5lO7S6SgUnpL+13R
-tax4ERDb5wRZvCGUv+7hOkLudfytAaQHlsKWqoNTUL8jlsovkth81nLInxnjEmDh
-JEtE278ebST5UBzPPG1qMaI3TCnAY+yyX++65bCnwgLZgdqyWLWyvVkPYYEV0b2f
-ZbImcIgyaQ/8ZLTQILLLBdzCGoVBtn3vBdlMBE4bI8eHjApzopDvSrrl7V8UDt3f
-XExMt9ixFPwQ77zGKSKwVCbmkPKi0+U/xWJkdoxGPIp237N0rwNhRzF66k16W695
-StdgjsveI20/tdT63QPUoh5iQJ+txiEVKaav+P/KwdCLDZzr6GP+TMqS/tYf7KPc
-0xGJp9y1zDSFdgS1QlsULxUCmwRm2PNJOZ6BVeZPXB+ocA6T5vTFCvCcghVeguq7
-6OUBU/WLxnNbdMSKRXZkYY3c/ht81DljaIwL9M4IPNocckr1zRvZ/uR98fnrFCaV
-63sZPYEJqb5YXGpSmg+SvgF5Qvma6GqgwUJfy4WqaNK3FPTFJvsl/MFssDGXJlDg
-G4Jk1wgk/3swOxtQXv9M9CRdhxW2jSZDSuaIifiulip2OwHhqVHUeg1jD1LZkem8
-Sq+7ZMQq2NByj1RkTb28W1oBYvoOwYSXpAxdOx9l51FfvoB+UfM=
-=j6kf
+iQIzBAEBCgAdFiEEjp2Wca5u0JcYtaE/MGfg+E4PQEUFAmpFKBQACgkQMGfg+E4P
+QEUKaA/7BeXElrmsvEpOrXL88uytEcEj7WPrtVftBXd5BC5aNZnXD79ZP4UEeLyq
+JylVyeCcOU9UeAkRUmJ+HE0UC/hgzk1rvv92vO9IuTP0bFZusp/03HgjscOQybE0
+BT8GrkQ+3CHRzU+523RPBvHzK6WF+y6MDPYxX8yH3TnfpvaMXDCPBshR5CBZdAi/
+u0ngn+6RBu9Q4khXNVEtzF88SVN7OfbC50sx4nUED0Wcv5HmuYNscdN5Pfxl1aS0
+JNuRlmxV4vmv3y9wo9sZxKTlCoVp2NdW3uOJ7PqvyBlXiv39HX6o/lMKajYHg43o
+l5+/gWlzZZhpAh0/kBMY534Ixm8dmgT82EtQOkVId4o1eOARivgZP4gM936BrzPw
+ai876E8nxRVyo9BD15GNY8ByHQxJoT652BWr0rw+RUaA0EbbNHODJJTWRwD9sXKu
+Q7Kbfq64r3vm7aHNCe7tPQjWAHLhaYEiUAQx4/GUgMClxMstp69+xq3yhTKp2fPF
+bcFoqJeXXfzkxJ9QQ43XdcvFcrY98BjNp2v34joOrMquU9ukbMENLaKDkG5wj+AY
+Xqy/STVn24NpsMuEyAX34/pL+z4QvkZPTyFlU/audRbhdF3io7dt3I5FINtuhWid
+gaFp2ecGpAp3g3mFqNwRlB5GYCizeq2u5HnV+kHlWRnrhnfefMM=
+=JzPJ
 -----END PGP SIGNATURE-----
