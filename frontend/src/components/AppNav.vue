@@ -11,11 +11,11 @@
     <v-icon color="primary" size="32" class="mr-2 d-none d-sm-flex">mdi-chip</v-icon>
 
     <v-app-bar-title>
-      <!-- Single nowrap row so the version + status dot stay on the brand line -->
+      <!-- Brand stacked vertically: logo on top, version + status dot on the line below -->
       <div class="brand-row">
         <!-- oRKLLM text always navigates to dashboard -->
         <span
-          class="font-weight-bold text-h5 text-gradient cursor-pointer"
+          class="brand-name font-weight-bold text-h5 text-gradient cursor-pointer"
           @click="$router.push('/')"
         >oRKLLM</span>
         <!-- Version + status dot: hidden on mobile (shown in user drawer instead).
@@ -249,17 +249,23 @@ export default {
 .gap-1 { gap: 4px; }
 .gap-2 { gap: 8px; }
 
-/* Brand + version + status dot on one line, never wrapping */
+/* Brand stacked: logo on the first line, version + status dot on the second */
 .brand-row {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
   flex-wrap: nowrap;
-  gap: 6px;
   white-space: nowrap;
+  line-height: 1.1;
+}
+.brand-name {
+  line-height: 1.1;
 }
 .brand-meta {
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
+  margin-top: 1px;
 }
 </style>
