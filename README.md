@@ -19,8 +19,8 @@
            \  .-------.  /        ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝╚═╝     ╚═╝
           _/\/  #####  \/\_
          /  /   #####   \  \      Pronounced "ORC-EL-EL-EM"
-        / ,/    #####    \, \     OpenAI-compatible LLM inference for Rockchip NPU.
-       | / |  .-------.  | \ |    No cloud. No nonsense. Just efficient NPU inference.
+        / ,/    #####    \, \     OpenAI-compatible LLM inference for Rockchip NPU + Mali GPU.
+       | / |  .-------.  | \ |    Open or vendor runtime. No cloud. No nonsense.
        |/  '--[=======]--'  \|
        |       |     |       |
         \   ,  |     |  ,   /
@@ -33,18 +33,24 @@
 
 > **Disclaimer:** oRKLLM is an independent, community-driven project. It is **not affiliated with, endorsed by, or supported by Rockchip Semiconductor Co., Ltd.** or any of its subsidiaries. "Rockchip", "RK3576", "RK3588", "RKLLM", and "RKNN" are trademarks of Rockchip Semiconductor Co., Ltd. The `librkllmrt.so` runtime library is developed and distributed by Rockchip/Airockchip under the Apache 2.0 License — oRKLLM uses it unmodified.
 
-oRKLLM is an energy-efficient, OpenAI API-compatible local LLM inference server and premium admin console designed specifically for Rockchip NPU-powered platforms (such as the **RK3576** found in the NanoPi M5 and **RK3588** series SBCs).
+oRKLLM is an energy-efficient, OpenAI API-compatible local LLM inference server and premium admin console for Rockchip NPU-powered platforms (such as the **RK3576** found in the NanoPi M5 and the **RK3588** series SBCs). Crucially, it is **not tied to a single runtime** — it serves models on **more than just** Rockchip's closed RKLLM runtime. oRKLLM is **multi-runtime**:
 
-Inspired by [jundot/oMLX](https://github.com/jundot/omlx) (which does the same for Apple Silicon), oRKLLM is adaptively re-engineered to run on the Rockchip RKLLM runtime (`librkllmrt.so`) with its unique hardware and concurrency constraints.
+- **Rockchip RKLLM** (`librkllmrt.so`) — the vendor's closed NPU runtime, for `.rkllm` models.
+- **A fully open-source stack** — [llama.cpp](https://github.com/oRKLLM/llama.cpp-rockchip) with the clean-room **`ggml-ork`** NPU backend (built on the userspace [`ork-driver`](https://github.com/oRKLLM/ork-driver) matmul library) plus the **Mali GPU via Vulkan** (`ggml-vulkan`), for `.gguf` models — with **no proprietary runtime required**.
+
+The backend is chosen automatically per model (by file type), and the open stack additionally load-balances work across the NPU, Mali GPU, and CPU. On the validated RK3588 the open NPU path already **matches or beats** the closed runtime in places (e.g. 1.7B prefill ~278 tok/s vs rkllm's ~184; 7B stays fully resident across IOMMU domains).
+
+Inspired by [jundot/oMLX](https://github.com/jundot/omlx) (which does the same for Apple Silicon), oRKLLM began as an adaptation of the Rockchip RKLLM runtime and has since grown its own open inference path (`ork-driver` → `ggml-ork` → llama.cpp) so GGUF models run on the NPU and Mali GPU without any vendor blob.
 
 ---
 
 ## 🚀 Key Features
 
 * **OpenAI API Compatibility**: Drop-in `/v1/chat/completions`, `/v1/models`, and `/v1/embeddings` endpoints — works with Open WebUI, Claude Code, and any OpenAI-compatible client.
+* **Multi-Runtime (open + vendor)**: Serve both `.rkllm` models on Rockchip's closed **RKLLM** runtime (`librkllmrt.so`) **and** `.gguf` models on a fully **open-source** stack — llama.cpp with the clean-room [`ggml-ork`](https://github.com/oRKLLM/llama.cpp-rockchip) NPU backend (built on [`ork-driver`](https://github.com/oRKLLM/ork-driver)) plus the **Mali GPU via Vulkan** — from the same server. The backend is chosen automatically by file type; the open path load-balances across NPU/GPU/CPU and keeps large models resident across the NPU's IOMMU domains. No proprietary runtime required for GGUF. Models, library, and Dashboard show a runtime chip (`rkllm` / `llama`).
 * **Full Admin Console**: Built with **Vue 3** and **Vuetify 3** — seven dedicated pages:
-  * **Dashboard** — live CPU/NPU/GPU/RAM/Disk/Temperature/Fan/RAM-bandwidth gauges, serving stats, prefix cache observability, RKLLM runtime versions
-  * **Models** — local model manager (sorted into servable `.rkllm` models, base models, and Eagle-3 draft heads), HuggingFace search, collection browser, direct downloader
+  * **Dashboard** — live CPU/NPU/GPU/RAM/Disk/Temperature/Fan/RAM-bandwidth gauges, serving stats, prefix cache observability, and both runtime versions (RKLLM + llama/ggml-ork)
+  * **Models** — local model manager (sorted into servable models — both `.rkllm` and `.gguf` — plus base models and Eagle-3 draft heads), HuggingFace search, collection browser, direct downloader
   * **Settings** — inference defaults, HF token, prefix cache config, trusted proxy
   * **Logs** — full-page real-time log terminal over WebSocket
   * **Bench** — inference benchmark (TTFT, prefill tok/s, generation tok/s); completed runs are persisted and listed in a Previous Runs history table
@@ -61,7 +67,6 @@ Inspired by [jundot/oMLX](https://github.com/jundot/omlx) (which does the same f
 * **Process-Isolated Execution**: Inference engine runs in a dedicated child process. Model unload/swap terminates the process, guaranteeing full NPU driver memory cleanup.
 * **Smart Resource Management**: Single active model lock, auto-swap, configurable idle timeout, pin-to-keep-loaded.
 * **Runtime Version Auto-Matching & Auto-Download**: oRKLLM reads the embedded version from each `librkllmrt.so` (via `strings`), matches it against the version in the model filename, and retries all candidates until one succeeds — caching the winner per model. On first setup, opt in to automatically download all versioned runtimes from [oRKLLM/rkllm-runtimes](https://github.com/oRKLLM/rkllm-runtimes) (Apache 2.0). Opted-out users are prompted with a disclaimer dialog in the UI; API callers receive HTTP 422 `RUNTIME_MISSING` with the required version. Toggle in Settings after setup.
-* **Dual-Runtime Support (GGUF + RKLLM)**: Serve both `.rkllm` models (Rockchip RKLLM closed runtime) and `.gguf` models (open llama.cpp-rockchip NPU runtime via `ggml-ork` backend) from the same server. The backend is selected automatically by file extension. The llama runtime bundle (`libllama.so` + ggml-ork libs) downloads on demand from `oRKLLM/llama.cpp-rockchip`. Models, library, and Dashboard all show a runtime chip (`rkllm` / `llama`).
 * **APT Distribution Channels**: Three channels — `stable` (main), `beta`, `alpha` — with separate `dists/<channel>/` directories on gh-pages. Users pin to their preferred channel.
 * **Trusted Proxy**: Supports `true`, single IP/CIDR, or comma-separated list (SAN-style) passed directly to Fastify's `trustProxy`.
 * **Database Migrations**: PRAGMA user_version migration runner — schema changes (v1–v5) apply automatically on startup, safe across upgrades from any previous version.
@@ -83,23 +88,31 @@ graph TD
 
     API -->|Queue Request| Pool[Engine Pool & Resource Manager]
     Pool -->|Spawn / Message| Worker[Worker Process]
-    Worker -->|N-API Addon| Addon[orkllm_napi.node]
-    Addon -->|Dynamic dlopen| C_API[librkllmrt.so C API]
-    C_API -->|NPU Driver| NPU[Rockchip NPU Hardware]
+
+    Worker -->|.rkllm: N-API dlopen| RK[librkllmrt.so C API]
+    RK -->|closed NPU runtime| NPU[Rockchip NPU]
+
+    Worker -->|.gguf| Llama[llama.cpp]
+    Llama -->|ggml-ork backend| Ork[ork-driver regcmd/DRM]
+    Ork -->|clean-room userspace| NPU
+    Llama -->|ggml-vulkan| Mali[Mali GPU]
 
     Admin -->|WebSocket Telemetry| Monitor[Telemetry Monitor]
     Monitor -->|/sys/kernel/debug/rknpu| Linux[Linux Kernel]
 ```
 
+Two inference paths behind one OpenAI-compatible API: the **closed RKLLM runtime** (`.rkllm`) and the **open llama.cpp + `ggml-ork` + Vulkan** stack (`.gguf`), selected per model. The open path drives the NPU directly through the clean-room [`ork-driver`](https://github.com/oRKLLM/ork-driver) (no `librknnrt`, no kernel module) and can use the Mali GPU concurrently.
+
 | Layer | Technology |
 | :--- | :--- |
 | **API Server** | Node.js + Fastify (ES Modules) |
-| **Native Bindings** | C++ N-API addon (`node-addon-api`) with `dlopen`/`dlsym` |
+| **Inference runtimes** | Closed: Rockchip `librkllmrt.so` (`.rkllm`). Open: llama.cpp + `ggml-ork` NPU backend (on `ork-driver`) + `ggml-vulkan` Mali GPU (`.gguf`) |
+| **Native Bindings** | C++ N-API addon (`node-addon-api`) with `dlopen`/`dlsym` — no compile-time dependency on the runtime `.so` |
 | **Mock Fallback** | Pure JS mock engine (auto-enabled on non-ARM64/non-Linux) |
 | **Frontend** | Vue 3 + Vuetify 3 SPA, built with Vite, route-based code splitting |
 | **Database** | SQLite via `node:sqlite` (Node ≥22.5) or `node-sqlite3-wasm` (Node <22.5) |
 | **Auth** | Local PBKDF2 + OIDC (PKCE) + SAML 2.0 |
-| **Testing** | Playwright E2E (81 tests across 3 spec files) + node:test unit tests, mock OIDC service container in CI |
+| **Testing** | Playwright E2E (105 tests across spec files) + node:test unit tests, mock OIDC service container in CI |
 
 ---
 
@@ -244,7 +257,7 @@ npm run dev:server
 | `ORKLLM_HOST` | `127.0.0.1` | Listen address (`0.0.0.0` for LAN) |
 | `ORKLLM_PORT` | `8000` | Listen port |
 | `ORKLLM_LIB_PATH` | `/usr/lib/librkllmrt.so` | Path to Rockchip RKLLM runtime |
-| `ORKLLM_MODELS_DIR` | `./models` | Directory scanned for `.rkllm` files |
+| `ORKLLM_MODELS_DIR` | `./models` | Directory scanned for `.rkllm` and `.gguf` model files |
 | `ORKLLM_DB_PATH` | `~/.config/orkllm/auth.db` | SQLite database path |
 | `ORKLLM_TRUSTED_PROXY` | *(unset)* | `true` (all), a single IP/CIDR, or comma-separated IPs/CIDRs to trust `X-Forwarded-*` headers |
 | `ORKLLM_RUNTIMES_DIR` | `~/.config/orkllm/runtimes` | Directory of versioned `librkllmrt-aarch64-vX.Y.Z.so` files for automatic runtime matching |
