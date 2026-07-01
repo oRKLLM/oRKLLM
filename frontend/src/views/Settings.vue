@@ -78,29 +78,44 @@
         ></v-text-field>
       </v-card>
 
-      <!-- Runtime Auto-Download -->
+      <!-- Runtimes Management — global memory cap, performance governor, and the
+           llama + rkllm inference runtimes, in one place. -->
       <v-card class="glass-card pa-5 mb-5">
         <div class="section-heading mb-4">
-          <v-icon color="primary" size="18" class="mr-2">mdi-download-circle-outline</v-icon>
-          Runtime Auto-Download
+          <v-icon color="primary" size="18" class="mr-2">mdi-tune-variant</v-icon>
+          Runtimes Management
         </div>
-        <div class="d-flex align-center justify-space-between">
-          <div>
-            <div class="text-subtitle-2 font-weight-medium mb-1">Auto-download rkllm runtimes</div>
-            <div class="text-caption text-grey">
-              Automatically download versioned <code>librkllmrt.so</code> files from
-              <a href="https://github.com/mafischer/rkllm-runtimes" target="_blank" class="text-primary">mafischer/rkllm-runtimes</a>
-              on startup and when a model with an unknown runtime version is loaded.
-              Binaries are Apache 2.0 licensed.
-              <span v-if="serverInfo.runtimesDir" class="d-block mt-1">
-                <v-icon size="12" class="mr-1">mdi-folder-outline</v-icon>
-                Downloaded to: <code class="text-caption font-weight-regular">{{ serverInfo.runtimesDir }}</code>
-              </span>
-            </div>
+
+        <!-- 1. Global memory limit (process-RAM cap) -->
+        <div class="mb-1">
+          <div class="text-subtitle-2 font-weight-medium mb-1">Global memory limit</div>
+          <div class="text-caption text-grey mb-3">
+            Hard ceiling on total process RAM. NPU weight residency is budgeted from this
+            <strong>minus the hot prefix cache</strong>{{ settings.cacheEnabled ? ` (${formatMB(settings.cacheHotLimitMB)} reserved)` : '' }},
+            so a model that fits stays fully resident with no eviction churn. Strictly enforced;
+            takes effect on the next model (re)load.
           </div>
-          <v-switch v-model="settings.autoDownloadRuntimes" color="primary" hide-details density="compact" class="ml-4 flex-shrink-0"></v-switch>
+          <v-row align="center" no-gutters>
+            <v-col cols="9">
+              <v-slider
+                v-model="settings.globalMemoryLimitMB"
+                :min="1024" :max="globalMemoryMaxMB" :step="512"
+                color="primary" density="compact" hide-details
+              ></v-slider>
+            </v-col>
+            <v-col cols="3" class="pl-3">
+              <v-chip size="small" class="font-weight-bold">{{ formatMB(settings.globalMemoryLimitMB) }}</v-chip>
+            </v-col>
+          </v-row>
+          <div class="text-caption text-grey mt-1">
+            Weight-residency budget: <strong>{{ formatMB(weightResidencyMB) }}</strong>
+            · max {{ formatMB(globalMemoryMaxMB) }} (total RAM − 1&nbsp;GiB)
+          </div>
         </div>
-        <v-divider class="my-3"></v-divider>
+
+        <v-divider class="my-4"></v-divider>
+
+        <!-- 2. Auto performance governor -->
         <div class="d-flex align-center justify-space-between">
           <div>
             <div class="text-subtitle-2 font-weight-medium mb-1">Auto performance governor</div>
@@ -113,13 +128,13 @@
           </div>
           <v-switch v-model="settings.managePerformance" color="primary" hide-details density="compact" class="ml-4 flex-shrink-0"></v-switch>
         </div>
-      </v-card>
 
-      <!-- Llama Runtime (libllama.so + ggml-ork for .gguf serving) -->
-      <v-card class="glass-card pa-5 mb-5">
-        <div class="section-heading mb-4">
-          <v-icon color="teal" size="18" class="mr-2">mdi-lightning-bolt</v-icon>
-          Llama Runtime (Open NPU)
+        <v-divider class="my-4"></v-divider>
+
+        <!-- 3. Llama runtime (libllama.so + ggml-ork for .gguf serving) -->
+        <div class="d-flex align-center mb-2">
+          <v-icon color="teal" size="16" class="mr-2">mdi-lightning-bolt</v-icon>
+          <span class="text-subtitle-2 font-weight-bold">Llama Runtime (Open NPU)</span>
         </div>
         <div class="d-flex align-center justify-space-between mb-3">
           <div>
@@ -137,7 +152,6 @@
           </div>
           <v-switch :model-value="settings.autoDownloadLlamaRuntime" @update:model-value="onToggleAutoLlama" color="teal" hide-details density="compact" class="ml-4 flex-shrink-0"></v-switch>
         </div>
-        <v-divider class="my-3"></v-divider>
         <div class="d-flex align-center gap-3 flex-wrap">
           <v-chip size="small" :color="llamaRuntime.available ? 'success' : 'grey'" variant="tonal">
             <v-icon start size="14">{{ llamaRuntime.available ? 'mdi-check-circle' : 'mdi-close-circle' }}</v-icon>
@@ -156,6 +170,42 @@
           <v-btn size="small" variant="tonal" color="teal" :loading="llamaSyncing"
             prepend-icon="mdi-download" @click="downloadLlama">
             {{ llamaRuntime.available ? 'Sync / update' : 'Download' }}
+          </v-btn>
+        </div>
+
+        <v-divider class="my-4"></v-divider>
+
+        <!-- 4. RKLLM runtimes (vendor librkllmrt.so for .rkllm serving) -->
+        <div class="d-flex align-center mb-2">
+          <v-icon color="primary" size="16" class="mr-2">mdi-cube-outline</v-icon>
+          <span class="text-subtitle-2 font-weight-bold">RKLLM Runtime (Vendor)</span>
+        </div>
+        <div class="d-flex align-center justify-space-between mb-3">
+          <div>
+            <div class="text-subtitle-2 font-weight-medium mb-1">Auto-download rkllm runtimes</div>
+            <div class="text-caption text-grey">
+              Automatically download versioned <code>librkllmrt.so</code> files from
+              <a href="https://github.com/mafischer/rkllm-runtimes" target="_blank" class="text-primary">mafischer/rkllm-runtimes</a>
+              on startup and when a model with an unknown runtime version is loaded.
+              Required to load <code>.rkllm</code> models. Binaries are Apache 2.0 licensed.
+              <span v-if="serverInfo.runtimesDir" class="d-block mt-1">
+                <v-icon size="12" class="mr-1">mdi-folder-outline</v-icon>
+                Downloaded to: <code class="text-caption font-weight-regular">{{ serverInfo.runtimesDir }}</code>
+              </span>
+            </div>
+          </div>
+          <v-switch v-model="settings.autoDownloadRuntimes" color="primary" hide-details density="compact" class="ml-4 flex-shrink-0"></v-switch>
+        </div>
+        <div class="d-flex align-center gap-3 flex-wrap">
+          <v-chip size="small" :color="rkllmRuntime.available ? 'success' : 'grey'" variant="tonal">
+            <v-icon start size="14">{{ rkllmRuntime.available ? 'mdi-check-circle' : 'mdi-close-circle' }}</v-icon>
+            {{ rkllmRuntime.available
+              ? `Installed: rkllm ${rkllmRuntime.version || '?'}` + (rkllmRuntime.count > 1 ? ` (+${rkllmRuntime.count - 1} more)` : '')
+              : 'Not installed' }}
+          </v-chip>
+          <v-btn size="small" variant="tonal" color="primary" :loading="rkllmSyncing"
+            prepend-icon="mdi-download" @click="syncRkllm">
+            Sync / update
           </v-btn>
         </div>
       </v-card>
@@ -696,8 +746,11 @@ export default {
       autoDownloadLlamaRuntime: false,
       mcpInferenceEnabled: false,
       managePerformance: true,
+      globalMemoryLimitMB: 1024,
     },
     llamaRuntime: { available: false, tag: null, llamaVersion: null, orkDriverVersion: null, licenseAccepted: false },
+    rkllmRuntime: { available: false, version: null, count: 0 },
+    rkllmSyncing: false,
     llamaReleases: [],
     llamaSelectedTag: null,
     llamaSyncing: false,
@@ -742,6 +795,16 @@ export default {
       const disk = this.serverInfo.diskTotalMB;
       return disk ? Math.max(1024, Math.floor((disk * 0.8) / 1024) * 1024) : 102400;
     },
+    // Global memory ceiling = total RAM − 1 GiB (OS headroom); round to the slider step.
+    globalMemoryMaxMB() {
+      const ram = this.serverInfo.ramTotalMB;
+      return ram ? Math.max(1024, Math.floor((ram - 1024) / 512) * 512) : 4096;
+    },
+    // Weight-residency budget the NPU actually gets = global limit − hot cache (when on).
+    weightResidencyMB() {
+      const hot = this.settings.cacheEnabled ? (this.settings.cacheHotLimitMB || 0) : 0;
+      return Math.max(1024, (this.settings.globalMemoryLimitMB || 0) - hot);
+    },
     // RK3588 / RK3588S — gate the strong "not recommended" MoE-offload disclaimer.
     // (The 4 GiB IOVA cap + LPDDR4X bandwidth are what make M=1 decode lose vs CPU.)
     isRk3588() {
@@ -754,6 +817,7 @@ export default {
     this.fetchMcpServers();
     this.fetchLlamaRuntime();
     this.fetchLlamaReleases();
+    this.fetchRkllmRuntime();
     // Poll prefix-cache stats so the observability figures update live as
     // inference populates the cache (the page otherwise only fetched on mount).
     this.cacheStatsTimer = setInterval(() => this.fetchCacheStats(), 4000);
@@ -808,10 +872,41 @@ export default {
         this.settings.autoDownloadLlamaRuntime  = s.autoDownloadLlamaRuntime ?? false;
         this.settings.mcpInferenceEnabled   = s.mcpInferenceEnabled ?? false;
         this.settings.managePerformance     = s.managePerformance ?? true;
+        // Clamp to the detected ceiling (total RAM − 1 GiB); default to that ceiling
+        // when unset so a fresh install starts at the maximum safe budget.
+        this.settings.globalMemoryLimitMB   = Math.min(s.globalMemoryLimitMB ?? this.globalMemoryMaxMB, this.globalMemoryMaxMB);
         this.cacheStats = data.cacheStats || null;
       } catch (e) {}
     },
 
+    async fetchRkllmRuntime() {
+      try {
+        const res = await fetch('/api/admin/runtimes');
+        if (res.ok) {
+          const d = await res.json();
+          const eff = d.effectiveRuntime || {};
+          this.rkllmRuntime = {
+            available: !!eff.exists,
+            version: eff.version || null,
+            count: Array.isArray(d.runtimes) ? d.runtimes.length : 0,
+          };
+        }
+      } catch (e) {}
+    },
+    async syncRkllm() {
+      this.rkllmSyncing = true;
+      try {
+        const res = await fetch('/api/admin/runtimes/sync', { method: 'POST' });
+        if (res.ok) this.notify('rkllm runtime sync started', 'success');
+        else this.notify('Failed to start rkllm sync', 'error');
+        // Refresh the installed status shortly after the background sync kicks off.
+        setTimeout(() => this.fetchRkllmRuntime(), 2500);
+      } catch (e) {
+        this.notify('Network error', 'error');
+      } finally {
+        this.rkllmSyncing = false;
+      }
+    },
     async fetchLlamaRuntime() {
       try {
         const res = await fetch('/api/admin/llama-runtime');

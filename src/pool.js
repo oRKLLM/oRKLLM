@@ -1,6 +1,7 @@
 import { fork, execFileSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { fileURLToPath } from 'url';
 import { MODELS_DIR, LIBRKLLMRT_PATH, RUNTIMES_DIR, LLAMA_RUNTIME_DIR, parseRuntimeVersion, getNpuCoreCount } from './config.js';
 import { dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings, dbListEnabledMcpServers } from './db.js';
@@ -44,7 +45,7 @@ function ggufQuantBits(name) {
   return m ? parseInt(m[1], 10) : 4; // unknown → assume 4-bit (the common case)
 }
 
-function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, orkPersist = null, orkMoeNpu = false } = {}) {
+function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, orkPersist = null, orkMoeNpu = false, wcacheBudgetMB = null } = {}) {
   const dirs = [LLAMA_RUNTIME_DIR, RUNTIMES_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean);
   const env = { ...process.env, LD_LIBRARY_PATH: dirs.join(':') };
   // Keep the GPU idle unless something explicitly wants it (TurboQuant KV). With
@@ -69,7 +70,25 @@ function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, o
   // so it must be set at fork time. Only set when the user opts in (default off →
   // unset → behavior unchanged); it's a no-op for the librkllmrt backend.
   if (orkMoeNpu) env.ORK_MOE_NPU = '1';
+  // Global process-RAM cap → ork-driver's NPU weight-residency (wcache) budget.
+  // This is the UI's global memory limit MINUS the hot (prefix) cache reservation,
+  // so total process RAM stays under the user's cap. ork-driver reads
+  // ORK_WCACHE_BUDGET_MB at init (fork time); a model that fits stays fully
+  // resident (no eviction/churn), and one that doesn't cycles layers within it.
+  if (wcacheBudgetMB && wcacheBudgetMB > 0) env.ORK_WCACHE_BUDGET_MB = String(Math.round(wcacheBudgetMB));
   return env;
+}
+
+// Resolve the NPU weight-residency budget (MB) from the global memory limit and
+// the hot-cache reservation. Default limit = total RAM − 1 GiB; when the prefix
+// cache is on, its hot budget is carved out first (strictly enforced). Floors at
+// 1 GiB so a tiny/misconfigured cap can never starve the runtime.
+function resolveWcacheBudgetMB() {
+  const defaultMB = Math.max(1024, Math.floor(os.totalmem() / 1048576) - 1024);
+  const globalMB = parseInt(dbGetSetting('global_memory_limit_mb') ?? String(defaultMB)) || defaultMB;
+  const hotMB = dbGetSetting('cache_enabled') === '1'
+    ? (parseInt(dbGetSetting('cache_hot_limit_mb') ?? '512') || 0) : 0;
+  return Math.max(1024, globalMB - hotMB);
 }
 
 // Per-worker slot — each holds one loaded model and one worker process.
@@ -546,6 +565,8 @@ class EnginePool {
         orkMoeNpu: options.ork_moe_npu,
         // auto-load a pre-built .orkpack for this model (fast pre-tiled load); none → normal pack path
         orkPersist: hasOrkpack(modelPath) ? orkpackPathFor(modelPath) : null,
+        // global process-RAM cap minus the hot prefix cache → NPU residency budget
+        wcacheBudgetMB: resolveWcacheBudgetMB(),
       }) });
       pinWorkerToBig(slot.worker.pid);   // inference belongs on the big cores (orchestration is pinned little)
 

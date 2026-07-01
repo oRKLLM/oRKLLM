@@ -570,6 +570,11 @@ export default async function adminRoutes(fastify, options) {
         langfuseSecretKey:  dbGetSetting('langfuse_secret_key') ?? '',
         mcpInferenceEnabled: dbGetSetting('mcp_inference_enabled') === '1',
         managePerformance: (dbGetSetting('manage_performance') ?? '1') === '1',
+        // Global process-RAM cap (MB). Default: total RAM − 1 GiB (OS headroom).
+        // Bounds: [1 GiB, total RAM − 1 GiB]. Strictly enforced — the NPU
+        // weight-residency budget is this minus the hot (prefix) cache.
+        globalMemoryLimitMB: parseInt(dbGetSetting('global_memory_limit_mb')
+          ?? String(Math.max(1024, Math.floor(os.totalmem() / 1048576) - 1024))),
       },
       cacheStats: getCacheStats()
     };
@@ -583,7 +588,7 @@ export default async function adminRoutes(fastify, options) {
             localAuthDisabled, trustedProxy, autoDownloadRuntimes, autoDownloadLlamaRuntime, npuPoolSize,
             moeNpuOffload,
             langfuseEnabled, langfuseBaseUrl, langfusePublicKey, langfuseSecretKey,
-            mcpInferenceEnabled, managePerformance,
+            mcpInferenceEnabled, managePerformance, globalMemoryLimitMB,
           } = request.body || {};
     if (typeof idleTimeoutMinutes === 'number') {
       pool.setIdleTimeout(idleTimeoutMinutes);
@@ -622,6 +627,14 @@ export default async function adminRoutes(fastify, options) {
     if (typeof mcpInferenceEnabled === 'boolean') {
       dbSetSetting('mcp_inference_enabled', mcpInferenceEnabled ? '1' : '0');
       if (mcpInferenceEnabled) pool.triggerMcpCacheGeneration?.();
+    }
+    // Global process-RAM cap. Clamp to [1 GiB, total RAM − 1 GiB]; takes effect
+    // on the next model (re)load (passed to the worker as ORK_WCACHE_BUDGET_MB,
+    // minus the hot-cache reservation). Strictly enforced.
+    if (typeof globalMemoryLimitMB === 'number') {
+      const maxMB = Math.max(1024, Math.floor(os.totalmem() / 1048576) - 1024);
+      dbSetSetting('global_memory_limit_mb',
+        String(Math.min(Math.max(1024, Math.round(globalMemoryLimitMB)), maxMB)));
     }
     if (typeof managePerformance === 'boolean') {
       dbSetSetting('manage_performance', managePerformance ? '1' : '0');
