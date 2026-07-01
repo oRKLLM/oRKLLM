@@ -241,6 +241,22 @@ fastify.get('/ws/logs', { websocket: true }, async (connection, req) => {
   });
 });
 
+// Lightweight health socket for the navbar connection indicator — replaces the 5s /api/version
+// poll (which hit the server once per client every 5s and, behind a proxy, logged an access line
+// each time). The dot is "connected" while this socket is open; a periodic server heartbeat lets
+// the client detect a dead link (a dropped TCP connection doesn't reliably fire onclose). No
+// request/response cycle, so nothing to log.
+fastify.get('/ws/health', { websocket: true }, async (connection, req) => {
+  const socket = connection.socket || connection;
+  try { socket.send('♥'); } catch {}
+  const hb = setInterval(() => { try { if (socket.readyState === 1) socket.send('♥'); } catch {} }, 15000);
+  await new Promise((resolve) => {
+    const end = () => { clearInterval(hb); resolve(); };
+    socket.on('close', end);
+    socket.on('error', end);
+  });
+});
+
 // Setup Static Files (serving Vue SPA)
 const distPath = path.join(process.cwd(), 'frontend', 'dist');
 

@@ -30,8 +30,8 @@
             style="font-size: 0.65rem; line-height: 1; opacity: 0.7;"
             :title="`View the v${appVersion} release on GitHub`"
           >v{{ appVersion }}</a>
-          <!-- Backend connection indicator — green when the backend responds, red when it doesn't.
-               Mirrors the Logs page's connected/disconnected dot; polls /api/version. -->
+          <!-- Backend connection indicator — green while the /ws/health socket is open, red on
+               close/error. Mirrors the Logs page's connected/disconnected dot (WebSocket, not polling). -->
           <v-icon
             :color="backendConnected ? 'success' : 'error'"
             size="10"
@@ -185,11 +185,10 @@ export default {
     ]
   }),
   mounted() {
-    this.checkBackendHealth();
-    this._healthTimer = setInterval(this.checkBackendHealth, 5000);
+    this.connectHealthWs();
   },
   beforeUnmount() {
-    if (this._healthTimer) { clearInterval(this._healthTimer); this._healthTimer = null; }
+    this.disconnectHealthWs();
   },
   methods: {
     isActive(path) {
@@ -198,15 +197,33 @@ export default {
       }
       return this.route.path.startsWith(path);
     },
-    // Poll a lightweight public endpoint; green when it responds, red otherwise (same behavior
-    // as the Logs page's WebSocket connected/disconnected dot).
-    async checkBackendHealth() {
+    // Backend connection indicator via WebSocket (replaces a 5s /api/version poll): green while the
+    // socket is open, red on close/error. A server heartbeat arms a watchdog so a dropped link that
+    // doesn't fire onclose still flips the dot red; the socket auto-reconnects.
+    connectHealthWs() {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       try {
-        const res = await fetch('/api/version', { cache: 'no-store' });
-        this.backendConnected = res.ok;
-      } catch {
+        this._healthWs = new WebSocket(`${proto}//${window.location.host}/ws/health`);
+      } catch { this.backendConnected = false; return; }
+      const up = () => { this.backendConnected = true; this._armHealthWatchdog(); };
+      this._healthWs.onopen = up;
+      this._healthWs.onmessage = up;   // heartbeat
+      this._healthWs.onerror = () => { this.backendConnected = false; };
+      this._healthWs.onclose = () => {
         this.backendConnected = false;
-      }
+        clearTimeout(this._healthWatch);
+        this._healthReconnect = setTimeout(() => this.connectHealthWs(), 5000);
+      };
+    },
+    // If no heartbeat arrives within ~2.5 intervals, treat the link as dead.
+    _armHealthWatchdog() {
+      clearTimeout(this._healthWatch);
+      this._healthWatch = setTimeout(() => { this.backendConnected = false; }, 38000);
+    },
+    disconnectHealthWs() {
+      clearTimeout(this._healthWatch);
+      clearTimeout(this._healthReconnect);
+      if (this._healthWs) { this._healthWs.onclose = null; try { this._healthWs.close(); } catch {} this._healthWs = null; }
     }
   }
 };
