@@ -106,10 +106,11 @@ export default {
     filteredLogs() {
       let lines = this.allLogs;
 
-      // Filter by level
+      // Filter by the PARSED level of each line (not a fragile substring match, which broke on
+      // Pino's numeric levels and false-matched any line containing the word "error"/"warn").
       if (this.levelFilter !== 'ALL') {
-        const level = this.levelFilter.toUpperCase();
-        lines = lines.filter(l => l.toUpperCase().includes(level));
+        const want = this.levelFilter.toLowerCase();
+        lines = lines.filter(l => this.lineLevel(l) === want);
       }
 
       // Limit lines
@@ -135,6 +136,27 @@ export default {
     }
   },
   methods: {
+    // Determine a line's log level. Handles both shapes the backend streams: Pino/fastify JSON
+    // (a `level` field — numeric 10/20/30/40/50/60 or a text label) and plain console.* lines that
+    // the backend prefixes with `[INFO]`/`[WARN]`/`[ERROR]`. Anything else defaults to info.
+    lineLevel(line) {
+      const s = (line || '').trim();
+      if (s.startsWith('{')) {
+        try {
+          const o = JSON.parse(s);
+          if (o && o.level != null) {
+            if (typeof o.level === 'number') {
+              return { 10: 'trace', 20: 'debug', 30: 'info', 40: 'warn', 50: 'error', 60: 'error' }[o.level] || 'info';
+            }
+            const t = String(o.level).toLowerCase();
+            return t === 'fatal' ? 'error' : t;
+          }
+        } catch { /* not JSON after all — fall through */ }
+      }
+      const m = /^\[(TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\]/i.exec(s);
+      if (m) { const t = m[1].toLowerCase(); return t === 'fatal' ? 'error' : t; }
+      return 'info';
+    },
     async fetchAuth() {
       try {
         const res = await fetch('/api/admin/auth-status');

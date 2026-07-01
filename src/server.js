@@ -28,29 +28,51 @@ const __dirname = path.dirname(__filename);
 const logBuffer = [];
 const logClients = new Set();
 
-const originalStdoutWrite = process.stdout.write;
-process.stdout.write = function (chunk, encoding, callback) {
-  const msg = chunk.toString();
-  logBuffer.push(msg);
+// The log viewer filters by level (INFO/WARN/ERROR), so every streamed line needs a parseable
+// level. Two line shapes reach the byte stream: (1) Pino/fastify.log JSON — carries its own
+// `level` (the frontend parses it); (2) plain console.* text — has no level token, and warn vs
+// error can't be told apart from the text. So we wrap console.* to record the intended level of
+// the call in flight (`_emitLevel`); the write hook then prefixes plain lines with `[LEVEL]`.
+// The REAL stdout/stderr still get the untagged bytes, so systemd/journalctl are unchanged.
+let _emitLevel = null;
+for (const [method, lvl] of [['log', 'info'], ['info', 'info'], ['debug', 'debug'], ['warn', 'warn'], ['error', 'error']]) {
+  const orig = typeof console[method] === 'function' ? console[method].bind(console) : null;
+  if (!orig) continue;
+  console[method] = (...args) => {
+    const prev = _emitLevel; _emitLevel = lvl;
+    try { return orig(...args); } finally { _emitLevel = prev; }
+  };
+}
+
+// Tag each plain line with its level for the viewer; leave Pino JSON lines (which already carry a
+// `level`) untouched so the frontend parses them directly and the display stays clean.
+function tagForViewer(text, fromStderr) {
+  const parts = text.split('\n');
+  return parts.map((ln, i) => {
+    if (ln === '' && i === parts.length - 1) return ln;   // keep the trailing newline
+    if (ln.trimStart().startsWith('{')) return ln;         // structured (Pino) — has its own level
+    const lvl = _emitLevel || (fromStderr ? 'error' : 'info');
+    return `[${lvl.toUpperCase()}] ${ln}`;
+  }).join('\n');
+}
+
+function broadcastLog(tagged) {
+  logBuffer.push(tagged);
   if (logBuffer.length > 200) logBuffer.shift();
   for (const client of logClients) {
-    try {
-      if (client.readyState === 1) client.send(msg);
-    } catch (err) {}
+    try { if (client.readyState === 1) client.send(tagged); } catch (err) {}
   }
+}
+
+const originalStdoutWrite = process.stdout.write;
+process.stdout.write = function (chunk, encoding, callback) {
+  broadcastLog(tagForViewer(chunk.toString(), false));
   return originalStdoutWrite.apply(process.stdout, arguments);
 };
 
 const originalStderrWrite = process.stderr.write;
 process.stderr.write = function (chunk, encoding, callback) {
-  const msg = chunk.toString();
-  logBuffer.push(msg);
-  if (logBuffer.length > 200) logBuffer.shift();
-  for (const client of logClients) {
-    try {
-      if (client.readyState === 1) client.send(msg);
-    } catch (err) {}
-  }
+  broadcastLog(tagForViewer(chunk.toString(), true));
   return originalStderrWrite.apply(process.stderr, arguments);
 };
 
@@ -80,7 +102,17 @@ function getTrustedProxy() {
 // Create Fastify Server
 const trustProxyCfg = getTrustedProxy();
 const fastify = Fastify({
-  logger: { level: 'info' },
+  // Pino writes numeric levels by default (info=30, warn=40, error=50). Emit the label instead
+  // so log lines read "level":"info" rather than "level":30.
+  logger: {
+    level: 'info',
+    formatters: { level: (label) => ({ level: label }) },
+  },
+  // Suppress the per-request "incoming request" / "request completed" access logs. The UI polls
+  // several endpoints on short timers (version/health every 5s, metrics + cache-stats every ~4s,
+  // /v1/models, conversion progress), which otherwise floods the log with responseTime~0 200s.
+  // Real events are logged explicitly via console.log / fastify.log.error, so nothing useful is lost.
+  disableRequestLogging: true,
   trustProxy: trustProxyCfg,
 });
 
