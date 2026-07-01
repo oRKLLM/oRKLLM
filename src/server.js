@@ -78,10 +78,39 @@ function getTrustedProxy() {
 }
 
 // Create Fastify Server
+const trustProxyCfg = getTrustedProxy();
 const fastify = Fastify({
   logger: { level: 'info' },
-  trustProxy: getTrustedProxy(),
+  trustProxy: trustProxyCfg,
 });
+
+// Secure-by-default proxy gate: when NO proxy is trusted (setting empty / false),
+// reject any request that arrives carrying proxy forwarding headers. A forwarded
+// request means something upstream is proxying us that we were never told to trust;
+// rather than silently fall back to the (spoofable) socket IP, refuse it until an
+// admin sets Trusted Proxy. Running behind a reverse proxy is thus an explicit
+// opt-in. Read once at startup (like trustProxy itself) — changing the setting
+// needs a restart.
+//
+// NOTE: this is a policy gate, not a hard security boundary. Forwarding headers are
+// client-settable, so this cannot truly distinguish a real proxy from a crafted
+// header (a direct client can omit them, or forge them). The real boundary for
+// "reachable only via the proxy" is the network layer (bind address / firewall).
+if (!trustProxyCfg) {
+  const FORWARD_HEADERS = [
+    'x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-host',
+    'x-forwarded-port', 'forwarded',
+  ];
+  fastify.addHook('onRequest', async (req, reply) => {
+    if (FORWARD_HEADERS.some(h => req.headers[h] !== undefined)) {
+      return reply.code(403).send({
+        error: 'Proxy forwarding headers present but no trusted proxy is configured. '
+             + 'Set Trusted Proxy in Site Settings (or the ORKLLM_TRUSTED_PROXY env var) '
+             + 'to run oRKLLM behind a reverse proxy.',
+      });
+    }
+  });
+}
 
 // Resilience: a single unguarded throw in an async/event context (e.g. a worker
 // swap race in the pool) must never crash the whole server — that drops every

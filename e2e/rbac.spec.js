@@ -154,6 +154,19 @@ test('Trusted proxy: comma-separated CIDRs are saved and returned verbatim', asy
   });
 });
 
+test('Trusted proxy: forwarded requests are rejected when no proxy is trusted', async ({ page }) => {
+  // The test server boots with trusted_proxy empty (trustProxy:false), so the
+  // secure-by-default gate is active: a request carrying X-Forwarded-For must 403,
+  // while an otherwise-identical request without forwarding headers succeeds.
+  const forwarded = await page.request.get('/api/version', {
+    headers: { 'X-Forwarded-For': '1.2.3.4' },
+  });
+  expect(forwarded.status()).toBe(403);
+
+  const direct = await page.request.get('/api/version');
+  expect(direct.status()).toBe(200);
+});
+
 // ---------------------------------------------------------------------------
 // Test 1: Site Management link visible only for admin
 // ---------------------------------------------------------------------------

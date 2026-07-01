@@ -64,6 +64,8 @@
           Use <code>true</code> to trust all proxies, or enter one or more IPs, CIDRs, or hostnames separated by commas
           (e.g. <code>10.0.0.1, 10.0.0.2</code> or <code>10.0.0.0/8, 172.16.0.0/12</code>).
           Required when running behind nginx for OIDC/SAML redirect URIs to use the correct scheme.
+          <strong>When left empty, requests that arrive with proxy forwarding headers are rejected (403)</strong> —
+          running behind a reverse proxy is an explicit opt-in, so set this before putting oRKLLM behind one.
           Takes effect on next server restart.
         </div>
         <v-text-field

@@ -269,6 +269,7 @@ Admin pastes IdP metadata XML; SP metadata at `GET /metadata`. `GET /login` → 
 Configure `ORKLLM_TRUSTED_PROXY` env var or the `trusted_proxy` setting in Site Settings.
 Required when running behind nginx so `X-Forwarded-Proto` is honoured for OIDC redirect URIs.
 Values: `true` (all proxies), a single IP/CIDR (e.g. `10.0.0.0/8`), a comma-separated list of IPs/CIDRs/hostnames (e.g. `10.0.0.1, 172.16.0.0/12`), or empty (disabled). Multiple entries are parsed into an array and passed directly to Fastify's `trustProxy`.
+**Secure-by-default:** when no proxy is trusted (empty / false), a global `onRequest` hook rejects any request carrying proxy forwarding headers (`X-Forwarded-*` / `Forwarded`) with a 403 — running behind a reverse proxy is an explicit opt-in. This is a policy gate, not a hard boundary (forwarding headers are client-settable); the network layer (bind address / firewall) is the real boundary.
 Takes effect on next server restart.
 
 ### Keycloak Configuration
