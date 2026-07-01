@@ -18,12 +18,12 @@
       >oRKLLM</span>
       <!-- Version text hidden on mobile — shown in user drawer instead. Links to the repo. -->
       <a
-        href="https://github.com/oRKLLM/oRKLLM"
+        :href="`https://github.com/oRKLLM/oRKLLM/releases/tag/v${appVersion}`"
         target="_blank"
         rel="noopener noreferrer"
         class="text-primary d-none d-sm-flex text-decoration-none"
         style="font-size: 0.65rem; line-height: 1; margin-top: 2px; opacity: 0.7;"
-        title="View oRKLLM on GitHub"
+        :title="`View the v${appVersion} release on GitHub`"
       >v{{ appVersion }}</a>
       <!-- Backend connection indicator — green when the backend responds, red when it doesn't.
            Mirrors the Logs page's connected/disconnected dot; polls /api/version. -->
