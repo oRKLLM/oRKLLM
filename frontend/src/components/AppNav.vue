@@ -25,6 +25,15 @@
         style="font-size: 0.65rem; line-height: 1; margin-top: 2px; opacity: 0.7;"
         title="View oRKLLM on GitHub"
       >v{{ appVersion }}</a>
+      <!-- Backend connection indicator — green when the backend responds, red when it doesn't.
+           Mirrors the Logs page's connected/disconnected dot; polls /api/version. -->
+      <v-icon
+        :color="backendConnected ? 'success' : 'error'"
+        size="10"
+        class="ml-1"
+        style="margin-top: 2px;"
+        :title="backendConnected ? 'Backend connected' : 'Backend disconnected'"
+      >mdi-circle</v-icon>
     </v-app-bar-title>
 
     <!-- Desktop/tablet nav buttons — absolutely centred so left (brand) and right (account) widths don't matter -->
@@ -159,6 +168,7 @@ export default {
   data: () => ({
     drawerOpen: false,
     mobileNavOpen: false,
+    backendConnected: false,
     navItems: [
       { path: '/',         label: 'Dashboard', icon: 'mdi-view-dashboard-outline' },
       { path: '/models',   label: 'Models',    icon: 'mdi-chip' },
@@ -169,12 +179,29 @@ export default {
       { path: '/help',     label: 'Help',      icon: 'mdi-lifebuoy' },
     ]
   }),
+  mounted() {
+    this.checkBackendHealth();
+    this._healthTimer = setInterval(this.checkBackendHealth, 5000);
+  },
+  beforeUnmount() {
+    if (this._healthTimer) { clearInterval(this._healthTimer); this._healthTimer = null; }
+  },
   methods: {
     isActive(path) {
       if (path === '/') {
         return this.route.path === '/';
       }
       return this.route.path.startsWith(path);
+    },
+    // Poll a lightweight public endpoint; green when it responds, red otherwise (same behavior
+    // as the Logs page's WebSocket connected/disconnected dot).
+    async checkBackendHealth() {
+      try {
+        const res = await fetch('/api/version', { cache: 'no-store' });
+        this.backendConnected = res.ok;
+      } catch {
+        this.backendConnected = false;
+      }
     }
   }
 };
