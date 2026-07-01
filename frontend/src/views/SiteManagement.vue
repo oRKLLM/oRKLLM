@@ -101,8 +101,8 @@
                     {{ item.is_active !== false ? 'Active' : 'Inactive' }}
                   </v-chip>
                 </template>
-                <template v-slot:item.last_login="{ item }">
-                  <span class="text-caption">{{ item.last_login ? formatDateTime(item.last_login) : 'Never' }}</span>
+                <template v-slot:item.last_login_at="{ item }">
+                  <span class="text-caption">{{ item.last_login_at ? formatDateTime(item.last_login_at) : 'Never' }}</span>
                 </template>
                 <template v-slot:item.actions="{ item }">
                   <div class="d-flex align-center gap-1">
@@ -924,7 +924,7 @@ export default {
       { title: 'Role', key: 'role', sortable: true },
       { title: 'Provider', key: 'authProvider', sortable: false },
       { title: 'Status', key: 'is_active', sortable: false },
-      { title: 'Last Login', key: 'last_login', sortable: true },
+      { title: 'Last Login', key: 'last_login_at', sortable: true },
       { title: 'Actions', key: 'actions', sortable: false },
     ],
 
