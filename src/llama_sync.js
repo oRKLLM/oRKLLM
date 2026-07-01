@@ -4,6 +4,7 @@ import https from 'https';
 import zlib from 'zlib';
 import crypto from 'crypto';
 import { LLAMA_RUNTIME_DIR, LLAMA_RUNTIME_MIRRORS } from './config.js';
+import { getConversionScheduler } from './conversion.js';
 
 function mirrorApi(slug) {
   return `https://api.github.com/repos/${slug}/releases`;
@@ -229,6 +230,11 @@ export async function syncLlamaRuntime(tag = null, { force = false } = {}) {
       manifest.assetSha  = 'sha256:' + crypto.createHash('sha256').update(buf).digest('hex');
       fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
       console.log(`[LlamaSync] Installed llama runtime ${release.tag_name} to ${LLAMA_RUNTIME_DIR}`);
+      // Runtime changed → re-check every model's .orkpack against the new runtime and rebuild any
+      // that are now stale (the pack tiling/format can differ across runtime versions). The manifest
+      // above is already written, so orkpackRuntimeId() reflects the new runtime. Covers the manual
+      // Settings sync, auto-download, and the model-load auto-fetch — every path that installs a runtime.
+      try { getConversionScheduler()?.revalidateForRuntime(); } catch (e) { console.warn('[LlamaSync] orkpack revalidation failed:', e.message); }
       return;
     } catch (e) {
       console.error(`[LlamaSync] Failed to download from ${slug}: ${e.message}`);

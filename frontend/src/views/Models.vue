@@ -162,6 +162,10 @@
                                 title="Pre-pack failed — will convert on next load">
                           <v-icon start size="12">mdi-alert-outline</v-icon>ORK conversion failed
                         </v-chip>
+                        <v-chip v-else-if="model.orkConversion?.status === 'stale'" size="x-small" color="warning" variant="tonal"
+                                title="The .orkpack was built by a different llama runtime and is being rebuilt for the current one">
+                          <v-icon start size="12">mdi-refresh</v-icon>ORK pack stale — rebuilding
+                        </v-chip>
                       </div>
                       <!-- Live conversion progress (GGUF → NPU-native pack). Foregrounded if the user hits Load. -->
                       <div v-if="model.orkConversion?.status === 'converting'" class="mt-2" style="max-width: 360px;">

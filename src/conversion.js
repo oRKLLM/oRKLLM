@@ -20,8 +20,44 @@ import { isTrailingGgufShard } from './gguf.js';
 const RETRY_MS = 30_000;
 
 export function orkpackPathFor(absGguf) { return absGguf.replace(/\.gguf$/i, '.orkpack'); }
+// Freshness sidecar: records the llama-runtime identity that BUILT this .orkpack, so a runtime
+// update (which can change the pack tiling/format) can be detected and the pack regenerated.
+export function orkpackMetaPath(absGguf) { return orkpackPathFor(absGguf) + '.meta.json'; }
 export function hasOrkpack(absGguf) {
   try { return fs.statSync(orkpackPathFor(absGguf)).size > 0; } catch { return false; }
+}
+
+// Identity of the currently-installed llama runtime — the thing that, if it changes, means an
+// existing .orkpack may be tiled/formatted for a different runtime and must be regenerated. The
+// build `tag` (e.g. "b9857-ork") changes on every runtime build, so any runtime update invalidates
+// stale packs. Returns null when the runtime/manifest is absent (then we can't verify → don't churn).
+export function orkpackRuntimeId() {
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(LLAMA_RUNTIME_DIR, 'manifest.json'), 'utf8'));
+    return m.tag || m.orkDriverCommit || m.llamaCommit || null;
+  } catch { return null; }
+}
+
+// A .orkpack is FRESH iff it exists AND its freshness sidecar records the currently-installed
+// runtime. Missing sidecar (built by an older oRKLLM that didn't stamp) or a different runtime id
+// ⇒ stale ⇒ regenerate. When the current runtime id is unknown we cannot verify, so we fall back to
+// mere existence (avoid needlessly discarding a possibly-good cache).
+export function isOrkpackFresh(absGguf) {
+  if (!hasOrkpack(absGguf)) return false;
+  const cur = orkpackRuntimeId();
+  if (!cur) return true;                       // can't determine runtime → trust existence
+  try {
+    const meta = JSON.parse(fs.readFileSync(orkpackMetaPath(absGguf), 'utf8'));
+    return meta && meta.runtime === cur;
+  } catch { return false; }                    // no/unreadable sidecar → treat as stale
+}
+
+// Remove a stale .orkpack and all its sidecars (freshness meta, progress json, partial .tmp).
+function removeOrkpack(absGguf) {
+  const pack = orkpackPathFor(absGguf);
+  for (const p of [pack, pack + '.tmp', pack + '.json', orkpackMetaPath(absGguf)]) {
+    try { fs.unlinkSync(p); } catch {}
+  }
 }
 
 export class ConversionScheduler {
@@ -43,19 +79,36 @@ export class ConversionScheduler {
     return cands.find(p => { try { return fs.statSync(p).isFile(); } catch { return false; } }) || null;
   }
 
-  // Walk MODELS_DIR for .gguf without a valid .orkpack (covers manually-dropped models, not just
-  // downloaded ones) and enqueue them. Called at startup and after a download completes.
+  // Walk MODELS_DIR and enqueue every .gguf that needs a (re)build: one with no .orkpack, OR one
+  // whose .orkpack is STALE for the current runtime (built by a different llama runtime — the tiling
+  // /format can change across runtime versions). A stale pack is deleted here so it isn't loaded
+  // (ggml-ork would reject it and re-pack inline every serve); the idle converter rebuilds it fresh.
+  // Called at startup (initialization) AND after a runtime install / user-initiated runtime change.
   scanAndEnqueue() {
+    const cur = orkpackRuntimeId();
+    let invalidated = 0;
     const walk = (dir) => {
       let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
       for (const e of ents) {
         const p = path.join(dir, e.name);
-        if (e.isDirectory()) walk(p);
-        else if (/\.gguf$/i.test(e.name) && !isTrailingGgufShard(e.name) && !hasOrkpack(p)) this.enqueue(path.relative(MODELS_DIR, p));
+        if (e.isDirectory()) { walk(p); continue; }
+        if (!/\.gguf$/i.test(e.name) || isTrailingGgufShard(e.name)) continue;
+        if (hasOrkpack(p) && !isOrkpackFresh(p)) {
+          console.log(`[conversion] stale .orkpack for ${path.relative(MODELS_DIR, p)} (runtime changed → ${cur ?? 'unknown'}) — discarding + rebuilding`);
+          removeOrkpack(p);
+          invalidated++;
+        }
+        if (!hasOrkpack(p)) this.enqueue(path.relative(MODELS_DIR, p));
       }
     };
     walk(MODELS_DIR);
+    if (invalidated) console.log(`[conversion] revalidation: ${invalidated} stale .orkpack(s) discarded for runtime ${cur ?? 'unknown'}`);
+    return invalidated;
   }
+
+  // Public entry point for a runtime change (install / user-initiated switch in Settings): re-check
+  // ALL models against the newly-installed runtime and rebuild any whose cache is now stale.
+  revalidateForRuntime() { return this.scanAndEnqueue(); }
 
   enqueue(rel) {
     if (this.queued.has(rel) || (this.current && this.current.rel === rel)) return;
@@ -114,6 +167,10 @@ export class ConversionScheduler {
       this.queued.delete(rel);
       try { fs.unlinkSync(pack + '.json'); } catch {}
       const built = hasOrkpack(abs);
+      if (built) {
+        // Stamp the runtime that built this pack so a later runtime change invalidates it.
+        try { fs.writeFileSync(orkpackMetaPath(abs), JSON.stringify({ runtime: orkpackRuntimeId(), builtAt: Date.now() })); } catch {}
+      }
       console.log(`[conversion] ${rel}: ${built ? 'converted' : (ok ? 'no .orkpack produced' : 'failed/killed')}`);
       this._pump();
     };

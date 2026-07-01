@@ -11,7 +11,7 @@ import { syncLlamaRuntime, isLlamaRuntimeAvailable } from './llama_sync.js';
 import { eagle3Generate } from './eagle.js';
 import { getAggregatedTools } from './mcp.js';
 import { buildToolSystemPrompt } from './mcp_inference.js';
-import { orkpackPathFor, hasOrkpack } from './conversion.js';
+import { orkpackPathFor, hasOrkpack, isOrkpackFresh } from './conversion.js';
 import { isRecurrentArch, supportsThinkingToggle } from './gguf.js';
 import { cacheKey, getCachePath, tmpCachePath, putCachePath, isCacheEnabled } from './cache.js';
 
@@ -563,8 +563,9 @@ class EnginePool {
         orkHybrid: options.ork_hybrid,
         // experimental MoE-on-NPU expert offload (gguf/ggml-ork only; default off, set per-fork)
         orkMoeNpu: options.ork_moe_npu,
-        // auto-load a pre-built .orkpack for this model (fast pre-tiled load); none → normal pack path
-        orkPersist: hasOrkpack(modelPath) ? orkpackPathFor(modelPath) : null,
+        // auto-load a pre-built .orkpack ONLY if it's fresh for the current runtime (a stale pack from
+        // an old runtime would be rejected by ggml-ork and re-packed inline every serve); none → normal pack path
+        orkPersist: isOrkpackFresh(modelPath) ? orkpackPathFor(modelPath) : null,
         // global process-RAM cap minus the hot prefix cache → NPU residency budget
         wcacheBudgetMB: resolveWcacheBudgetMB(),
       }) });

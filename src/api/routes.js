@@ -3,6 +3,7 @@ import path from 'path';
 import { MODELS_DIR, parseRuntimeVersion } from '../config.js';
 import { supportsThinkingToggle, isRecurrentArch, isTrailingGgufShard, ggufDisplayName } from '../gguf.js';
 import pool from '../pool.js';
+import { isOrkpackFresh, hasOrkpack } from '../conversion.js';
 import { recordRequest } from '../stats.js';
 import { dbGetModelSettings, dbSetModelSettings, dbGetSetting, dbListEnabledMcpServers } from '../db.js';
 import { cacheKey, getCachePath, putCachePath, tmpCachePath, isCacheEnabled, getMaxContextTokens, resolveSegmentsCache } from '../cache.js';
@@ -122,11 +123,17 @@ export default async function apiRoutes(fastify, options) {
         // `<model>.orkpack` present → done; sidecar `<model>.orkpack.json` → queued/converting/error.
         let orkConversion;
         if (isGguf) {
-          const packPath = path.join(MODELS_DIR, file).replace(/\.gguf$/i, '.orkpack');
-          try { const st = fs.statSync(packPath); if (st.size > 0) orkConversion = { status: 'done', packedBytes: st.size }; } catch {}
-          if (!orkConversion) {
-            try { const s = JSON.parse(fs.readFileSync(packPath + '.json', 'utf8'));
-              if (s && s.status) orkConversion = { status: s.status, progress: Math.max(0, Math.min(100, Math.round(s.progress || 0))) }; } catch {}
+          const absGguf = path.join(MODELS_DIR, file);
+          const packPath = absGguf.replace(/\.gguf$/i, '.orkpack');
+          // A rebuild in progress (sidecar) takes priority; then a pack that's DONE only if it's
+          // fresh for the current runtime — a pack present but stale (built by a different runtime)
+          // reports 'stale' rather than 'done', so the UI never claims a usable cache exists when
+          // it's about to be regenerated.
+          try { const s = JSON.parse(fs.readFileSync(packPath + '.json', 'utf8'));
+            if (s && s.status) orkConversion = { status: s.status, progress: Math.max(0, Math.min(100, Math.round(s.progress || 0))) }; } catch {}
+          if (!orkConversion && hasOrkpack(absGguf)) {
+            if (isOrkpackFresh(absGguf)) { try { orkConversion = { status: 'done', packedBytes: fs.statSync(packPath).size }; } catch {} }
+            else orkConversion = { status: 'stale' };
           }
           if (!orkConversion) orkConversion = { status: 'none' };
         }
