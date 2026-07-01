@@ -58,7 +58,7 @@
                 Auto-download rkllm runtime versions
                 <span class="text-grey text-caption d-block">
                   Downloads pre-built <code>librkllmrt.so</code> files from
-                  <a href="https://github.com/mafischer/rkllm-runtimes" target="_blank" class="text-primary">mafischer/rkllm-runtimes</a>
+                  <a href="https://github.com/oRKLLM/rkllm-runtimes" target="_blank" class="text-primary">oRKLLM/rkllm-runtimes</a>
                   for automatic model compatibility matching. Binaries are Apache 2.0 licensed.
                 </span>
               </span>

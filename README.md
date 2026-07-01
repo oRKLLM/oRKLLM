@@ -261,7 +261,7 @@ npm run dev:server
 | `ORKLLM_DB_PATH` | `~/.config/orkllm/auth.db` | SQLite database path |
 | `ORKLLM_TRUSTED_PROXY` | *(unset)* | `true` (all), a single IP/CIDR, or comma-separated IPs/CIDRs to trust `X-Forwarded-*` headers. **When unset, requests carrying proxy forwarding headers are rejected (403)** — running behind a reverse proxy is an explicit opt-in |
 | `ORKLLM_RUNTIMES_DIR` | `~/.config/orkllm/runtimes` | Directory of versioned `librkllmrt-aarch64-vX.Y.Z.so` files for automatic runtime matching |
-| `ORKLLM_RUNTIME_MIRRORS` | `oRKLLM/rkllm-runtimes,mafischer/rkllm-runtimes` | Comma-separated list of GitHub repo slugs tried in order when downloading runtime `.so` files — first mirror that has the version wins |
+| `ORKLLM_RUNTIME_MIRRORS` | `oRKLLM/rkllm-runtimes` | Comma-separated list of GitHub repo slugs tried in order when downloading runtime `.so` files — first mirror that has the version wins |
 | `ORKLLM_LLAMA_RUNTIME_DIR` | `~/.config/orkllm/llama-runtime` | Directory for the `libllama.so` + ggml-ork bundle (llama/GGUF backend) |
 | `ORKLLM_LLAMA_RUNTIME_MIRRORS` | `oRKLLM/llama.cpp-rockchip` | Comma-separated GitHub repo slugs for downloading the llama runtime bundle |
 

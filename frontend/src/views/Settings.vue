@@ -187,7 +187,7 @@
             <div class="text-subtitle-2 font-weight-medium mb-1">Auto-download rkllm runtimes</div>
             <div class="text-caption text-grey">
               Automatically download versioned <code>librkllmrt.so</code> files from
-              <a href="https://github.com/mafischer/rkllm-runtimes" target="_blank" class="text-primary">mafischer/rkllm-runtimes</a>
+              <a href="https://github.com/oRKLLM/rkllm-runtimes" target="_blank" class="text-primary">oRKLLM/rkllm-runtimes</a>
               on startup and when a model with an unknown runtime version is loaded.
               Required to load <code>.rkllm</code> models. Binaries are Apache 2.0 licensed.
               <span v-if="serverInfo.runtimesDir" class="d-block mt-1">

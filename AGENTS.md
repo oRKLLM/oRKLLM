@@ -204,7 +204,7 @@ npm run dev:server
 | `ORKLLM_MODELS_DIR` | `./models` | Directory scanned for `.rkllm` files |
 | `ORKLLM_DB_PATH` | `~/.config/orkllm/auth.db` | SQLite database path |
 | `ORKLLM_RUNTIMES_DIR` | `~/.config/orkllm/runtimes` | Directory of versioned `librkllmrt-aarch64-vX.Y.Z.so` files for auto-matching |
-| `ORKLLM_RUNTIME_MIRRORS` | `oRKLLM/rkllm-runtimes,mafischer/rkllm-runtimes` | Comma-separated GitHub repo slugs tried in order when downloading runtime `.so` files — first mirror with the version wins |
+| `ORKLLM_RUNTIME_MIRRORS` | `oRKLLM/rkllm-runtimes` | Comma-separated GitHub repo slugs tried in order when downloading runtime `.so` files — first mirror with the version wins |
 | `ORKLLM_LLAMA_RUNTIME_DIR` | `~/.config/orkllm/llama-runtime` | Directory for the `libllama.so` + ggml-ork bundle (llama/GGUF backend) |
 | `ORKLLM_LLAMA_RUNTIME_MIRRORS` | `oRKLLM/llama.cpp-rockchip` | Comma-separated GitHub repo slugs for downloading the llama runtime bundle |
 

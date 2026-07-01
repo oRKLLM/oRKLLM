@@ -1189,7 +1189,7 @@
         </p>
         <p class="text-body-2 mb-3">
           oRKLLM can download the pre-built <code>librkllmrt.so</code> binary from
-          <a href="https://github.com/mafischer/rkllm-runtimes" target="_blank" class="text-primary">mafischer/rkllm-runtimes</a>.
+          <a href="https://github.com/oRKLLM/rkllm-runtimes" target="_blank" class="text-primary">oRKLLM/rkllm-runtimes</a>.
           These binaries are redistributed under the <strong>Apache 2.0 License</strong> from Rockchip's upstream repository.
         </p>
         <p class="text-caption text-grey mb-4">

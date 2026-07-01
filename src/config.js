@@ -31,7 +31,7 @@ export const LIBRKLLMRT_PATH = process.env.ORKLLM_LIB_PATH || '/usr/lib/librkllm
 // Override with ORKLLM_RUNTIME_MIRRORS=owner/repo,owner2/repo2 (comma-separated).
 export const RUNTIME_MIRRORS = (
   process.env.ORKLLM_RUNTIME_MIRRORS ||
-  'oRKLLM/rkllm-runtimes,mafischer/rkllm-runtimes'
+  'oRKLLM/rkllm-runtimes'
 ).split(',').map(s => s.trim()).filter(Boolean);
 
 // Directory where versioned runtimes are stored (librkllmrt-aarch64-v1.2.3.so etc.)
