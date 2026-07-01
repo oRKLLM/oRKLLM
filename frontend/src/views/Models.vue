@@ -142,13 +142,8 @@
                   <div class="d-flex align-start gap-3" style="min-width: 0; flex: 1; width: 100%;">
                     <v-icon color="grey-darken-1" class="mt-1" style="flex-shrink: 0;">mdi-file-code-outline</v-icon>
                     <div style="min-width: 0; flex: 1;">
-                      <div class="d-flex align-center gap-1" style="min-width: 0;">
-                        <div class="font-weight-bold text-break text-body-1 user-select-text" style="word-break: break-all;">
-                          {{ modelSettings[model.id]?.display_name || model.displayName || model.id }}
-                        </div>
-                        <v-btn icon="mdi-content-copy" size="x-small" variant="text" density="comfortable"
-                               class="flex-shrink-0" :title="`Copy model name: ${model.id}`"
-                               @click.stop="copyToClipboard(model.id)"></v-btn>
+                      <div class="font-weight-bold text-break text-body-1 user-select-text" style="word-break: break-all;">
+                        {{ modelSettings[model.id]?.display_name || model.displayName || model.id }}
                       </div>
                       <div class="d-flex align-center flex-wrap gap-2 mt-1">
                         <span class="text-caption text-grey">{{ formatBytes(model.size) }}</span>
@@ -194,6 +189,16 @@
                       @click.stop="openSettings(model)"
                     >
                       <v-icon size="16">mdi-cog-outline</v-icon>
+                    </v-btn>
+                    <v-btn
+                      icon
+                      size="x-small"
+                      variant="text"
+                      color="grey"
+                      :title="`Copy model name: ${model.id}`"
+                      @click.stop="copyToClipboard(model.id)"
+                    >
+                      <v-icon size="16">mdi-content-copy</v-icon>
                     </v-btn>
                     <v-btn
                       icon
