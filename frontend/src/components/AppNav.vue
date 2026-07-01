@@ -10,30 +10,35 @@
     >mdi-menu</v-icon>
     <v-icon color="primary" size="32" class="mr-2 d-none d-sm-flex">mdi-chip</v-icon>
 
-    <v-app-bar-title class="d-flex align-center" style="gap: 6px;">
-      <!-- oRKLLM text always navigates to dashboard -->
-      <span
-        class="font-weight-bold text-h5 text-gradient cursor-pointer"
-        @click="$router.push('/')"
-      >oRKLLM</span>
-      <!-- Version text hidden on mobile — shown in user drawer instead. Links to the repo. -->
-      <a
-        :href="`https://github.com/oRKLLM/oRKLLM/releases/tag/v${appVersion}`"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="text-primary d-none d-sm-flex text-decoration-none"
-        style="font-size: 0.65rem; line-height: 1; margin-top: 2px; opacity: 0.7;"
-        :title="`View the v${appVersion} release on GitHub`"
-      >v{{ appVersion }}</a>
-      <!-- Backend connection indicator — green when the backend responds, red when it doesn't.
-           Mirrors the Logs page's connected/disconnected dot; polls /api/version. -->
-      <v-icon
-        :color="backendConnected ? 'success' : 'error'"
-        size="10"
-        class="ml-1"
-        style="margin-top: 2px;"
-        :title="backendConnected ? 'Backend connected' : 'Backend disconnected'"
-      >mdi-circle</v-icon>
+    <v-app-bar-title>
+      <!-- Single nowrap row so the version + status dot stay on the brand line -->
+      <div class="brand-row">
+        <!-- oRKLLM text always navigates to dashboard -->
+        <span
+          class="font-weight-bold text-h5 text-gradient cursor-pointer"
+          @click="$router.push('/')"
+        >oRKLLM</span>
+        <!-- Version + status dot: hidden on mobile (shown in user drawer instead).
+             Grouped so they travel together and never wrap. -->
+        <span class="brand-meta d-none d-sm-inline-flex">
+          <!-- Version links to the exact GitHub release matching this build. -->
+          <a
+            :href="`https://github.com/oRKLLM/oRKLLM/releases/tag/v${appVersion}`"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="nav-version text-primary text-decoration-none"
+            style="font-size: 0.65rem; line-height: 1; opacity: 0.7;"
+            :title="`View the v${appVersion} release on GitHub`"
+          >v{{ appVersion }}</a>
+          <!-- Backend connection indicator — green when the backend responds, red when it doesn't.
+               Mirrors the Logs page's connected/disconnected dot; polls /api/version. -->
+          <v-icon
+            :color="backendConnected ? 'success' : 'error'"
+            size="10"
+            :title="backendConnected ? 'Backend connected' : 'Backend disconnected'"
+          >mdi-circle</v-icon>
+        </span>
+      </div>
     </v-app-bar-title>
 
     <!-- Desktop/tablet nav buttons — absolutely centred so left (brand) and right (account) widths don't matter -->
@@ -243,4 +248,18 @@ export default {
 
 .gap-1 { gap: 4px; }
 .gap-2 { gap: 8px; }
+
+/* Brand + version + status dot on one line, never wrapping */
+.brand-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  white-space: nowrap;
+}
+.brand-meta {
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
 </style>
