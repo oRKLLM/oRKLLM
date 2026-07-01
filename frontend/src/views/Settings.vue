@@ -399,6 +399,59 @@
             </v-chip>
           </v-col>
         </v-row>
+
+        <v-divider class="my-4"></v-divider>
+
+        <!-- Generation defaults — applied to requests that don't specify them -->
+        <div class="text-subtitle-2 font-weight-medium mb-1">Generation Defaults</div>
+        <div class="text-caption text-grey mb-4">Applied to requests that don't specify these parameters. Per-model settings override these.</div>
+        <v-row>
+          <v-col cols="12" sm="6">
+            <div class="setting-label mb-1">Temperature <span class="text-grey">(0 = deterministic, 2 = max random)</span></div>
+            <div class="d-flex align-center gap-3">
+              <v-slider v-model="settings.temperature" min="0" max="2" step="0.05" color="primary" density="compact" hide-details class="flex-grow-1"></v-slider>
+              <div style="width: 60px; flex-shrink: 0;">
+                <v-text-field v-model.number="settings.temperature" type="number" density="compact" variant="outlined" hide-details min="0" max="2" step="0.05"></v-text-field>
+              </div>
+            </div>
+          </v-col>
+          <v-col cols="12" sm="6">
+            <div class="setting-label mb-1">Top P <span class="text-grey">(nucleus sampling threshold)</span></div>
+            <div class="d-flex align-center gap-3">
+              <v-slider v-model="settings.topP" min="0" max="1" step="0.05" color="primary" density="compact" hide-details class="flex-grow-1"></v-slider>
+              <div style="width: 60px; flex-shrink: 0;">
+                <v-text-field v-model.number="settings.topP" type="number" density="compact" variant="outlined" hide-details min="0" max="1" step="0.05"></v-text-field>
+              </div>
+            </div>
+          </v-col>
+          <v-col cols="12" sm="6">
+            <div class="setting-label mb-1">Top K <span class="text-grey">(0 = disabled)</span></div>
+            <div class="d-flex align-center gap-3">
+              <v-slider v-model="settings.topK" min="0" max="100" step="1" color="primary" density="compact" hide-details class="flex-grow-1"></v-slider>
+              <div style="width: 60px; flex-shrink: 0;">
+                <v-text-field v-model.number="settings.topK" type="number" density="compact" variant="outlined" hide-details min="0" max="100"></v-text-field>
+              </div>
+            </div>
+          </v-col>
+          <v-col cols="12" sm="6">
+            <div class="setting-label mb-1">Max New Tokens</div>
+            <div class="d-flex align-center gap-3">
+              <v-slider v-model="settings.maxNewTokens" min="128" max="8192" step="128" color="primary" density="compact" hide-details class="flex-grow-1"></v-slider>
+              <div style="width: 60px; flex-shrink: 0;">
+                <v-text-field v-model.number="settings.maxNewTokens" type="number" density="compact" variant="outlined" hide-details min="128" max="8192"></v-text-field>
+              </div>
+            </div>
+          </v-col>
+          <v-col cols="12" sm="6">
+            <div class="setting-label mb-1">Repetition Penalty <span class="text-grey">(1.0 = disabled)</span></div>
+            <div class="d-flex align-center gap-3">
+              <v-slider v-model="settings.repPenalty" min="1" max="2" step="0.05" color="primary" density="compact" hide-details class="flex-grow-1"></v-slider>
+              <div style="width: 60px; flex-shrink: 0;">
+                <v-text-field v-model.number="settings.repPenalty" type="number" density="compact" variant="outlined" hide-details min="1" max="2" step="0.05"></v-text-field>
+              </div>
+            </div>
+          </v-col>
+        </v-row>
       </v-card>
 
       <!-- Prefix Cache -->
@@ -481,62 +534,6 @@
         </template>
       </v-card>
 
-      <!-- Generation Defaults -->
-      <v-card class="glass-card pa-5 mb-5">
-        <div class="section-heading mb-1">
-          <v-icon color="primary" size="18" class="mr-2">mdi-tune-variant</v-icon>
-          Generation Defaults
-        </div>
-        <div class="text-caption text-grey mb-4">Applied to requests that don't specify these parameters. Per-model settings override these.</div>
-
-        <v-row>
-          <v-col cols="12" sm="6">
-            <div class="setting-label mb-1">Temperature <span class="text-grey">(0 = deterministic, 2 = max random)</span></div>
-            <div class="d-flex align-center gap-3">
-              <v-slider v-model="settings.temperature" min="0" max="2" step="0.05" color="primary" density="compact" hide-details class="flex-grow-1"></v-slider>
-              <div style="width: 60px; flex-shrink: 0;">
-                <v-text-field v-model.number="settings.temperature" type="number" density="compact" variant="outlined" hide-details min="0" max="2" step="0.05"></v-text-field>
-              </div>
-            </div>
-          </v-col>
-          <v-col cols="12" sm="6">
-            <div class="setting-label mb-1">Top P <span class="text-grey">(nucleus sampling threshold)</span></div>
-            <div class="d-flex align-center gap-3">
-              <v-slider v-model="settings.topP" min="0" max="1" step="0.05" color="primary" density="compact" hide-details class="flex-grow-1"></v-slider>
-              <div style="width: 60px; flex-shrink: 0;">
-                <v-text-field v-model.number="settings.topP" type="number" density="compact" variant="outlined" hide-details min="0" max="1" step="0.05"></v-text-field>
-              </div>
-            </div>
-          </v-col>
-          <v-col cols="12" sm="6">
-            <div class="setting-label mb-1">Top K <span class="text-grey">(0 = disabled)</span></div>
-            <div class="d-flex align-center gap-3">
-              <v-slider v-model="settings.topK" min="0" max="100" step="1" color="primary" density="compact" hide-details class="flex-grow-1"></v-slider>
-              <div style="width: 60px; flex-shrink: 0;">
-                <v-text-field v-model.number="settings.topK" type="number" density="compact" variant="outlined" hide-details min="0" max="100"></v-text-field>
-              </div>
-            </div>
-          </v-col>
-          <v-col cols="12" sm="6">
-            <div class="setting-label mb-1">Max New Tokens</div>
-            <div class="d-flex align-center gap-3">
-              <v-slider v-model="settings.maxNewTokens" min="128" max="8192" step="128" color="primary" density="compact" hide-details class="flex-grow-1"></v-slider>
-              <div style="width: 60px; flex-shrink: 0;">
-                <v-text-field v-model.number="settings.maxNewTokens" type="number" density="compact" variant="outlined" hide-details min="128" max="8192"></v-text-field>
-              </div>
-            </div>
-          </v-col>
-          <v-col cols="12" sm="6">
-            <div class="setting-label mb-1">Repetition Penalty <span class="text-grey">(1.0 = disabled)</span></div>
-            <div class="d-flex align-center gap-3">
-              <v-slider v-model="settings.repPenalty" min="1" max="2" step="0.05" color="primary" density="compact" hide-details class="flex-grow-1"></v-slider>
-              <div style="width: 60px; flex-shrink: 0;">
-                <v-text-field v-model.number="settings.repPenalty" type="number" density="compact" variant="outlined" hide-details min="1" max="2" step="0.05"></v-text-field>
-              </div>
-            </div>
-          </v-col>
-        </v-row>
-      </v-card>
 
       <!-- MCP Servers — full width (the server table needs the room) -->
       <v-card class="glass-card pa-5 mb-5 settings-card--full">
