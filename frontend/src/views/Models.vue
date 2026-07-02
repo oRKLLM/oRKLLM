@@ -107,6 +107,11 @@
               <v-icon size="14" start>mdi-harddisk</v-icon>
               {{ formatBytes(library.disk.freeBytes) }} free of {{ formatBytes(library.disk.totalBytes) }} on disk
             </div>
+            <div v-if="library.modelsDir" class="text-caption text-grey mt-2 d-flex align-center flex-wrap" style="gap: 4px;">
+              <v-icon size="14" start>mdi-folder-outline</v-icon>
+              <span class="font-weight-medium">Models directory:</span>
+              <code class="text-grey-lighten-1" style="word-break: break-all;">{{ library.modelsDir }}</code>
+            </div>
           </v-card>
 
           <v-card class="glass-card pa-5 mb-5">
@@ -132,12 +137,6 @@
                   <v-icon>mdi-refresh</v-icon>
                 </v-btn>
               </div>
-            </div>
-
-            <div v-if="library.modelsDir" class="text-caption text-grey mb-3 d-flex align-center flex-wrap" style="gap: 4px;">
-              <v-icon size="14">mdi-folder-outline</v-icon>
-              <span class="font-weight-medium">Models directory:</span>
-              <code class="text-grey-lighten-1" style="word-break: break-all;">{{ library.modelsDir }}</code>
             </div>
 
             <div class="border rounded">
