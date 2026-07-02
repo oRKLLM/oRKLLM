@@ -32,11 +32,15 @@ const hooksDir = join(resolvedGitDir, 'hooks');
 
 try {
   if (!existsSync(hooksDir)) mkdirSync(hooksDir, { recursive: true });
-  const src = join(repoRoot, 'scripts', 'pre-commit');
-  const dest = join(hooksDir, 'pre-commit');
-  copyFileSync(src, dest);
-  chmodSync(dest, 0o755);
-  done('Installed git pre-commit hook (E2E gate).');
+  // pre-commit (E2E gate) + commit-msg (commitlint) — both are developer conveniences.
+  for (const hook of ['pre-commit', 'commit-msg']) {
+    const src = join(repoRoot, 'scripts', hook);
+    if (!existsSync(src)) continue;
+    const dest = join(hooksDir, hook);
+    copyFileSync(src, dest);
+    chmodSync(dest, 0o755);
+  }
+  done('Installed git hooks: pre-commit (E2E gate) + commit-msg (commitlint).');
 } catch (e) {
   // Never fail the install over a hook.
   console.warn(`[orkllm] Could not install git hook: ${e.message}`);

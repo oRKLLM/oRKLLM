@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# oRKLLM commit-msg hook — validate the commit message against .commitlintrc.json (Conventional
+# Commits: allowed types + header <=100 chars) BEFORE the commit lands, so a bad message is caught
+# locally instead of failing the CI "Commit Lint" job on push.
+# Canonical source: scripts/commit-msg — wired into .git/hooks/commit-msg by scripts/install-git-hooks.mjs.
+MSG_FILE="$1"
+
+if [ -x node_modules/.bin/commitlint ]; then
+  node_modules/.bin/commitlint --edit "$MSG_FILE"
+elif command -v npx >/dev/null 2>&1 && npx --no-install commitlint --version >/dev/null 2>&1; then
+  npx --no-install commitlint --edit "$MSG_FILE"
+else
+  # commitlint isn't installed (e.g. `npm i` not run yet). Don't block the commit — CI still enforces it.
+  echo "[commit-msg] commitlint not installed locally (run 'npm install') — skipping; CI will enforce it."
+  exit 0
+fi
