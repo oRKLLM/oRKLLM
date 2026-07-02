@@ -171,7 +171,10 @@ export class ConversionScheduler {
         // Stamp the runtime that built this pack so a later runtime change invalidates it.
         try { fs.writeFileSync(orkpackMetaPath(abs), JSON.stringify({ runtime: orkpackRuntimeId(), builtAt: Date.now() })); } catch {}
       }
-      console.log(`[conversion] ${rel}: ${built ? 'converted' : (ok ? 'no .orkpack produced' : 'failed/killed')}`);
+      // Success at INFO; a failure (crash/kill or no pack produced) is a real problem → WARN, so it
+      // shows under the Logs level filter instead of hiding among INFO lines.
+      if (built) console.log(`[conversion] ${rel}: converted`);
+      else console.warn(`[conversion] ${rel}: ${ok ? 'no .orkpack produced' : 'failed/killed'}`);
       this._pump();
     };
     proc.on('exit',  (code) => done(code === 0));

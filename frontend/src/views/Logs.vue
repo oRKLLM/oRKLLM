@@ -118,7 +118,7 @@ export default {
         lines = lines.slice(lines.length - this.maxLines);
       }
 
-      return lines.join('\n');
+      return lines.map(l => this.formatLine(l)).join('\n');
     }
   },
   mounted() {
@@ -156,6 +156,23 @@ export default {
       const m = /^\[(TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\]/i.exec(s);
       if (m) { const t = m[1].toLowerCase(); return t === 'fatal' ? 'error' : t; }
       return 'info';
+    },
+    // Pretty-render a log line for display: Pino JSON → "HH:MM:SS LEVEL msg" (readable + consistent);
+    // anything non-JSON is shown as-is. Keeps the raw structured logs but drops the noisy pid/hostname.
+    formatLine(line) {
+      const s = (line || '').trim();
+      if (!s.startsWith('{')) return line;
+      try {
+        const o = JSON.parse(s);
+        if (o && (o.msg !== undefined || o.level !== undefined)) {
+          const lvl = (typeof o.level === 'number'
+            ? ({ 10: 'trace', 20: 'debug', 30: 'info', 40: 'warn', 50: 'error', 60: 'fatal' }[o.level] || 'info')
+            : String(o.level || 'info')).toUpperCase().padEnd(5);
+          const t = o.time ? new Date(o.time).toLocaleTimeString('en-GB') : '';
+          return `${t} ${lvl} ${o.msg ?? ''}`.trimStart();
+        }
+      } catch { /* not JSON after all */ }
+      return line;
     },
     async fetchAuth() {
       try {

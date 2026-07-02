@@ -7,6 +7,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import fastifyCookie from '@fastify/cookie';
 import path from 'path';
 import fs from 'fs';
+import util from 'util';
 import { fileURLToPath } from 'url';
 import { Writable } from 'stream';
 import apiRoutes from './api/routes.js';
@@ -28,51 +29,27 @@ const __dirname = path.dirname(__filename);
 const logBuffer = [];
 const logClients = new Set();
 
-// The log viewer filters by level (INFO/WARN/ERROR), so every streamed line needs a parseable
-// level. Two line shapes reach the byte stream: (1) Pino/fastify.log JSON — carries its own
-// `level` (the frontend parses it); (2) plain console.* text — has no level token, and warn vs
-// error can't be told apart from the text. So we wrap console.* to record the intended level of
-// the call in flight (`_emitLevel`); the write hook then prefixes plain lines with `[LEVEL]`.
-// The REAL stdout/stderr still get the untagged bytes, so systemd/journalctl are unchanged.
-let _emitLevel = null;
-for (const [method, lvl] of [['log', 'info'], ['info', 'info'], ['debug', 'debug'], ['warn', 'warn'], ['error', 'error']]) {
-  const orig = typeof console[method] === 'function' ? console[method].bind(console) : null;
-  if (!orig) continue;
-  console[method] = (...args) => {
-    const prev = _emitLevel; _emitLevel = lvl;
-    try { return orig(...args); } finally { _emitLevel = prev; }
-  };
-}
-
-// Tag each plain line with its level for the viewer; leave Pino JSON lines (which already carry a
-// `level`) untouched so the frontend parses them directly and the display stays clean.
-function tagForViewer(text, fromStderr) {
-  const parts = text.split('\n');
-  return parts.map((ln, i) => {
-    if (ln === '' && i === parts.length - 1) return ln;   // keep the trailing newline
-    if (ln.trimStart().startsWith('{')) return ln;         // structured (Pino) — has its own level
-    const lvl = _emitLevel || (fromStderr ? 'error' : 'info');
-    return `[${lvl.toUpperCase()}] ${ln}`;
-  }).join('\n');
-}
-
-function broadcastLog(tagged) {
-  logBuffer.push(tagged);
+// Broadcast every stdout/stderr line to the log-viewer WebSocket clients. All app logs are unified
+// to Pino JSON below (console.* is routed through fastify.log after the server is created), so the
+// stream is one consistent shape — {"level","time","pid","hostname","msg"} — and the frontend parses
+// `level` from it. The REAL stdout/stderr still get the bytes, so systemd/journalctl are unchanged.
+function broadcastLog(text) {
+  logBuffer.push(text);
   if (logBuffer.length > 200) logBuffer.shift();
   for (const client of logClients) {
-    try { if (client.readyState === 1) client.send(tagged); } catch (err) {}
+    try { if (client.readyState === 1) client.send(text); } catch (err) {}
   }
 }
 
 const originalStdoutWrite = process.stdout.write;
 process.stdout.write = function (chunk, encoding, callback) {
-  broadcastLog(tagForViewer(chunk.toString(), false));
+  broadcastLog(chunk.toString());
   return originalStdoutWrite.apply(process.stdout, arguments);
 };
 
 const originalStderrWrite = process.stderr.write;
 process.stderr.write = function (chunk, encoding, callback) {
-  broadcastLog(tagForViewer(chunk.toString(), true));
+  broadcastLog(chunk.toString());
   return originalStderrWrite.apply(process.stderr, arguments);
 };
 
@@ -115,6 +92,15 @@ const fastify = Fastify({
   disableRequestLogging: true,
   trustProxy: trustProxyCfg,
 });
+
+// Unify log format: route console.* through Pino (fastify.log) so EVERY line the app emits shares the
+// one JSON shape — {"level","time","pid","hostname","msg"} — as Fastify's own logs, instead of a mix
+// of plain text and JSON. util.format reproduces console's arg formatting (%s, objects, etc.). The
+// frontend log viewer parses `level` from the JSON. Done after Fastify is created (fastify.log = Pino).
+console.log = console.info = (...a) => fastify.log.info(util.format(...a));
+console.warn = (...a) => fastify.log.warn(util.format(...a));
+console.error = (...a) => fastify.log.error(util.format(...a));
+console.debug = (...a) => fastify.log.debug(util.format(...a));
 
 // Secure-by-default proxy gate: when NO proxy is trusted (setting empty / false),
 // reject any request that arrives carrying proxy forwarding headers. A forwarded
