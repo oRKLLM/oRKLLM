@@ -18,6 +18,31 @@ import { cacheKey, getCachePath, tmpCachePath, putCachePath, isCacheEnabled } fr
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Route a forked runtime worker's stdout/stderr (the native llama.cpp + ork-driver logs) into the app's
+// unified log stream so the Logs page shows them in the SAME JSON shape as oRKLLM's own lines. The
+// worker is forked silent (piped, not inherited — inherited child writes bypass the parent's log hook);
+// we split into lines, tag the source ("[ork…" → ork-driver, else llama.cpp), and re-emit via console.*
+// at the line's parsed level (console.* is routed through Pino → /ws/logs in server.js).
+function pipeWorkerLogs(worker) {
+  const reader = () => {
+    let buf = '';
+    return (chunk) => {
+      buf += chunk.toString();
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).replace(/\s+$/, ''); buf = buf.slice(nl + 1);
+        if (!line) continue;
+        const tagged = `[${/\[ork/i.test(line) ? 'ork' : 'llama'}] ${line}`;
+        if (/\berror\b|\bfailed\b|\bfatal\b|\babort|assert|\bpanic\b/i.test(line)) console.error(tagged);
+        else if (/\bwarn/i.test(line)) console.warn(tagged);
+        else console.log(tagged);
+      }
+    };
+  };
+  worker.stdout?.on('data', reader());
+  worker.stderr?.on('data', reader());
+}
+
 // Memoizes readSoVersion() results keyed by `${path}:${mtimeMs}:${size}`.
 const _soVersionCache = new Map();
 
@@ -574,7 +599,7 @@ class EnginePool {
       // (TurboQuant KV); otherwise keep layers on the ork-NPU (see workerEnv).
       const usesTurbo = String(options.kv_type_k || '').includes('turbo')
                      || String(options.kv_type_v || '').includes('turbo');
-      slot.worker = fork(workerPath, { serialization: 'advanced', env: workerEnv({
+      slot.worker = fork(workerPath, { serialization: 'advanced', silent: true, env: workerEnv({
         disableVulkan: !usesTurbo,
         orkQuant: options.ork_quant,
         orkHybrid: options.ork_hybrid,
@@ -586,6 +611,7 @@ class EnginePool {
         // global process-RAM cap minus the hot prefix cache → NPU residency budget
         wcacheBudgetMB: resolveWcacheBudgetMB(),
       }) });
+      pipeWorkerLogs(slot.worker);        // native llama.cpp + ork-driver logs → unified log stream / Logs page
       pinWorkerToBig(slot.worker.pid);   // inference belongs on the big cores (orchestration is pinned little)
 
       // Persistent guards so a worker that dies mid-inference can never crash the
@@ -755,7 +781,8 @@ class EnginePool {
   _tryLoadWorker(slot, modelName, modelPath, options, libPath) {
     const workerPath = path.join(__dirname, 'worker.js');
     if (slot === 'draft') {
-      this.draftWorker = fork(workerPath, { serialization: 'advanced', env: workerEnv() });
+      this.draftWorker = fork(workerPath, { serialization: 'advanced', silent: true, env: workerEnv() });
+      pipeWorkerLogs(this.draftWorker);   // draft runtime native logs → unified log stream
       pinWorkerToBig(this.draftWorker.pid);   // EAGLE draft worker also infers → big cores
       // Guard against unhandled 'error' (IPC failure) crashing the server.
       this.draftWorker.on('error', (err) => {
