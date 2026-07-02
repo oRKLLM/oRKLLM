@@ -84,6 +84,7 @@
 
 <script>
 import AppNav from '../components/AppNav.vue';
+import { onLogLines } from '../streams.js';
 
 export default {
   name: 'Logs',
@@ -183,39 +184,12 @@ export default {
       } catch (e) {}
     },
     connectWebSocket() {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const host = window.location.host;
-      const url = `${protocol}//${host}/ws/logs`;
-
-      this.logsWs = new WebSocket(url);
-      this.logsWs.onopen = () => {
-        this.wsConnected = true;
-        console.log('[WS] Logs WebSocket connected');
-      };
-      this.logsWs.onerror = (err) => {
-        console.error('[WS] Logs WebSocket error', err);
-      };
-      this.logsWs.onmessage = (event) => {
-        // Split by newlines and push each non-empty line
-        const lines = event.data.split('\n').filter(l => l.trim() !== '');
-        this.allLogs.push(...lines);
-      };
-      this.logsWs.onclose = () => {
-        this.wsConnected = false;
-        console.log('[WS] Logs WebSocket closed, reconnecting in 5s...');
-        setTimeout(() => {
-          if (!this.logsWs || this.logsWs.readyState === WebSocket.CLOSED) {
-            this.connectWebSocket();
-          }
-        }, 5000);
-      };
+      // Subscribe to the app's SHARED logs stream (one /ws/logs for the whole app — see streams.js);
+      // {replay:true} delivers the buffered history immediately so the terminal isn't empty on open.
+      this._offLogs = onLogLines((lines) => { this.allLogs.push(...lines); this.wsConnected = true; }, { replay: true });
     },
     disconnectWebSocket() {
-      if (this.logsWs) {
-        this.logsWs.onclose = null; // Prevent reconnect on intentional close
-        this.logsWs.close();
-        this.logsWs = null;
-      }
+      if (this._offLogs) { this._offLogs(); this._offLogs = null; }
     },
     clearLogs() {
       this.allLogs = [];

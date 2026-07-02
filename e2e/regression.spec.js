@@ -421,15 +421,19 @@ test('Settings: "Use MCP tools in inference" toggle persists', async ({ page }) 
   const sw = toggleRow.locator('.v-switch input[type="checkbox"]').first();
   const before = await sw.isChecked();
   await toggleRow.locator('.v-switch').first().click();
+  // Wait for the toggle's v-model to actually flip BEFORE saving — otherwise Save can race the click
+  // and persist the stale value (the flake). Playwright's toBeChecked auto-retries until it settles.
+  if (before) await expect(sw).not.toBeChecked(); else await expect(sw).toBeChecked();
   await page.locator('button:has-text("Save Settings")').click();
   await expect(page.locator('.v-snackbar')).toContainText('Settings saved', { timeout: 5000 });
 
-  // Reload and confirm the new value stuck.
+  // Reload and confirm the new value stuck. Use the retrying toBeChecked (not a one-shot isChecked) so
+  // the assertion waits out the switch hydrating from the persisted setting after reload.
   await page.reload();
   await expect(page.locator('.section-heading').filter({ hasText: 'MCP Servers' })).toBeVisible({ timeout: 8000 });
-  const after = await page.locator('.v-card').filter({ hasText: 'Use MCP tools in inference' })
-    .locator('.v-switch input[type="checkbox"]').first().isChecked();
-  expect(after).toBe(!before);
+  const afterSw = page.locator('.v-card').filter({ hasText: 'Use MCP tools in inference' })
+    .locator('.v-switch input[type="checkbox"]').first();
+  if (before) await expect(afterSw).not.toBeChecked(); else await expect(afterSw).toBeChecked();
 });
 
 test('Models: auto-unload timeout persists and displays after page reload', async ({ page }) => {

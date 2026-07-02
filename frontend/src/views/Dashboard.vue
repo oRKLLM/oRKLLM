@@ -505,6 +505,7 @@
 
 <script>
 import AppNav from '../components/AppNav.vue';
+import { onMetrics } from '../streams.js';
 
 export default {
   name: 'Dashboard',
@@ -626,7 +627,7 @@ export default {
     this.fetchRuntimes();
   },
   beforeUnmount() {
-    if (this.metricsWs) this.metricsWs.close();
+    if (this._offMetrics) this._offMetrics();   // unsubscribe from the shared telemetry stream
   },
   methods: {
     async fetchAuth() {
@@ -795,21 +796,10 @@ export default {
       } catch (e) {}
     },
     initWebSockets() {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const host = window.location.host;
-      const metricsUrl = `${protocol}//${host}/ws/metrics`;
-
-      this.metricsWs = new WebSocket(metricsUrl);
-      this.metricsWs.onopen = () => console.log('[WS] Metrics WebSocket connected');
-      this.metricsWs.onerror = (err) => console.error('[WS] Metrics WebSocket error', err);
-      this.metricsWs.onmessage = (event) => {
-        try {
-          this.applyMetrics(JSON.parse(event.data));
-        } catch (e) {}
-      };
-      this.metricsWs.onclose = () => {
-        setTimeout(() => this.initWebSockets(), 5000);
-      };
+      // Subscribe to the app's SHARED telemetry stream (one /ws/metrics for the whole app — see
+      // streams.js) instead of opening a duplicate socket. The stream auto-reconnects and replays the
+      // last frame to new subscribers, so the dashboard fills instantly on navigation.
+      this._offMetrics = onMetrics((m) => this.applyMetrics(m));
     },
   }
 };

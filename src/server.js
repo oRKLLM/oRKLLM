@@ -16,7 +16,7 @@ import authRoutes from './auth/routes.js';
 import { getSystemMetrics } from './monitor.js';
 import { getStats } from './stats.js';
 import pool from './pool.js';
-import { initConversionScheduler } from './conversion.js';
+import { initConversionScheduler, getConversionScheduler } from './conversion.js';
 import { MODELS_DIR } from './config.js';
 import { syncRuntimes } from './runtime_sync.js';
 import { applyPerformance, pinOrchestrationToLittle } from './perf_governor.js';
@@ -176,6 +176,7 @@ function startMetricsPump() {
     try {
       const m = await getSystemMetrics();
       m.stats = getStats();
+      { const st = getConversionScheduler()?.status(); m.converting = st ? (st.current ? 1 : 0) + (st.pending || 0) : 0; }
       payload = JSON.stringify(m);
     } catch (err) {
       return;   // skip this tick on error
@@ -194,6 +195,7 @@ fastify.get('/ws/metrics', { websocket: true }, async (connection, req) => {
   // Initial fetch for this client so it doesn't wait up to 1s for the first frame.
   getSystemMetrics().then(m => {
     m.stats = getStats();
+    { const st = getConversionScheduler()?.status(); m.converting = st ? (st.current ? 1 : 0) + (st.pending || 0) : 0; }
     if (socket.readyState === 1) socket.send(JSON.stringify(m));
   }).catch(() => {});
 

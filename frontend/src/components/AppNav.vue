@@ -43,18 +43,28 @@
 
     <!-- Desktop/tablet nav buttons — absolutely centred so left (brand) and right (account) widths don't matter -->
     <div class="nav-center d-none d-sm-flex align-center gap-1">
-      <v-btn
+      <v-badge
         v-for="nav in navItems"
         :key="nav.path"
-        :to="nav.path"
-        :prepend-icon="nav.icon"
-        variant="text"
-        size="small"
-        :color="isActive(nav.path) ? 'primary' : 'default'"
-        :class="['nav-btn', isActive(nav.path) ? 'nav-btn--active' : '']"
+        :model-value="!!badgeFor(nav.path)"
+        :content="badgeFor(nav.path)?.content"
+        :dot="!!badgeFor(nav.path)?.dot"
+        :color="badgeFor(nav.path)?.color || 'primary'"
+        location="top end"
+        offset-x="8"
+        offset-y="6"
       >
-        <span class="d-none d-md-inline">{{ nav.label }}</span>
-      </v-btn>
+        <v-btn
+          :to="nav.path"
+          :prepend-icon="nav.icon"
+          variant="text"
+          size="small"
+          :color="isActive(nav.path) ? 'primary' : 'default'"
+          :class="['nav-btn', isActive(nav.path) ? 'nav-btn--active' : '']"
+        >
+          <span class="d-none d-md-inline">{{ nav.label }}</span>
+        </v-btn>
+      </v-badge>
     </div>
 
     <v-spacer></v-spacer>
@@ -84,7 +94,17 @@
         rounded="lg"
         class="mx-2 mb-1"
         @click="mobileNavOpen = false"
-      ></v-list-item>
+      >
+        <template #append>
+          <v-badge
+            :model-value="!!badgeFor(nav.path)"
+            :content="badgeFor(nav.path)?.content"
+            :dot="!!badgeFor(nav.path)?.dot"
+            :color="badgeFor(nav.path)?.color || 'primary'"
+            inline
+          ></v-badge>
+        </template>
+      </v-list-item>
     </v-list>
   </v-navigation-drawer>
 
@@ -148,6 +168,8 @@
 
 <script>
 import { useRoute } from 'vue-router';
+import { watch } from 'vue';
+import { badgeFor, setRoute, initBadges } from '../badges.js';
 
 export default {
   name: 'AppNav',
@@ -168,7 +190,10 @@ export default {
   emits: ['toggle-theme', 'logout'],
   setup() {
     const route = useRoute();
-    return { route };
+    initBadges();                                  // start the shared metrics/logs streams + badge accrual
+    setRoute(route.path);                          // seed active tab (dismisses its badge)
+    watch(() => route.path, (p) => setRoute(p));   // dismiss on navigation
+    return { route, badgeFor };
   },
   data: () => ({
     drawerOpen: false,
