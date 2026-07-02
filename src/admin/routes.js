@@ -964,7 +964,7 @@ export default async function adminRoutes(fastify, options) {
     // Disk usage of the models volume (best-effort; statfsSync needs Node ≥ 18.15).
     let disk = null;
     try { const s = fs.statfsSync(MODELS_DIR); disk = { freeBytes: s.bavail * s.bsize, totalBytes: s.blocks * s.bsize }; } catch {}
-    return { available, base, drafts, disk };
+    return { available, base, drafts, disk, modelsDir: MODELS_DIR };
   });
 
   // GET /api/admin/cache-stats — lightweight hot/cold prefix-cache stats for
@@ -1465,6 +1465,10 @@ export default async function adminRoutes(fastify, options) {
         job.status = 'done';
         job.speedBps = 0;
         job.finishedAt = Date.now();
+        // Proactively pre-build the .orkpack for a freshly-downloaded GGUF during idle, so its first load
+        // doesn't wait out the build. (The pool's build-then-load guard still guarantees no cold serve
+        // regardless — this just moves the one-time pack build off the first request's critical path.)
+        try { if (/\.gguf$/i.test(destPath)) getConversionScheduler()?.enqueue(path.relative(MODELS_DIR, destPath)); } catch {}
       } catch (e) {
         if (job.status === 'paused' || job.status === 'cancelled') return;  // expected stop, not an error
         job.status = 'error';
