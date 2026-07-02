@@ -42,6 +42,34 @@
 
           <v-divider vertical class="mx-1 d-none d-sm-flex"></v-divider>
 
+          <!-- Application (source) filter -->
+          <v-menu :close-on-content-click="false" location="bottom start">
+            <template #activator="{ props }">
+              <v-btn
+                v-bind="props"
+                size="small"
+                variant="outlined"
+                density="comfortable"
+                prepend-icon="mdi-filter-variant"
+                :color="allSourcesOn ? 'grey' : 'primary'"
+                :title="'Filter logs by application'"
+              >
+                Apps<span v-if="!allSourcesOn" class="ml-1">({{ activeSourceCount }}/{{ sourceOptions.length }})</span>
+              </v-btn>
+            </template>
+            <v-list density="compact" min-width="180">
+              <v-list-subheader>Show logs from</v-list-subheader>
+              <v-list-item v-for="s in sourceOptions" :key="s.key" @click="sourceFilter[s.key] = !sourceFilter[s.key]">
+                <template #prepend>
+                  <v-checkbox-btn :model-value="sourceFilter[s.key]" :color="s.color" density="compact"></v-checkbox-btn>
+                </template>
+                <v-list-item-title>{{ s.label }}</v-list-item-title>
+              </v-list-item>
+            </v-list>
+          </v-menu>
+
+          <v-divider vertical class="mx-1 d-none d-sm-flex"></v-divider>
+
           <!-- Auto-scroll toggle -->
           <v-switch
             v-model="autoScroll"
@@ -94,6 +122,14 @@ export default {
     allLogs: [],
     maxLines: 500,
     levelFilter: 'ALL',
+    // Per-application (source) filter — every line carries a `source` field: orkllm (the app), llama
+    // (llama.cpp/ggml runtime), ork (ork-driver). All on by default.
+    sourceFilter: { orkllm: true, llama: true, ork: true },
+    sourceOptions: [
+      { key: 'orkllm', label: 'oRKLLM',     color: 'primary' },
+      { key: 'llama',  label: 'llama.cpp',  color: 'teal' },
+      { key: 'ork',    label: 'ork-driver', color: 'deep-purple' },
+    ],
     autoScroll: true,
     wsConnected: false,
     logsWs: null,
@@ -104,6 +140,8 @@ export default {
     isDark() {
       return this.themeName === 'customDarkTheme';
     },
+    allSourcesOn() { return this.sourceOptions.every(s => this.sourceFilter[s.key]); },
+    activeSourceCount() { return this.sourceOptions.filter(s => this.sourceFilter[s.key]).length; },
     filteredLogs() {
       let lines = this.allLogs;
 
@@ -112,6 +150,11 @@ export default {
       if (this.levelFilter !== 'ALL') {
         const want = this.levelFilter.toLowerCase();
         lines = lines.filter(l => this.lineLevel(l) === want);
+      }
+
+      // Filter by application (source), unless all are enabled.
+      if (!this.allSourcesOn) {
+        lines = lines.filter(l => this.sourceFilter[this.lineSource(l)]);
       }
 
       // Limit lines
@@ -158,6 +201,15 @@ export default {
       if (m) { const t = m[1].toLowerCase(); return t === 'fatal' ? 'error' : t; }
       return 'info';
     },
+    // Determine which application emitted a line, from its `source` field (orkllm | llama | ork).
+    // Lines without one (legacy/plain) default to orkllm.
+    lineSource(line) {
+      const s = (line || '').trim();
+      if (s.startsWith('{')) {
+        try { const o = JSON.parse(s); if (o && o.source) { const v = String(o.source); return (v === 'llama' || v === 'ork') ? v : 'orkllm'; } } catch { /* not JSON */ }
+      }
+      return 'orkllm';
+    },
     // Pretty-render a log line for display: Pino JSON → "HH:MM:SS LEVEL msg" (readable + consistent);
     // anything non-JSON is shown as-is. Keeps the raw structured logs but drops the noisy pid/hostname.
     formatLine(line) {
@@ -169,8 +221,9 @@ export default {
           const lvl = (typeof o.level === 'number'
             ? ({ 10: 'trace', 20: 'debug', 30: 'info', 40: 'warn', 50: 'error', 60: 'fatal' }[o.level] || 'info')
             : String(o.level || 'info')).toUpperCase().padEnd(5);
+          const src = String(o.source || 'orkllm').padEnd(6);
           const t = o.time ? new Date(o.time).toLocaleTimeString('en-GB') : '';
-          return `${t} ${lvl} ${o.msg ?? ''}`.trimStart();
+          return `${t} ${lvl} ${src} ${o.msg ?? ''}`.trimStart();
         }
       } catch { /* not JSON after all */ }
       return line;

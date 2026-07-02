@@ -24,6 +24,13 @@ const __dirname = path.dirname(__filename);
 // we split into lines, tag the source ("[ork…" → ork-driver, else llama.cpp), and re-emit via console.*
 // at the line's parsed level (console.* is routed through Pino → /ws/logs in server.js).
 function pipeWorkerLogs(worker) {
+  // Emit a Pino-shaped JSON line (level label + source + msg) straight to stdout, where the server's
+  // stdout hook forwards it to /ws/logs. Not via console.* — that would tag every line source:'orkllm'
+  // (the app mixin) and lose the real source. Keeps ALL logs one consistent JSON shape, filterable by
+  // application AND level on the Logs page.
+  const emit = (level, source, msg) => {
+    try { process.stdout.write(JSON.stringify({ level, time: Date.now(), source, msg }) + '\n'); } catch {}
+  };
   const reader = () => {
     let buf = '';
     return (chunk) => {
@@ -32,10 +39,22 @@ function pipeWorkerLogs(worker) {
       while ((nl = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, nl).replace(/\s+$/, ''); buf = buf.slice(nl + 1);
         if (!line) continue;
-        const tagged = `[${/\[ork/i.test(line) ? 'ork' : 'llama'}] ${line}`;
-        if (/\berror\b|\bfailed\b|\bfatal\b|\babort|assert|\bpanic\b/i.test(line)) console.error(tagged);
-        else if (/\bwarn/i.test(line)) console.warn(tagged);
-        else console.log(tagged);
+        // Source: ork-driver tags its lines "[ork…"; worker.js tags its own "[Worker…" (still oRKLLM);
+        // everything else on the runtime worker's streams is llama.cpp / ggml.
+        const source = /\[ork/i.test(line) ? 'ork' : /\[Worker/i.test(line) ? 'orkllm' : 'llama';
+        let level = 'info';
+        if (source === 'ork') {
+          // ork-driver emits explicit level tokens ("[ork] ERROR:", "[ork] WARNING:"). Parse those
+          // deterministically — don't use the generic "failed" heuristic (it would mis-tag benign
+          // "…failed; per-buffer fallback" lines as errors).
+          if (/\bERROR\b/.test(line)) level = 'error';
+          else if (/\bWARN/i.test(line)) level = 'warn';
+        } else {
+          // llama.cpp / ggml (upstream text, no structured level) — best-effort keyword heuristic.
+          if (/\berror\b|\bfailed\b|\bfatal\b|GGML_ASSERT|\babort|\bpanic\b/i.test(line)) level = 'error';
+          else if (/\bwarn/i.test(line)) level = 'warn';
+        }
+        emit(level, source, line);
       }
     };
   };

@@ -80,10 +80,13 @@ function getTrustedProxy() {
 const trustProxyCfg = getTrustedProxy();
 const fastify = Fastify({
   // Pino writes numeric levels by default (info=30, warn=40, error=50). Emit the label instead
-  // so log lines read "level":"info" rather than "level":30.
+  // so log lines read "level":"info" rather than "level":30. `source:'orkllm'` tags every line the app
+  // itself emits so the Logs page can filter by application (runtime-worker lines carry source
+  // 'llama'/'ork' — see pool.js pipeWorkerLogs).
   logger: {
     level: 'info',
     formatters: { level: (label) => ({ level: label }) },
+    mixin: () => ({ source: 'orkllm' }),
   },
   // Suppress the per-request "incoming request" / "request completed" access logs. The UI polls
   // several endpoints on short timers (version/health every 5s, metrics + cache-stats every ~4s,

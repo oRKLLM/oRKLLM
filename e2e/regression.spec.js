@@ -443,13 +443,22 @@ test('Models: auto-unload timeout persists and displays after page reload', asyn
   const card = page.locator('.v-card').filter({ hasText: 'Inactivity Auto-Unload Timeout' });
   await expect(card).toBeVisible({ timeout: 8000 });
 
-  // Set the slider to a non-default value (default is 5) via keyboard, which is
-  // deterministic for a Vuetify slider (Home → min, ArrowRight → +step).
-  const thumb = card.locator('[role="slider"]');
-  await thumb.click();
-  await page.keyboard.press('Home');
-  for (let i = 0; i < 12; i++) await page.keyboard.press('ArrowRight');
-  await expect(card.locator('.v-chip')).toHaveText('12m');
+  // Set the slider to a non-default value (default is 5). A Vuetify slider is Home → min, ArrowRight →
+  // +step, but under full-suite load a keystroke can be dropped and the slider lands off-target (flake).
+  // setSlider is self-correcting: it presses toward the target, re-reading the chip each time, so a
+  // dropped key just costs another iteration instead of failing the assertion.
+  const setSlider = async (cardEl, target) => {
+    const thumb = cardEl.locator('[role="slider"]');
+    const chip = cardEl.locator('.v-chip');
+    await thumb.click();
+    await thumb.press('Home');
+    for (let i = 0; i < 40; i++) {
+      if ((await chip.textContent())?.trim() === target) break;
+      await thumb.press('ArrowRight');
+    }
+    await expect(chip).toHaveText(target);
+  };
+  await setSlider(card, '12m');
 
   // Save, then do a FULL page reload (not SPA nav) and re-fetch status.
   await card.getByRole('button', { name: 'Save Timeout' }).click();
@@ -462,9 +471,7 @@ test('Models: auto-unload timeout persists and displays after page reload', asyn
   await expect(cardAfter.locator('.v-chip')).toHaveText('12m', { timeout: 8000 });
 
   // Restore the default so later tests start from a known timeout.
-  await cardAfter.locator('[role="slider"]').click();
-  await page.keyboard.press('Home');
-  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowRight');
+  await setSlider(cardAfter, '5m');
   await cardAfter.getByRole('button', { name: 'Save Timeout' }).click();
 });
 
