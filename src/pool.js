@@ -11,7 +11,7 @@ import { syncLlamaRuntime, isLlamaRuntimeAvailable } from './llama_sync.js';
 import { eagle3Generate } from './eagle.js';
 import { getAggregatedTools } from './mcp.js';
 import { buildToolSystemPrompt } from './mcp_inference.js';
-import { orkpackPathFor, hasOrkpack, isOrkpackFresh } from './conversion.js';
+import { orkpackPathFor, hasOrkpack, isOrkpackFresh, getConversionScheduler } from './conversion.js';
 import { isRecurrentArch, supportsThinkingToggle } from './gguf.js';
 import { cacheKey, getCachePath, tmpCachePath, putCachePath, isCacheEnabled } from './cache.js';
 
@@ -389,6 +389,23 @@ class EnginePool {
       // Determine backend from file extension
       const isGguf = modelName.toLowerCase().endsWith('.gguf');
       const backend = isGguf ? 'llama' : 'rkllm';
+
+      // COLD-START GUARD: never serve a GGUF cold. If its .orkpack isn't fresh, free the single NPU stream
+      // (this slot is already unloaded — evict any other loaded slots too) and BUILD the pack now, then load
+      // warm below (orkPersist picks it up). The first request for a not-yet-converted model waits out one
+      // conversion (UI shows "converting") instead of paying the ~17s weight-resolve live on every early
+      // token. The pack is pinned to the serving quant (ORK_QUANT) so it's loadable. On build failure we
+      // fall through and serve without the warm cache (old behavior) rather than block the request.
+      if (isGguf && !isOrkpackFresh(modelPath)) {
+        const sched = getConversionScheduler();
+        if (sched) {
+          await Promise.all(this._slots.filter(o => o !== s && o.isLoaded).map(o => this._unloadSlot(o)));
+          const envExtra = options.ork_quant ? { ORK_QUANT: String(options.ork_quant) } : {};
+          console.log(`[EnginePool] ${modelName}: no fresh .orkpack — building before load (NPU evicted for the convert)`);
+          try { await sched.convertNow(modelName, envExtra); }
+          catch (e) { console.warn(`[EnginePool] ${modelName}: pre-load .orkpack build failed (${e.message}) — loading without warm cache`); }
+        }
+      }
 
       // NPU core pinning: with a single slot, leave the model unpinned so it
       // uses all cores (max single-model throughput). With multiple slots, pin

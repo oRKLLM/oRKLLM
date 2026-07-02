@@ -66,6 +66,7 @@ export class ConversionScheduler {
     this.queue   = [];          // model rel-paths (under MODELS_DIR) awaiting conversion
     this.queued  = new Set();   // dedup
     this.current = null;        // { rel, abs, proc } in flight, or null
+    this.currentPromise = null; // resolves when the in-flight build finishes (for convertNow to await a preempt)
     this.binPath = this._findBin();
     this._timer  = null;
   }
@@ -121,64 +122,92 @@ export class ConversionScheduler {
     return { binary: !!this.binPath, current: this.current?.rel ?? null, pending: this.queue.length };
   }
 
-  // Start the next conversion if the NPU is free; otherwise retry shortly.
+  // Start the next IDLE conversion if the NPU is free; otherwise retry shortly.
   _pump() {
     if (this.current || this.queue.length === 0) return;
     if (!this.binPath) { console.warn('[conversion] no llama-completion binary found — conversions disabled'); return; }
     if (this.pool.anyLoaded || (this.pool.queue && this.pool.queue.length)) { this._scheduleRetry(); return; }
+    const rel = this.queue.shift();
+    this._spawnBuild(rel).finally(() => this._pump());   // idle-driven: build one, then chain to the next
+  }
 
-    const rel  = this.queue.shift();
-    const abs  = path.join(MODELS_DIR, rel);
-    const pack = orkpackPathFor(abs);
-    if (hasOrkpack(abs)) { this.queued.delete(rel); this._pump(); return; }   // built since enqueue
-    // progress sidecar — /v1/models reads <model>.orkpack.json → UI shows "converting"
-    try { fs.writeFileSync(pack + '.json', JSON.stringify({ status: 'converting', progress: 0 })); } catch {}
-    let srcSize = 0; try { srcSize = fs.statSync(abs).size; } catch {}
+  // Blocking, priority build of ONE model's .orkpack — for the pool's build-then-load cold-start guard.
+  // The caller MUST have freed the NPU (evicted loaded models); this bypasses the idle-gate. Any idle
+  // conversion of a DIFFERENT model in flight is preempted (single NPU stream) and re-queued, and we wait
+  // for it to fully exit before starting ours (no this.current race). envExtra lets the caller pin the
+  // build to the serving quant (e.g. ORK_QUANT) so the produced pack is loadable at serve time. Resolves
+  // true iff the .orkpack was produced.
+  async convertNow(rel, envExtra = {}) {
+    if (!this.binPath) return false;
+    if (hasOrkpack(path.join(MODELS_DIR, rel))) return true;   // already built
+    this.queued.delete(rel);                                   // out of the idle queue — we build it now
+    if (this.current && this.current.rel !== rel) {
+      this.preempt();                                          // yield the NPU from a different idle build
+      try { await this.currentPromise; } catch { /* preempted build settles */ }
+    } else if (this.currentPromise) {
+      return this.currentPromise;                              // this model is already being built — join it
+    }
+    return this._spawnBuild(rel, envExtra);
+  }
 
-    const env = { ...process.env,
-      ORK_PERSIST: pack, ORK_EVICT_SRC: '1',
-      LD_LIBRARY_PATH: [LLAMA_RUNTIME_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':') };
-    // A single 1-token forward pass packs+dumps every weight; --no-repack keeps weights host so the
-    // ggml-ork matmul offload fires; -ngl 99 offloads all layers. `--device ORK` PINS them to the NPU:
-    // the release runtime also ships ggml-vulkan (Mali), and ggml-ork is a BLAS-like ACCEL backend, so
-    // a bare -ngl assigns the layers to the first GPU device (Vulkan0) — weights land in Mali buffers,
-    // MUL_MAT runs on Vulkan, and ggml-ork packs ZERO weights → no .orkpack. Targeting the ORK device
-    // (rather than disabling Vulkan) routes the matmuls to the NPU while leaving the GPU available.
-    const args = ['-m', abs, '--device', 'ORK', '-ngl', '99', '-t', '4', '-c', '256', '--no-repack',
-                  '-p', 'x', '-n', '1', '--temp', '0', '-no-cnv'];
-    console.log(`[conversion] building ${rel}.orkpack …`);
-    const proc = spawn(this.binPath, args, { env, stdio: 'ignore' });
-    this.current = { rel, abs, proc };
+  // Spawn ONE conversion subprocess; resolves true iff the .orkpack was produced. Shared by the idle pump
+  // and the blocking convertNow. Holds this.current for the build's duration so the two paths can't run
+  // concurrently on the single NPU stream.
+  _spawnBuild(rel, envExtra = {}) {
+    const pr = new Promise((resolve) => {
+      const abs  = path.join(MODELS_DIR, rel);
+      const pack = orkpackPathFor(abs);
+      if (hasOrkpack(abs)) { this.queued.delete(rel); resolve(true); return; }   // built since enqueue
+      // progress sidecar — /v1/models reads <model>.orkpack.json → UI shows "converting"
+      try { fs.writeFileSync(pack + '.json', JSON.stringify({ status: 'converting', progress: 0 })); } catch {}
+      let srcSize = 0; try { srcSize = fs.statSync(abs).size; } catch {}
 
-    // Live progress: the conversion is one opaque subprocess, but ggml-ork streams the packed weights
-    // into <pack>.tmp as it goes — poll its growth against the source GGUF size for a moving bar
-    // (clamped <100% until the .orkpack is finalized). Without this the sidecar sat at 0 then jumped to done.
-    const tick = setInterval(() => {
-      try {
-        const w = fs.statSync(pack + '.tmp').size;
-        const p = srcSize > 0 ? Math.min(99, Math.round(100 * w / srcSize)) : 0;
-        fs.writeFileSync(pack + '.json', JSON.stringify({ status: 'converting', progress: p }));
-      } catch { /* .tmp not created yet (model still loading) — keep the last value */ }
-    }, 1500);
+      const env = { ...process.env,
+        ORK_PERSIST: pack, ORK_EVICT_SRC: '1', ...envExtra,   // envExtra (e.g. ORK_QUANT) matches the serve
+        LD_LIBRARY_PATH: [LLAMA_RUNTIME_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':') };
+      // A single 1-token forward pass packs+dumps every weight; --no-repack keeps weights host so the
+      // ggml-ork matmul offload fires; -ngl 99 offloads all layers. `--device ORK` PINS them to the NPU:
+      // the release runtime also ships ggml-vulkan (Mali), and ggml-ork is a BLAS-like ACCEL backend, so
+      // a bare -ngl assigns the layers to the first GPU device (Vulkan0) — weights land in Mali buffers,
+      // MUL_MAT runs on Vulkan, and ggml-ork packs ZERO weights → no .orkpack. Targeting the ORK device
+      // (rather than disabling Vulkan) routes the matmuls to the NPU while leaving the GPU available.
+      const args = ['-m', abs, '--device', 'ORK', '-ngl', '99', '-t', '4', '-c', '256', '--no-repack',
+                    '-p', 'x', '-n', '1', '--temp', '0', '-no-cnv'];
+      console.log(`[conversion] building ${rel}.orkpack …`);
+      const proc = spawn(this.binPath, args, { env, stdio: 'ignore' });
+      this.current = { rel, abs, proc };
 
-    const done = (ok) => {
-      clearInterval(tick);
-      this.current = null;
-      this.queued.delete(rel);
-      try { fs.unlinkSync(pack + '.json'); } catch {}
-      const built = hasOrkpack(abs);
-      if (built) {
-        // Stamp the runtime that built this pack so a later runtime change invalidates it.
-        try { fs.writeFileSync(orkpackMetaPath(abs), JSON.stringify({ runtime: orkpackRuntimeId(), builtAt: Date.now() })); } catch {}
-      }
-      // Success at INFO; a failure (crash/kill or no pack produced) is a real problem → WARN, so it
-      // shows under the Logs level filter instead of hiding among INFO lines.
-      if (built) console.log(`[conversion] ${rel}: converted`);
-      else console.warn(`[conversion] ${rel}: ${ok ? 'no .orkpack produced' : 'failed/killed'}`);
-      this._pump();
-    };
-    proc.on('exit',  (code) => done(code === 0));
-    proc.on('error', ()     => done(false));
+      // Live progress: ggml-ork streams packed weights into <pack>.tmp — poll its growth vs the source
+      // GGUF size for a moving bar (clamped <100% until finalized).
+      const tick = setInterval(() => {
+        try {
+          const w = fs.statSync(pack + '.tmp').size;
+          const p = srcSize > 0 ? Math.min(99, Math.round(100 * w / srcSize)) : 0;
+          fs.writeFileSync(pack + '.json', JSON.stringify({ status: 'converting', progress: p }));
+        } catch { /* .tmp not created yet (model still loading) — keep the last value */ }
+      }, 1500);
+
+      const done = (ok) => {
+        clearInterval(tick);
+        this.current = null;
+        this.currentPromise = null;
+        this.queued.delete(rel);
+        try { fs.unlinkSync(pack + '.json'); } catch {}
+        const built = hasOrkpack(abs);
+        if (built) {
+          // Stamp the runtime that built this pack so a later runtime change invalidates it.
+          try { fs.writeFileSync(orkpackMetaPath(abs), JSON.stringify({ runtime: orkpackRuntimeId(), builtAt: Date.now() })); } catch {}
+        }
+        // Success at INFO; a failure (crash/kill or no pack produced) is a real problem → WARN.
+        if (built) console.log(`[conversion] ${rel}: converted`);
+        else console.warn(`[conversion] ${rel}: ${ok ? 'no .orkpack produced' : 'failed/killed'}`);
+        resolve(built);
+      };
+      proc.on('exit',  (code) => done(code === 0));
+      proc.on('error', ()     => done(false));
+    });
+    this.currentPromise = pr;   // cleared in done()
+    return pr;
   }
 
   // A user Load is taking the NPU — kill any in-flight conversion and re-queue it for later idle time.
