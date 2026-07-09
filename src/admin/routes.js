@@ -3,6 +3,7 @@ import { signCookie, verifyCookie, issueSessionCookie } from '../auth/session.js
 import { clearAllCache, getCacheStats } from '../cache.js';
 import pool from '../pool.js';
 import { getConversionScheduler } from '../conversion.js';
+import { getDFlashConversionScheduler } from '../dflash_conversion.js';
 import crypto from 'crypto';
 import os from 'os';
 import fs from 'fs';
@@ -401,6 +402,7 @@ export default async function adminRoutes(fastify, options) {
     // and the PWA falls back to its offline shell. The client polls
     // GET /api/admin/status for { loading, loadError, isLoaded } instead.
     getConversionScheduler()?.preempt();   // yield the NPU: kill any in-flight .orkpack conversion
+    getDFlashConversionScheduler()?.preempt();   // and any in-flight DFlash safetensors→GGUF convert
     pool.beginLoad(model, options || {});
     return reply.status(202).send({ accepted: true, model });
   });
@@ -1469,6 +1471,9 @@ export default async function adminRoutes(fastify, options) {
         // doesn't wait out the build. (The pool's build-then-load guard still guarantees no cold serve
         // regardless — this just moves the one-time pack build off the first request's critical path.)
         try { if (/\.gguf$/i.test(destPath)) getConversionScheduler()?.enqueue(path.relative(MODELS_DIR, destPath)); } catch {}
+        // A DFlash draft downloads as a safetensors dir (config.json + model.safetensors); a re-scan
+        // detects a newly-complete DFlashDraftModel dir and queues its safetensors→GGUF convert.
+        try { if (/\.(safetensors|json)$/i.test(destPath)) getDFlashConversionScheduler()?.scanAndEnqueue(); } catch {}
       } catch (e) {
         if (job.status === 'paused' || job.status === 'cancelled') return;  // expected stop, not an error
         job.status = 'error';

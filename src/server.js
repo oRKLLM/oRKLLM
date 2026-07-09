@@ -17,6 +17,7 @@ import { getSystemMetrics } from './monitor.js';
 import { getStats } from './stats.js';
 import pool from './pool.js';
 import { initConversionScheduler, getConversionScheduler } from './conversion.js';
+import { initDFlashConversionScheduler, getDFlashConversionScheduler } from './dflash_conversion.js';
 import { MODELS_DIR } from './config.js';
 import { syncRuntimes } from './runtime_sync.js';
 import { applyPerformance, pinOrchestrationToLittle } from './perf_governor.js';
@@ -401,6 +402,10 @@ const start = async () => {
       const sched = initConversionScheduler(pool);
       sched.scanAndEnqueue();
       fastify.log.info(`[conversion] scheduler started — ${JSON.stringify(sched.status())}`);
+      // DFlash draft heads (safetensors) auto-convert to GGUF the same idle-driven way.
+      const dsched = initDFlashConversionScheduler(pool);
+      dsched.scanAndEnqueue();
+      fastify.log.info(`[dflash-convert] scheduler started — ${JSON.stringify(dsched.status())}`);
     }
     // Background runtime sync (non-blocking)
     if (dbGetSetting('auto_download_runtimes') === '1') {
