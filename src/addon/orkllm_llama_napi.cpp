@@ -19,6 +19,14 @@
 #ifdef __linux__
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#endif
+#ifdef __APPLE__
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #endif
 
 #ifdef _WIN32
@@ -204,6 +212,7 @@ typedef size_t   (*llama_state_seq_get_data_t)(struct llama_context *, uint8_t *
 typedef size_t   (*llama_state_seq_set_data_t)(struct llama_context *, const uint8_t *, size_t, llama_seq_id);
 // ── Global state ──────────────────────────────────────────────────────────────
 static DYNLIB_HANDLE g_lib = nullptr;
+static std::string   g_libpath;   // path passed to load_library (to locate the sibling libggml-base)
 static struct llama_model        *g_model   = nullptr;
 static const struct llama_vocab  *g_vocab   = nullptr;
 // llama.cpp interprets this seed as "pick a fresh random seed per run", so
@@ -315,6 +324,7 @@ Napi::Value LoadLibrary(const Napi::CallbackInfo& info) {
     if (g_lib) { DYNLIB_FREE(g_lib); g_lib = nullptr; }
     g_lib = DYNLIB_LOAD(libPath.c_str());
     if (!g_lib) return Napi::Boolean::New(env, false);
+    g_libpath = libPath;   // remembered so the DFlash converter can dlopen the sibling libggml-base
 
     LOAD_SYM2(backend_init,  "llama_backend_init");
     LOAD_SYM2(backend_free,  "llama_backend_free");
@@ -1054,6 +1064,10 @@ Napi::Value RunDflash(const Napi::CallbackInfo& info) {
         int64_t     n_gen     = 0;
         bool        eog       = false;
 
+        // instrumentation: measure acceptance-length tau + throughput of the skip-ahead loop
+        int64_t n_cycles = 0, n_acc_total = 0;
+        auto    t_loop   = std::chrono::high_resolution_clock::now();
+
         while (n_gen < maxNewTokens && !eog && !g_abort) {
             // draft block on the draft (clear its KV first; the context is passed out-of-band)
             fn_memory_seq_rm(fn_get_memory(g_draft_ctx), 0, -1, -1);
@@ -1085,10 +1099,182 @@ Napi::Value RunDflash(const Napi::CallbackInfo& info) {
             for (int j = 0; j < acc; ++j) { stream(piece(d[j]), 0); if (fn_is_eog(g_vocab, d[j])) eog = true; }
             stream(piece(bonus), 0); if (fn_is_eog(g_vocab, bonus)) eog = true;
             n_gen += acc + 1; anchor = bonus; n_ctx_tok += acc + 1;
+            n_cycles++; n_acc_total += acc;
+        }
+        {
+            double secs = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - t_loop).count();
+            double tau  = n_cycles ? (double)(n_acc_total + n_cycles) / (double) n_cycles : 0.0; // (accepted+bonus)/forward
+            std::fprintf(stderr,
+                "[dflash] DONE: gen=%lld tokens in %lld target-verify forwards (block=%d) over %.2fs | "
+                "tau=%.2f tok/forward | throughput=%.2f tok/s\n",
+                (long long) n_gen, (long long) n_cycles, block_size, secs, tau, secs > 0 ? n_gen / secs : 0.0);
         }
         stream("", 2);
     }).detach();
     return env.Null();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// DFlash safetensors → GGUF converter (native; no Python/torch).
+//
+// Reads a z-lab DFlash draft's model.safetensors (BF16), quantizes each weight with ggml's exact
+// quant, and writes a GGUF (arch 'dflash') — reusing the ggml/gguf C API already in libggml-base
+// (dlopen'd as the sibling of the loaded libllama). Tokenizer metadata is copied wholesale from the
+// target model's existing GGUF (gguf_set_kv), then the dflash arch/hparam keys are overridden — the
+// draft borrows the target's tokenizer/embeddings at run time, so this is exactly right and needs no
+// tokenizer.json parsing. JS (the runner) parses config.json + the safetensors header and passes a
+// fully-resolved spec; this does only the binary heavy-lifting. Synchronous (runs in a dedicated
+// subprocess, so blocking is fine).
+namespace dfc {
+  struct ggml_init_params { size_t mem_size; void * mem_buffer; bool no_alloc; };
+  struct gguf_init_params { bool no_alloc; void * ctx; };
+  enum { GGML_TYPE_F32 = 0, GGML_TYPE_F16 = 1, GGML_TYPE_Q8_0 = 8, GGML_TYPE_BF16 = 30 };
+  enum { GGUF_TYPE_INT32 = 5 };
+  typedef void*  (*ggml_init_t)(struct ggml_init_params);
+  typedef void   (*ggml_free_t)(void*);
+  typedef void*  (*ggml_new_tensor_1d_t)(void*, int, int64_t);
+  typedef void*  (*ggml_new_tensor_2d_t)(void*, int, int64_t, int64_t);
+  typedef void*  (*ggml_get_data_t)(const void*);
+  typedef void*  (*ggml_set_name_t)(void*, const char*);
+  typedef size_t (*ggml_row_size_t)(int, int64_t);
+  typedef size_t (*ggml_tensor_overhead_t)(void);
+  typedef size_t (*ggml_quantize_chunk_t)(int, const float*, void*, int64_t, int64_t, int64_t, const float*);
+  typedef void   (*ggml_fp32_to_fp16_row_t)(const float*, uint16_t*, int64_t);
+  typedef void   (*ggml_bf16_to_fp32_row_t)(const uint16_t*, float*, int64_t);
+  typedef void*  (*gguf_init_empty_t)(void);
+  typedef void*  (*gguf_init_from_file_t)(const char*, struct gguf_init_params);
+  typedef void   (*gguf_free_t)(void*);
+  typedef void   (*gguf_set_kv_t)(void*, const void*);
+  typedef void   (*gguf_set_val_str_t)(void*, const char*, const char*);
+  typedef void   (*gguf_set_val_u32_t)(void*, const char*, uint32_t);
+  typedef void   (*gguf_set_val_f32_t)(void*, const char*, float);
+  typedef void   (*gguf_set_arr_data_t)(void*, const char*, int, const void*, size_t);
+  typedef void   (*gguf_add_tensor_t)(void*, const void*);
+  typedef bool   (*gguf_write_to_file_t)(const void*, const char*, bool);
+}
+
+Napi::Value ConvertDflashGguf(const Napi::CallbackInfo& info) {
+  using namespace dfc;
+  Napi::Env env = info.Env();
+  auto fail = [&](const std::string& m) { Napi::Object o = Napi::Object::New(env); o.Set("ok", false); o.Set("error", m); return o; };
+  if (info.Length() < 1 || !info[0].IsObject()) { Napi::TypeError::New(env, "Expected (spec)").ThrowAsJavaScriptException(); return env.Null(); }
+  Napi::Object in = info[0].As<Napi::Object>();
+
+  // Locate + dlopen the sibling libggml-base (same dir as the loaded libllama).
+  if (g_libpath.empty()) return fail("load_library must be called first");
+  std::string dir = g_libpath.substr(0, g_libpath.find_last_of('/') + 1);
+  void* gh = nullptr;
+  for (const char* n : { "libggml-base.so", "libggml-base.so.0", "libggml-base.dylib" }) {
+    gh = dlopen((dir + n).c_str(), RTLD_LAZY | RTLD_LOCAL); if (gh) break;
+  }
+  if (!gh) return fail("could not dlopen libggml-base next to " + g_libpath);
+  #define GS(v, s) auto v = (s##_t) dlsym(gh, #s); if (!v) { dlclose(gh); return fail("missing symbol " #s); }
+  GS(_init,   ggml_init);            GS(_free,   ggml_free);
+  GS(_nt1,    ggml_new_tensor_1d);   GS(_nt2,    ggml_new_tensor_2d);
+  GS(_gdata,  ggml_get_data);        GS(_sname,  ggml_set_name);
+  GS(_rsize,  ggml_row_size);        GS(_toh,    ggml_tensor_overhead);
+  GS(_quant,  ggml_quantize_chunk);  GS(_f16row, ggml_fp32_to_fp16_row);   GS(_bf16row, ggml_bf16_to_fp32_row);
+  GS(_gempty, gguf_init_empty);      GS(_gfromf, gguf_init_from_file);     GS(_gfree, gguf_free);
+  GS(_gsetkv, gguf_set_kv);          GS(_gvstr,  gguf_set_val_str);        GS(_gvu32, gguf_set_val_u32);
+  GS(_gvf32,  gguf_set_val_f32);     GS(_garr,   gguf_set_arr_data);       GS(_gaddt, gguf_add_tensor);
+  GS(_gwrite, gguf_write_to_file);
+  #undef GS
+  auto cleanup = [&](void* mctx, void* gw, int fd, void* map, size_t maplen) {
+    if (map && map != MAP_FAILED) munmap(map, maplen);
+    if (fd >= 0) close(fd);
+    if (gw)   _gfree(gw);
+    if (mctx) _free(mctx);
+    dlclose(gh);
+  };
+
+  const std::string st_path  = in.Get("safetensors").As<Napi::String>();
+  const std::string tgt_gguf = in.Get("target_gguf").As<Napi::String>();
+  const std::string outfile  = in.Get("outfile").As<Napi::String>();
+  const std::string outtype  = in.Has("outtype") ? in.Get("outtype").As<Napi::String>().Utf8Value() : "q8_0";
+  const int wtype = (outtype == "f16") ? GGML_TYPE_F16 : GGML_TYPE_Q8_0;
+  Napi::Object meta = in.Get("meta").As<Napi::Object>();
+  Napi::Array tensors = in.Get("tensors").As<Napi::Array>();
+  auto mi = [&](const char* k){ return meta.Has(k) ? meta.Get(k).As<Napi::Number>().Int32Value() : 0; };
+  auto mf = [&](const char* k){ return meta.Has(k) ? meta.Get(k).As<Napi::Number>().FloatValue() : 0.0f; };
+
+  // Build the GGUF: start from the target's KVs (tokenizer + general), then override the dflash arch.
+  void* gw = _gempty();
+  { gguf_init_params p{ true, nullptr };
+    void* tctx = _gfromf(tgt_gguf.c_str(), p);
+    if (tctx) { _gsetkv(gw, tctx); _gfree(tctx); }
+    else { cleanup(nullptr, gw, -1, nullptr, 0); return fail("could not read target gguf " + tgt_gguf); } }
+  _gvstr(gw, "general.architecture", "dflash");
+  if (in.Has("general_name")) _gvstr(gw, "general.name", in.Get("general_name").As<Napi::String>().Utf8Value().c_str());
+  _gvu32(gw, "dflash.context_length",   (uint32_t) mi("n_ctx_train"));
+  _gvu32(gw, "dflash.embedding_length", (uint32_t) mi("n_embd"));
+  _gvu32(gw, "dflash.block_count",      (uint32_t) mi("n_layer"));
+  _gvu32(gw, "dflash.feed_forward_length",           (uint32_t) mi("n_ff"));
+  _gvu32(gw, "dflash.attention.head_count",          (uint32_t) mi("n_head"));
+  _gvu32(gw, "dflash.attention.head_count_kv",       (uint32_t) mi("n_head_kv"));
+  _gvu32(gw, "dflash.attention.key_length",          (uint32_t) mi("head_dim"));
+  _gvu32(gw, "dflash.attention.value_length",        (uint32_t) mi("head_dim"));
+  _gvf32(gw, "dflash.attention.layer_norm_rms_epsilon", mf("rms_eps"));
+  _gvf32(gw, "dflash.rope.freq_base",                mf("rope_theta"));
+  _gvu32(gw, "dflash.block_size",       (uint32_t) mi("block_size"));
+  _gvu32(gw, "dflash.vocab_size",       (uint32_t) mi("n_vocab"));
+  { Napi::Array tl = in.Get("target_layers").As<Napi::Array>();
+    std::vector<int32_t> v(tl.Length());
+    for (uint32_t i = 0; i < tl.Length(); ++i) v[i] = tl.Get(i).As<Napi::Number>().Int32Value();
+    _garr(gw, "dflash.target_layers", GGUF_TYPE_INT32, v.data(), v.size()); }
+
+  // mmap the safetensors.
+  int fd = open(st_path.c_str(), O_RDONLY);
+  if (fd < 0) { cleanup(nullptr, gw, -1, nullptr, 0); return fail("open " + st_path); }
+  struct stat sb; fstat(fd, &sb);
+  size_t maplen = (size_t) sb.st_size;
+  void* map = mmap(nullptr, maplen, PROT_READ, MAP_PRIVATE, fd, 0);
+  if (map == MAP_FAILED) { cleanup(nullptr, gw, fd, nullptr, 0); return fail("mmap " + st_path); }
+  const uint8_t* base = (const uint8_t*) map;
+
+  // Pre-size a ggml context to hold every output tensor's data + struct overhead.
+  size_t need = _toh() * (tensors.Length() + 2);
+  for (uint32_t i = 0; i < tensors.Length(); ++i) {
+    Napi::Object t = tensors.Get(i).As<Napi::Object>();
+    int64_t ne0 = t.Get("ne0").As<Napi::Number>().Int64Value();
+    int64_t ne1 = t.Has("ne1") ? t.Get("ne1").As<Napi::Number>().Int64Value() : 0;
+    bool is1d = (ne1 == 0);
+    int wt = is1d ? GGML_TYPE_F32 : wtype;
+    need += _rsize(wt, ne0) * (is1d ? 1 : ne1) + 256;
+  }
+  ggml_init_params ip{ need, nullptr, false };
+  void* mctx = _init(ip);
+  if (!mctx) { cleanup(nullptr, gw, fd, map, maplen); return fail("ggml_init failed"); }
+
+  std::vector<float> f32;   // reused BF16→F32 scratch
+  for (uint32_t i = 0; i < tensors.Length(); ++i) {
+    Napi::Object t = tensors.Get(i).As<Napi::Object>();
+    std::string name = t.Get("gguf_name").As<Napi::String>();
+    int64_t off = t.Get("offset").As<Napi::Number>().Int64Value();      // absolute byte offset of BF16 data
+    int64_t ne0 = t.Get("ne0").As<Napi::Number>().Int64Value();
+    int64_t ne1 = t.Has("ne1") ? t.Get("ne1").As<Napi::Number>().Int64Value() : 0;
+    bool is1d = (ne1 == 0);
+    int64_t n  = is1d ? ne0 : ne0 * ne1;
+    if (off < 0 || (size_t)(off + n * 2) > maplen) { cleanup(mctx, gw, fd, map, maplen); return fail("tensor out of range: " + name); }
+
+    f32.resize((size_t) n);
+    _bf16row((const uint16_t*)(base + off), f32.data(), n);            // BF16 → F32
+
+    void* tn = is1d ? _nt1(mctx, GGML_TYPE_F32, ne0) : _nt2(mctx, wtype, ne0, ne1);
+    if (!tn) { cleanup(mctx, gw, fd, map, maplen); return fail("ggml_new_tensor failed (context too small?): " + name); }
+    void* dst = _gdata(tn);
+    if (is1d)                         std::memcpy(dst, f32.data(), (size_t) n * sizeof(float)); // norms stay F32
+    else if (wtype == GGML_TYPE_F16)  _f16row(f32.data(), (uint16_t*)dst, n);
+    else                              _quant(GGML_TYPE_Q8_0, f32.data(), dst, 0, ne1, ne0, nullptr);
+    _sname(tn, name.c_str());
+    _gaddt(gw, tn);
+  }
+
+  bool ok = _gwrite(gw, outfile.c_str(), false);
+  cleanup(mctx, gw, fd, map, maplen);
+  Napi::Object o = Napi::Object::New(env);
+  o.Set("ok", ok);
+  if (!ok) o.Set("error", "gguf_write_to_file failed");
+  return o;
 }
 
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
@@ -1096,6 +1282,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("init_model",       Napi::Function::New(env, InitModel));
     exports.Set("run",              Napi::Function::New(env, Run));
     exports.Set("run_dflash",       Napi::Function::New(env, RunDflash));
+    exports.Set("convert_dflash_gguf", Napi::Function::New(env, ConvertDflashGguf));
     exports.Set("unload_model",     Napi::Function::New(env, UnloadModel));
     exports.Set("abort_inference",  Napi::Function::New(env, AbortInference));
     exports.Set("clear_kv_cache",   Napi::Function::New(env, ClearKVCache));

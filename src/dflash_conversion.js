@@ -19,7 +19,11 @@
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { MODELS_DIR } from './config.js';
+import { fileURLToPath } from 'url';
+import { MODELS_DIR, LLAMA_RUNTIME_DIR } from './config.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const RUNNER = path.join(__dirname, 'dflash_convert_runner.js');
 
 const RETRY_MS = 30_000;
 const OUTTYPE  = process.env.ORKLLM_DFLASH_OUTTYPE || 'q8_0'; // int8-tier: usable by the NPU DFlash path
@@ -50,43 +54,28 @@ export class DFlashConversionScheduler {
     this.current = null;        // { rel, abs, proc } in flight, or null
     this.currentPromise = null;
     this._timer  = null;
-    this.cmdTemplate = process.env.ORKLLM_DFLASH_CONVERT_CMD || null;
-    this.python      = process.env.ORKLLM_DFLASH_PYTHON || 'python3';
-    this.convertPy   = this._findConvertScript();
+    this.cmdTemplate = process.env.ORKLLM_DFLASH_CONVERT_CMD || null;  // offload override; default = native node runner
   }
 
-  // Locate the fork's convert_hf_to_gguf.py (which carries the DFlashDraftModel handler). Only used
-  // by the DEFAULT (local) runner; an ORKLLM_DFLASH_CONVERT_CMD offload template ignores it.
-  _findConvertScript() {
-    const cands = [
-      process.env.ORKLLM_DFLASH_CONVERT_SCRIPT,
-      path.join(process.env.HOME || '', 'llama.cpp/convert_hf_to_gguf.py'),
-      path.join(process.env.HOME || '', 'llama-q4-v0659/convert_hf_to_gguf.py'),
-    ].filter(Boolean);
-    return cands.find(p => { try { return fs.statSync(p).isFile(); } catch { return false; } }) || null;
-  }
-
-  // Resolve the TARGET model dir a draft speculates for (needed for --target-model-dir: the draft
-  // borrows the target's tokenizer/embeddings). Heuristic: strip a -DFlash/-dflash suffix from the
-  // draft dir's basename and find a sibling/other model dir with that base name that has a
-  // config.json and is itself NOT a DFlash head. Overridable per-model via settings.dflash_target_dir.
-  resolveTargetDir(absDraftDir, savedTargetDir = null) {
-    if (savedTargetDir) {
-      const t = path.isAbsolute(savedTargetDir) ? savedTargetDir : path.join(MODELS_DIR, savedTargetDir);
-      if (fs.existsSync(path.join(t, 'config.json'))) return t;
+  // Resolve a TARGET GGUF the draft speculates for — the native converter copies the tokenizer KVs
+  // from it (the draft borrows the target's tokenizer/embeddings at run time). Heuristic: strip a
+  // -DFlash/-dflash suffix from the draft dir's basename and find any non-DFlash .gguf whose path
+  // contains that base name. Overridable per-model via settings.dflash_target_gguf.
+  resolveTargetGguf(absDraftDir, savedTargetGguf = null) {
+    if (savedTargetGguf) {
+      const t = path.isAbsolute(savedTargetGguf) ? savedTargetGguf : path.join(MODELS_DIR, savedTargetGguf);
+      if (fs.existsSync(t)) return t;
     }
-    const base = path.basename(absDraftDir).replace(/[-_.]?dflash$/i, '');
+    const base = path.basename(absDraftDir).replace(/[-_.]?dflash$/i, '').toLowerCase();
     let found = null;
     const walk = (dir, depth) => {
-      if (found || depth > 3) return;
+      if (found || depth > 4) return;
       let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
       for (const e of ents) {
         if (found) return;
-        if (!e.isDirectory()) continue;
         const p = path.join(dir, e.name);
-        if (p === absDraftDir) continue;
-        if (e.name === base && fs.existsSync(path.join(p, 'config.json')) && !isDflashDraftDir(p)) { found = p; return; }
-        walk(p, depth + 1);
+        if (e.isDirectory()) { walk(p, depth + 1); continue; }
+        if (/\.gguf$/i.test(e.name) && !/dflash/i.test(p) && p.toLowerCase().includes(base)) { found = p; return; }
       }
     };
     walk(MODELS_DIR, 0);
@@ -120,8 +109,7 @@ export class DFlashConversionScheduler {
 
   status() {
     return {
-      runner: this.cmdTemplate ? 'offload' : (this.convertPy ? 'local' : 'unconfigured'),
-      convertScript: this.convertPy,
+      runner: this.cmdTemplate ? 'offload' : 'native',
       current: this.current?.rel ?? null,
       pending: this.queue.length,
     };
@@ -129,11 +117,8 @@ export class DFlashConversionScheduler {
 
   _pump() {
     if (this.current || this.queue.length === 0) return;
-    if (!this.cmdTemplate && !this.convertPy) {
-      console.warn('[dflash-convert] no convert_hf_to_gguf.py found and no ORKLLM_DFLASH_CONVERT_CMD set — DFlash conversions disabled (provision a torch/gguf env or an offload command)');
-      return;
-    }
-    // Heavy CPU/torch job — only run when idle, like the .orkpack scheduler.
+    // Heavy CPU job — only run when idle, like the .orkpack scheduler. (The native runner needs the
+    // addon's convert_dflash_gguf; if absent it fails per-item, no need to gate the whole scheduler.)
     if (this.pool.anyLoaded || (this.pool.queue && this.pool.queue.length)) { this._scheduleRetry(); return; }
     const rel = this.queue.shift();
     this._spawnConvert(rel).finally(() => this._pump());
@@ -142,27 +127,30 @@ export class DFlashConversionScheduler {
   // Build the argv for the convert. Default: local python fork/convert_hf_to_gguf.py. Offload: split
   // the ORKLLM_DFLASH_CONVERT_CMD template with placeholders substituted (run through a shell so an
   // ssh "..." template works). Returns { cmd, args, shell }.
-  _buildCommand(absDraft, absTarget, outfile) {
+  _buildCommand(absDraft, targetGguf, outfile) {
     if (this.cmdTemplate) {
       const line = this.cmdTemplate
-        .replaceAll('{draft}', absDraft).replaceAll('{target}', absTarget)
+        .replaceAll('{draft}', absDraft).replaceAll('{target}', targetGguf)
         .replaceAll('{outfile}', outfile).replaceAll('{outtype}', OUTTYPE);
-      return { cmd: 'sh', args: ['-c', line], shell: true };
+      return { cmd: 'sh', args: ['-c', line], env: process.env };
     }
-    return { cmd: this.python,
-             args: [this.convertPy, absDraft, '--target-model-dir', absTarget, '--outfile', outfile, '--outtype', OUTTYPE],
-             shell: false };
+    // Default: the native node runner (no python/torch). It parses the safetensors + config, then the
+    // addon's convert_dflash_gguf quantizes the weights and copies the tokenizer KVs from targetGguf.
+    const addon = process.env.ORKLLM_ADDON     || path.join(__dirname, '../build/Release/orkllm_llama_napi.node');
+    const lib   = process.env.ORKLLM_LLAMA_LIB || path.join(LLAMA_RUNTIME_DIR, 'libllama.so');
+    return { cmd: process.execPath, args: [RUNNER, absDraft, targetGguf, outfile, OUTTYPE],
+             env: { ...process.env, ORKLLM_ADDON: addon, ORKLLM_LLAMA_LIB: lib } };
   }
 
-  _spawnConvert(rel, savedTargetDir = null) {
+  _spawnConvert(rel, savedTargetGguf = null) {
     const pr = new Promise((resolve) => {
       const abs     = path.join(MODELS_DIR, rel);
       const outfile = dflashGgufFor(abs);
       if (hasDflashGguf(abs)) { this.queued.delete(rel); resolve(true); return; }
 
-      const target = this.resolveTargetDir(abs, savedTargetDir);
+      const target = this.resolveTargetGguf(abs, savedTargetGguf);
       if (!target) {
-        console.warn(`[dflash-convert] ${rel}: could not resolve a target model dir (needed for the tokenizer/embeddings) — set settings.dflash_target_dir; skipping`);
+        console.warn(`[dflash-convert] ${rel}: could not resolve a target GGUF (needed to copy the tokenizer) — set settings.dflash_target_gguf; skipping`);
         this.queued.delete(rel); resolve(false); return;
       }
 
@@ -172,9 +160,9 @@ export class DFlashConversionScheduler {
         for (const f of fs.readdirSync(abs)) if (/\.safetensors$/.test(f)) srcSize += fs.statSync(path.join(abs, f)).size;
       } catch {}
 
-      const { cmd, args } = this._buildCommand(abs, target, outfile);
+      const { cmd, args, env } = this._buildCommand(abs, target, outfile);
       console.log(`[dflash-convert] building ${rel} → ${path.basename(outfile)} (target=${path.relative(MODELS_DIR, target)}, outtype=${OUTTYPE}) …`);
-      const proc = spawn(cmd, args, { env: process.env, stdio: 'ignore' });
+      const proc = spawn(cmd, args, { env, stdio: 'ignore' });
       this.current = { rel, abs, proc };
 
       // Live progress: poll the outfile growth vs the source safetensors size (GGUF ends up smaller
