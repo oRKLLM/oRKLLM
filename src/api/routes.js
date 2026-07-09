@@ -609,6 +609,13 @@ export default async function apiRoutes(fastify, options) {
               draftStrategy:    saved.eagle3_strategy || 'cpu',
               draftWeightsPath: eagle3Weights,
             });
+          } else if (specMode === 'dflash') {
+            // DFlash: block-diffusion draft co-resident with the target; native run_dflash loop.
+            console.log(`[DFlash] target=${model} block=${saved.dflash_block_size || 16} head=${saved.dflash_weights_path || '-'}`);
+            finalResult = await pool.generateDflash(model, prompt, modelOptions, onToken, {
+              block_size:       saved.dflash_block_size || 16,
+              draftWeightsPath: saved.dflash_weights_path ?? null,
+            });
           } else if (specMode === 'speculative' && draftModel) {
             console.log(`[Spec] Using speculative decode: target=${model} draft=${draftModel} k=${specK}`);
             await pool.generateSpeculative(model, draftModel, prompt, modelOptions, onToken, specK);
@@ -720,13 +727,19 @@ export default async function apiRoutes(fastify, options) {
         let visibleText = '';
         const finalResult = await traceInference(traceParams, async (gen) => {
           const cachePaths  = loadCachePath || saveCachePath ? { loadCachePath, saveCachePath } : {};
-          const specMode2   = model.endsWith('.gguf') ? null : saved.speculative_mode;
+          // DFlash targets ARE .gguf models (the llama backend), so don't null the mode for gguf when it's dflash.
+          const specMode2   = (model.endsWith('.gguf') && saved.speculative_mode !== 'dflash') ? null : saved.speculative_mode;
           let result;
           if (specMode2 === 'eagle3') {
             result = await pool.generateEagle3(model, prompt, modelOptions, onToken, {
               k:             saved.spec_draft_tokens || 8,
               draftStrategy: saved.eagle3_strategy || 'cpu',
               draftWeightsPath: saved.eagle3_weights_path ?? null,
+            }) ?? { perf: {} };
+          } else if (specMode2 === 'dflash') {
+            result = await pool.generateDflash(model, prompt, modelOptions, onToken, {
+              block_size:       saved.dflash_block_size || 16,
+              draftWeightsPath: saved.dflash_weights_path ?? null,
             }) ?? { perf: {} };
           } else {
             result = await pool.generate(model, prompt, modelOptions, onToken, cachePaths);

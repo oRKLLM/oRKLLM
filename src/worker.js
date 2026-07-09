@@ -142,6 +142,26 @@ process.on('message', async (msg) => {
     }
   }
 
+  else if (msg.type === 'run_dflash') {
+    // DFlash speculative decode: the llama addon loads the draft co-resident (ctx_other=target) and runs
+    // the whole block-draft/verify loop natively, streaming tokens back the same way as 'run'.
+    const { prompt, draft_path, block_size, options } = msg;
+    if (!engine || !engine.run_dflash) {
+      process.send({ type: 'error', message: 'DFlash not supported by this engine/runtime' });
+      return;
+    }
+    try {
+      engine.run_dflash({
+        prompt: prompt || '',
+        draft_path,
+        block_size: block_size || 16,
+        max_new_tokens: options?.max_new_tokens,
+      }, (res) => { process.send({ type: 'token', ...res }); });
+    } catch (err) {
+      process.send({ type: 'error', message: err.message });
+    }
+  }
+
   else if (msg.type === 'abort') {
     if (engine) {
       if (engine.abort_inference) {

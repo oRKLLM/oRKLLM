@@ -189,6 +189,19 @@ typedef float *  (*llama_get_logits_ith_t)(struct llama_context *, int32_t);
 typedef float *  (*llama_get_embeddings_ith_t)(struct llama_context *, int32_t);
 typedef struct llama_batch (*llama_batch_init_t)(int32_t, int32_t, int32_t);
 typedef void (*llama_batch_free_t)(struct llama_batch);
+// DFlash (block-diffusion speculative decode) primitives — feat/dflash libllama only (nullable).
+typedef int32_t  (*llama_encode_t)(struct llama_context *, struct llama_batch);
+typedef void     (*llama_set_embeddings_layer_inp_t)(struct llama_context *, uint32_t, bool);
+typedef float *  (*llama_get_embeddings_layer_inp_t)(struct llama_context *, uint32_t);
+typedef void     (*llama_set_embeddings_nextn_t)(struct llama_context *, bool, bool);
+typedef float *  (*llama_get_embeddings_nextn_t)(struct llama_context *);
+typedef void     (*llama_set_dflash_context_t)(struct llama_context *, const float *, int32_t, const int32_t *);
+typedef const int32_t * (*llama_model_target_layer_ids_t)(const struct llama_model *);
+typedef uint32_t (*llama_model_target_layer_ids_n_t)(const struct llama_model *);
+typedef llama_token (*llama_vocab_mask_t)(const struct llama_vocab *);
+typedef size_t   (*llama_state_seq_get_size_t)(struct llama_context *, llama_seq_id);
+typedef size_t   (*llama_state_seq_get_data_t)(struct llama_context *, uint8_t *, size_t, llama_seq_id);
+typedef size_t   (*llama_state_seq_set_data_t)(struct llama_context *, const uint8_t *, size_t, llama_seq_id);
 // ── Global state ──────────────────────────────────────────────────────────────
 static DYNLIB_HANDLE g_lib = nullptr;
 static struct llama_model        *g_model   = nullptr;
@@ -199,6 +212,11 @@ static const struct llama_vocab  *g_vocab   = nullptr;
 static const uint32_t LLAMA_RANDOM_SEED = 0xFFFFFFFFu;
 static struct llama_context      *g_ctx     = nullptr;
 static struct llama_sampler      *g_sampler = nullptr;
+// DFlash: the block-diffusion draft, co-resident with the target (its context borrows the target's
+// tok_embd/output via ctx_other = g_ctx, and reads the target's extracted hidden layers).
+static struct llama_model        *g_draft_model = nullptr;
+static struct llama_context      *g_draft_ctx   = nullptr;
+static std::string                g_draft_path;
 static std::atomic<bool>          g_abort{false};
 
 // Abort callback wired into llama_context_params. llama_decode invokes this
@@ -263,6 +281,19 @@ static llama_get_logits_ith_t            fn_get_logits_ith = nullptr;
 static llama_get_embeddings_ith_t        fn_get_embeddings_ith = nullptr;
 static llama_batch_init_t                fn_batch_init     = nullptr;
 static llama_batch_free_t                fn_batch_free     = nullptr;
+// DFlash primitives (feat/dflash libllama only; nullptr on stock runtimes)
+static llama_encode_t                    fn_encode         = nullptr;
+static llama_set_embeddings_layer_inp_t  fn_set_layer_inp  = nullptr;
+static llama_get_embeddings_layer_inp_t  fn_get_layer_inp  = nullptr;
+static llama_set_embeddings_nextn_t      fn_set_emb_nextn  = nullptr;
+static llama_get_embeddings_nextn_t      fn_get_emb_nextn  = nullptr;
+static llama_set_dflash_context_t        fn_set_dflash_ctx = nullptr;
+static llama_model_target_layer_ids_t    fn_tlids          = nullptr;
+static llama_model_target_layer_ids_n_t  fn_tlids_n        = nullptr;
+static llama_vocab_mask_t                fn_vocab_mask     = nullptr;
+static llama_state_seq_get_size_t        fn_state_seq_size = nullptr;
+static llama_state_seq_get_data_t        fn_state_seq_get  = nullptr;
+static llama_state_seq_set_data_t        fn_state_seq_set  = nullptr;
 
 #define LOAD_SYM(name) fn_##name = (decltype(fn_##name))DYNLIB_GETSYM(g_lib, "llama_" #name)
 #define LOAD_SYM2(fn_name, sym) fn_##fn_name = (decltype(fn_##fn_name))DYNLIB_GETSYM(g_lib, sym)
@@ -332,6 +363,19 @@ Napi::Value LoadLibrary(const Napi::CallbackInfo& info) {
     LOAD_SYM2(get_embeddings_ith, "llama_get_embeddings_ith");
     LOAD_SYM2(batch_init,    "llama_batch_init");
     LOAD_SYM2(batch_free,    "llama_batch_free");
+    // DFlash primitives — optional (present only on a feat/dflash libllama; run_dflash null-checks them).
+    LOAD_SYM2(encode,          "llama_encode");
+    LOAD_SYM2(set_layer_inp,   "llama_set_embeddings_layer_inp");
+    LOAD_SYM2(get_layer_inp,   "llama_get_embeddings_layer_inp");
+    LOAD_SYM2(set_emb_nextn,   "llama_set_embeddings_nextn");
+    LOAD_SYM2(get_emb_nextn,   "llama_get_embeddings_nextn");
+    LOAD_SYM2(set_dflash_ctx,  "llama_set_dflash_context");
+    LOAD_SYM2(tlids,           "llama_model_target_layer_ids");
+    LOAD_SYM2(tlids_n,         "llama_model_target_layer_ids_n");
+    LOAD_SYM2(vocab_mask,      "llama_vocab_mask");
+    LOAD_SYM2(state_seq_size,  "llama_state_seq_get_size");
+    LOAD_SYM2(state_seq_get,   "llama_state_seq_get_data");
+    LOAD_SYM2(state_seq_set,   "llama_state_seq_set_data");
 
     if (!fn_backend_init || !fn_model_load || !fn_ctx_init || !fn_decode ||
         !fn_tokenize || !fn_tok2piece || !fn_sample || !fn_is_eog || !fn_batch_init || !fn_batch_free) {
@@ -875,10 +919,183 @@ Napi::Value RollbackKVCache(const Napi::CallbackInfo& info) {
     return Napi::Boolean::New(env, ok);
 }
 
+// ── DFlash: block-diffusion speculative decode (skip-ahead) ──────────────────────────────────────────
+// Ports examples/dflash's validated loop. The target (g_ctx) must already be loaded via init_model; this
+// loads the DFlash draft co-resident (ctx_other = g_ctx so it borrows the target's tok_embd/output and can
+// read the target's extracted hidden layers). Each cycle: draft a block on the draft (one grouped forward),
+// verify all B on the target in ONE forward (M=B, grouped -> NPU), accept the longest greedy-matching prefix
+// + the target's correction (bonus), roll back via a state checkpoint (M-RoPE KV can't partial-seq_rm),
+// commit, and grow the fused context from the committed tokens' target hiddens.
+// NOTE: first-draft port — validate/iterate via a board node-gyp build against a feat/dflash libllama.
+static bool ensure_draft_loaded(const std::string& path) {
+    if (g_draft_ctx && g_draft_path == path) return true;
+    if (g_draft_ctx)   { fn_ctx_free(g_draft_ctx);     g_draft_ctx   = nullptr; }
+    if (g_draft_model) { fn_model_free(g_draft_model); g_draft_model = nullptr; }
+    auto mp = fn_model_def_par(); mp.n_gpu_layers = 999;
+    g_draft_model = fn_model_load(path.c_str(), mp);
+    if (!g_draft_model) return false;
+    auto cp = fn_ctx_def_par();
+    cp.ctx_other       = g_ctx;                 // borrow target embeddings/output + read extracted layers
+    cp.flash_attn_type = 0;                     // DISABLED (block attention uses the non-flash path)
+    if (fn_n_ctx) cp.n_ctx = fn_n_ctx(g_ctx);   // match the target's context length
+    g_draft_ctx = fn_ctx_init(g_draft_model, cp);
+    if (!g_draft_ctx) { fn_model_free(g_draft_model); g_draft_model = nullptr; return false; }
+    if (fn_set_emb_nextn) fn_set_emb_nextn(g_draft_ctx, true, false);  // capture the encoder g_embd
+    g_draft_path = path;
+    return true;
+}
+
+Napi::Value RunDflash(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (!g_lib || !g_model || !g_ctx) { Napi::Error::New(env, "target not initialized").ThrowAsJavaScriptException(); return env.Null(); }
+    if (info.Length() < 2 || !info[0].IsObject() || !info[1].IsFunction()) { Napi::TypeError::New(env, "Expected (input, callback)").ThrowAsJavaScriptException(); return env.Null(); }
+    if (!fn_encode || !fn_set_layer_inp || !fn_get_layer_inp || !fn_get_emb_nextn || !fn_set_dflash_ctx ||
+        !fn_tlids || !fn_tlids_n || !fn_vocab_mask || !fn_state_seq_size || !fn_state_seq_get || !fn_state_seq_set ||
+        !fn_n_embd || !fn_get_logits_ith || !fn_get_memory || !fn_memory_seq_rm) {
+        Napi::Error::New(env, "libllama lacks DFlash symbols (needs a feat/dflash runtime)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Napi::Object input = info[0].As<Napi::Object>();
+    Napi::Function cb  = info[1].As<Napi::Function>();
+    std::string prompt    = input.Has("prompt")     && input.Get("prompt").IsString()     ? input.Get("prompt").As<Napi::String>().Utf8Value() : "";
+    std::string draftPath = input.Has("draft_path") && input.Get("draft_path").IsString() ? input.Get("draft_path").As<Napi::String>().Utf8Value() : "";
+    int block_size    = input.Has("block_size")     && input.Get("block_size").IsNumber()     ? input.Get("block_size").As<Napi::Number>().Int32Value() : 16;
+    int maxNewTokens  = input.Has("max_new_tokens") && input.Get("max_new_tokens").IsNumber() ? input.Get("max_new_tokens").As<Napi::Number>().Int32Value() : 512;
+    if (block_size <= 0) block_size = 16;
+    if (maxNewTokens <= 0) maxNewTokens = 512;
+
+    if (draftPath.empty() || !ensure_draft_loaded(draftPath)) { Napi::Error::New(env, "failed to load DFlash draft").ThrowAsJavaScriptException(); return env.Null(); }
+
+    const int32_t* tlids = fn_tlids(g_draft_model);
+    const uint32_t n_tl  = fn_tlids_n(g_draft_model);
+    for (uint32_t k = 0; k < n_tl; ++k) fn_set_layer_inp(g_ctx, (uint32_t) tlids[k], true);
+
+    const int32_t     n_embd_tgt = fn_n_embd(g_model);
+    const int32_t     n_embd_dec = fn_n_embd(g_draft_model);
+    const int32_t     n_embd_enc = (int32_t) n_tl * n_embd_tgt;
+    const llama_token mask_tok   = fn_vocab_mask(fn_get_vocab(g_draft_model));
+
+    auto* rctx = new RunContext();
+    rctx->tsfn = Napi::ThreadSafeFunction::New(env, cb, "DflashCb", 0, 1);
+    g_abort = false;
+
+    std::thread([prompt, block_size, maxNewTokens, n_embd_tgt, n_embd_dec, n_embd_enc, mask_tok, tlids, n_tl, rctx]() {
+        auto stream = [&](const std::string& s, int state) {
+            rctx->tsfn.NonBlockingCall([s, state](Napi::Env e, Napi::Function f) {
+                Napi::Object o = Napi::Object::New(e);
+                o.Set("text",  Napi::String::New(e, s));
+                o.Set("state", Napi::Number::New(e, state));
+                f.Call({o});
+            });
+            if (state == 2 || state == 3) { rctx->tsfn.Release(); delete rctx; }
+        };
+        auto piece  = [&](llama_token t) { char b[128]; int n = fn_tok2piece(g_vocab, t, b, sizeof(b)-1, 0, true); if (n < 0) n = 0; return std::string(b, n); };
+        const int32_t n_vocab = fn_n_vocab(g_vocab);
+        auto argmax = [&](const float* lg) { int b = 0; float bv = lg[0]; for (int v = 1; v < n_vocab; ++v) if (lg[v] > bv) { bv = lg[v]; b = v; } return (llama_token) b; };
+
+        clearCtxMemory();
+        fn_memory_seq_rm(fn_get_memory(g_draft_ctx), 0, -1, -1);
+
+        std::vector<llama_token> toks(8192);
+        int n_prompt = fn_tokenize(g_vocab, prompt.c_str(), (int32_t) prompt.size(), toks.data(), 8192, true, true);
+        if (n_prompt <= 0) { stream("", 3); return; }
+        toks.resize(n_prompt);
+
+        std::vector<float>   ctx_g;
+        std::vector<int32_t> ctx_pos;
+        std::vector<float>   feat;
+        std::vector<uint8_t> ckpt;
+
+        auto grab = [&](int32_t n, int32_t row_off) {
+            for (uint32_t k = 0; k < n_tl; ++k) {
+                float* layer = fn_get_layer_inp(g_ctx, (uint32_t) tlids[k]);
+                if (!layer) return false;
+                for (int32_t i = 0; i < n; ++i)
+                    std::memcpy(feat.data() + (size_t)(row_off + i) * n_embd_enc + (size_t) k * n_embd_tgt,
+                                layer + (size_t) i * n_embd_tgt, (size_t) n_embd_tgt * sizeof(float));
+            }
+            return true;
+        };
+        auto encode_append = [&](const float* f, int32_t n, int32_t base_pos) {
+            llama_batch e = fn_batch_init(n, n_embd_enc, 1);
+            e.n_tokens = n;
+            std::memcpy(e.embd, f, (size_t) n * n_embd_enc * sizeof(float));
+            for (int32_t i = 0; i < n; ++i) { e.pos[i] = i; e.n_seq_id[i] = 1; e.seq_id[i][0] = 0; e.logits[i] = 0; }
+            int rc = fn_encode(g_draft_ctx, e);
+            fn_batch_free(e);
+            if (rc != 0) return false;
+            const float* g = fn_get_emb_nextn(g_draft_ctx);
+            if (!g) return false;
+            size_t off = ctx_g.size(); ctx_g.resize(off + (size_t) n * n_embd_dec);
+            std::memcpy(ctx_g.data() + off, g, (size_t) n * n_embd_dec * sizeof(float));
+            for (int32_t i = 0; i < n; ++i) ctx_pos.push_back(base_pos + i);
+            return true;
+        };
+        auto decode_toks = [&](llama_context* c, const std::vector<llama_token>& t, const std::vector<int32_t>& pos) {
+            llama_batch b = fn_batch_init((int32_t) t.size(), 0, 1);
+            b.n_tokens = (int32_t) t.size();
+            for (size_t i = 0; i < t.size(); ++i) { b.token[i] = t[i]; b.pos[i] = pos[i]; b.n_seq_id[i] = 1; b.seq_id[i][0] = 0; b.logits[i] = 1; }
+            int rc = fn_decode(c, b);
+            fn_batch_free(b);
+            return rc == 0;
+        };
+
+        // prefill the target + build the initial fused context
+        { std::vector<int32_t> pp(n_prompt); for (int i = 0; i < n_prompt; ++i) pp[i] = i;
+          if (!decode_toks(g_ctx, toks, pp)) { stream("", 3); return; } }
+        for (auto id : toks) stream(piece(id), 0);
+        feat.assign((size_t) n_prompt * n_embd_enc, 0.0f);
+        if (!grab(n_prompt, 0) || !encode_append(feat.data(), n_prompt, 0)) { stream("", 3); return; }
+
+        int32_t     n_ctx_tok = n_prompt;
+        llama_token anchor    = toks[n_prompt - 1];
+        llama_token t0        = argmax(fn_get_logits_ith(g_ctx, n_prompt - 1));
+        int64_t     n_gen     = 0;
+        bool        eog       = false;
+
+        while (n_gen < maxNewTokens && !eog && !g_abort) {
+            // draft block on the draft (clear its KV first; the context is passed out-of-band)
+            fn_memory_seq_rm(fn_get_memory(g_draft_ctx), 0, -1, -1);
+            fn_set_dflash_ctx(g_draft_ctx, ctx_g.data(), (int32_t) ctx_pos.size(), ctx_pos.data());
+            std::vector<llama_token> bt; std::vector<int32_t> bp;
+            bt.push_back(anchor); bp.push_back(n_ctx_tok - 1);
+            for (int j = 0; j < block_size; ++j) { bt.push_back(mask_tok); bp.push_back(n_ctx_tok + j); }
+            if (!decode_toks(g_draft_ctx, bt, bp)) { stream("", 3); return; }
+            std::vector<llama_token> d(block_size);
+            for (int j = 0; j < block_size; ++j) d[j] = argmax(fn_get_logits_ith(g_draft_ctx, j + 1));
+
+            // checkpoint + verify all B on the target in ONE forward (M=B, grouped -> NPU)
+            size_t sz = fn_state_seq_size(g_ctx, 0); ckpt.resize(sz); fn_state_seq_get(g_ctx, ckpt.data(), sz, 0);
+            { std::vector<int32_t> vp(block_size); for (int j = 0; j < block_size; ++j) vp[j] = n_ctx_tok + j;
+              if (!decode_toks(g_ctx, d, vp)) { stream("", 3); return; } }
+            int acc = 0; while (acc < block_size) { llama_token tj = (acc == 0) ? t0 : argmax(fn_get_logits_ith(g_ctx, acc - 1)); if (d[acc] != tj) break; acc++; }
+            llama_token bonus = (acc == 0) ? t0 : argmax(fn_get_logits_ith(g_ctx, acc - 1));
+
+            // roll back (restore checkpoint; M-RoPE can't partial-seq_rm) + commit [accepted..., bonus]
+            fn_state_seq_set(g_ctx, ckpt.data(), sz, 0);
+            std::vector<llama_token> ct; std::vector<int32_t> cp2;
+            for (int j = 0; j < acc; ++j) { ct.push_back(d[j]); cp2.push_back(n_ctx_tok + j); }
+            ct.push_back(bonus); cp2.push_back(n_ctx_tok + acc);
+            if (!decode_toks(g_ctx, ct, cp2)) { stream("", 3); return; }
+            feat.assign((size_t)(acc + 1) * n_embd_enc, 0.0f);
+            if (!grab(acc + 1, 0) || !encode_append(feat.data(), acc + 1, n_ctx_tok)) { stream("", 3); return; }
+            t0 = argmax(fn_get_logits_ith(g_ctx, acc));
+
+            for (int j = 0; j < acc; ++j) { stream(piece(d[j]), 0); if (fn_is_eog(g_vocab, d[j])) eog = true; }
+            stream(piece(bonus), 0); if (fn_is_eog(g_vocab, bonus)) eog = true;
+            n_gen += acc + 1; anchor = bonus; n_ctx_tok += acc + 1;
+        }
+        stream("", 2);
+    }).detach();
+    return env.Null();
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("load_library",     Napi::Function::New(env, LoadLibrary));
     exports.Set("init_model",       Napi::Function::New(env, InitModel));
     exports.Set("run",              Napi::Function::New(env, Run));
+    exports.Set("run_dflash",       Napi::Function::New(env, RunDflash));
     exports.Set("unload_model",     Napi::Function::New(env, UnloadModel));
     exports.Set("abort_inference",  Napi::Function::New(env, AbortInference));
     exports.Set("clear_kv_cache",   Napi::Function::New(env, ClearKVCache));

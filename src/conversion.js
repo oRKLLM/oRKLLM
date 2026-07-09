@@ -15,7 +15,15 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { MODELS_DIR, LLAMA_RUNTIME_DIR } from './config.js';
-import { isTrailingGgufShard } from './gguf.js';
+import { isTrailingGgufShard, getGgufArchitecture } from './gguf.js';
+
+// Architectures the ggml-ork NPU MUL_MAT accelerator cannot pack into an .orkpack, detected up front
+// so we skip at enqueue time (never spawn a doomed conversion that just churns the NPU):
+//   • 'qwen35' (Qwen3.5/3.6) — SSM / Gated-Delta-Net hybrid: state-space + dynamic/batched matmuls,
+//     not the static MUL_MAT the accelerator packs.
+//   • 'dflash' — a DFlash speculative-draft head, not a standalone servable model; it runs co-resident
+//     with its target via run_dflash and has no .orkpack of its own.
+const UNSUPPORTED_ARCHS = new Set(['qwen35', 'dflash']);
 
 const RETRY_MS = 30_000;
 
@@ -113,6 +121,14 @@ export class ConversionScheduler {
 
   enqueue(rel) {
     if (this.queued.has(rel) || (this.current && this.current.rel === rel)) return;
+    const _arch = getGgufArchitecture(path.join(MODELS_DIR, rel));
+    if (UNSUPPORTED_ARCHS.has(_arch)) {
+      const why = _arch === 'dflash'
+        ? 'DFlash speculative-draft head — runs co-resident, no standalone .orkpack'
+        : 'SSM/GDN-hybrid, not static MUL_MAT';
+      console.warn(`[conversion] ${rel}: arch '${_arch}' unsupported by the NPU matmul accelerator (${why}); skipping (no .orkpack).`);
+      return;
+    }
     this.queued.add(rel);
     this.queue.push(rel);
     this._pump();

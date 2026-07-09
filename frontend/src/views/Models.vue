@@ -685,12 +685,32 @@
                         :items="[
                           {title:'Disabled',value:null},
                           {title:'Eagle-3 — pipelined NPU+Mali (3.7× speedup, empirically validated)',value:'eagle3'},
+                          {title:'DFlash — block-diffusion draft, co-resident on the NPU (~6 tokens/cycle)',value:'dflash'},
                           {title:'Draft model — separate smaller model (limited speedup on single NPU)',value:'speculative'},
                           {title:'Native MTP (Qwen3 only)',value:'native_mtp'},
                         ]"
                         label="Speculative Mode"
                         density="compact" variant="outlined" hide-details class="mb-3"
                       ></v-select>
+
+                      <!-- DFlash settings -->
+                      <template v-if="settingsForm.speculative_mode === 'dflash'">
+                        <v-text-field
+                          v-model="settingsForm.dflash_weights_path"
+                          label="DFlash draft head (path under models dir)"
+                          placeholder="onion515/ornith-9b-dflash/ornith-9b-dflash-q5_k_m.gguf"
+                          density="compact" variant="outlined" hide-details class="mb-2"
+                        ></v-text-field>
+                        <v-text-field
+                          v-model.number="settingsForm.dflash_block_size"
+                          type="number" label="Block size (tokens drafted per cycle)"
+                          density="compact" variant="outlined" hide-details class="mb-2"
+                        ></v-text-field>
+                        <div class="text-caption text-grey mb-3">
+                          The draft loads co-resident with the target on the NPU; both the target verify and the
+                          draft run as grouped M&gt;1 matmuls. Requires a feat/dflash llama runtime.
+                        </div>
+                      </template>
 
                       <!-- Eagle-3 settings -->
                       <template v-if="settingsForm.speculative_mode === 'eagle3'">
@@ -1293,6 +1313,8 @@ export default {
       spec_draft_tokens:    4,
       eagle3_strategy:      'cpu',
       eagle3_weights_path:  null,
+      dflash_weights_path:  null,
+      dflash_block_size:    16,
       kv_cache_quant:       null,
       npu_quant:            'auto',
       npu_hybrid:           false,
@@ -1647,6 +1669,8 @@ export default {
         spec_draft_tokens:   saved.spec_draft_tokens   ?? 4,
         eagle3_strategy:     saved.eagle3_strategy     ?? 'cpu',
         eagle3_weights_path: saved.eagle3_weights_path ?? null,
+        dflash_weights_path: saved.dflash_weights_path ?? null,
+        dflash_block_size:   saved.dflash_block_size   ?? 16,
         kv_cache_quant:      saved.kv_cache_quant      ?? null,
         npu_quant:           saved.npu_quant           ?? 'auto',
         npu_hybrid:          saved.npu_hybrid          ?? false,

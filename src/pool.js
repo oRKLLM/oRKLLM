@@ -1085,6 +1085,57 @@ class EnginePool {
     }
   }
 
+  // DFlash speculative decode. Unlike Eagle-3 (Vulkan draft head), the DFlash draft is a llama.cpp model
+  // that must be CO-RESIDENT with the target (it borrows the target's tok_embd/output + reads its extracted
+  // hidden layers), so the whole block-draft/verify loop runs natively in the llama addon (run_dflash) —
+  // this only drives it and streams tokens. Falls back to standard generate if no head or the runtime lacks
+  // the DFlash symbols.
+  async generateDflash(modelName, prompt, options, onToken, {
+    block_size = 16,
+    draftWeightsPath = null,
+  } = {}) {
+    await this.load(modelName, options);
+    const slot = this._slots[0];
+    if (!slot.isLoaded || !slot.worker) throw new Error('[DFlash] No model loaded in slot 0');
+
+    const resolvedDraftPath = draftWeightsPath
+      ? (path.isAbsolute(draftWeightsPath) ? draftWeightsPath : path.join(MODELS_DIR, draftWeightsPath))
+      : null;
+    if (!resolvedDraftPath) {
+      console.warn('[DFlash] no draft head configured — falling back to standard generate');
+      return this.generate(modelName, prompt, options, onToken);
+    }
+
+    slot.activeGeneration = new Promise((genResolve, genReject) => {
+      const onMsg = (msg) => {
+        if (msg.type === 'token') {
+          onToken(msg);
+          if (msg.state === 2 || msg.state === 3) { cleanup(); genResolve(msg); }
+        } else if (msg.type === 'error') { cleanup(); genReject(new Error(msg.message)); }
+      };
+      const onExit = () => { cleanup(); genReject(new Error('[DFlash] worker exited during generation')); };
+      const cleanup = () => {
+        slot.worker?.removeListener('message', onMsg);
+        slot.worker?.removeListener('exit', onExit);
+      };
+      slot.worker.on('message', onMsg);
+      slot.worker.on('exit', onExit);
+      slot.worker.send({ type: 'run_dflash', prompt, draft_path: resolvedDraftPath, block_size, options });
+    });
+
+    try {
+      const result = await slot.activeGeneration;
+      return result || { perf: {} };
+    } catch (e) {
+      console.warn('[DFlash] falling back to standard generate:', e.message);
+      return this.generate(modelName, prompt, options, onToken);
+    } finally {
+      slot.activeGeneration = null;
+      this.resetIdleTimer(slot);
+      this.processQueue();
+    }
+  }
+
   async generate(modelName, prompt, options, onToken, cachePaths = {}) {
     return new Promise((resolve, reject) => {
       this.queue.push({ modelName, prompt, options, onToken, cachePaths, resolve, reject });
