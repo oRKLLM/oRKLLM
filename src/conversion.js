@@ -30,9 +30,21 @@ export { orkpackPathFor };
 const UNSUPPORTED_ARCHS = new Set(['qwen35', 'dflash']);
 
 const RETRY_MS = 30_000;
-// How much of a failed conversion's stderr to keep, and how many of its last lines to log.
+// How much of a failed conversion's stderr to keep, and how many lines of it to surface.
 const STDERR_TAIL_CHARS = 16_384;
-const STDERR_LOG_LINES  = 12;
+const STDERR_LOG_LINES  = 10;
+// The runtime signs off with a per-domain residency table, so the raw tail is almost always the least
+// informative part of the output. Prefer lines that actually say something went wrong, and fall back to
+// the tail only when none match.
+const STDERR_SIGNAL_RE = /error|fail|abort|assert|unsupported|refus|cannot|declin|invalid|not found|ORK (PERSIST|META|STUB)|warn/i;
+const STDERR_NOISE_RE  = /^\s*\[ork RESIDENT\]\s+domain \d+:/i;
+
+// Pick the most diagnostic lines out of a captured stderr tail.
+function stderrHighlights(text) {
+  const lines = String(text).split('\n').map(l => l.trimEnd()).filter(Boolean).filter(l => !STDERR_NOISE_RE.test(l));
+  const signal = lines.filter(l => STDERR_SIGNAL_RE.test(l));
+  return (signal.length ? signal : lines).slice(-STDERR_LOG_LINES);
+}
 
 export function hasOrkpack(absGguf) {
   try { return fs.statSync(orkpackPathFor(absGguf)).size > 0; } catch { return false; }
@@ -250,9 +262,8 @@ export class ConversionScheduler {
         if (built) console.log(`[conversion] ${rel}: converted`);
         else {
           console.warn(`[conversion] ${rel}: ${ok ? 'no .orkpack produced' : 'failed/killed'}`);
-          // The runtime's own last words — without these the failure is undiagnosable from the logs.
-          const tail = errTail.trim().split('\n').filter(Boolean).slice(-STDERR_LOG_LINES);
-          for (const line of tail) console.warn(`[conversion] ${rel}: | ${line}`);
+          // The runtime's own account of why — without it the failure is undiagnosable from the logs.
+          for (const line of stderrHighlights(errTail)) console.warn(`[conversion] ${rel}: | ${line}`);
         }
         resolve(built);
       };
