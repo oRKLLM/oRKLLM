@@ -12,7 +12,7 @@ import { eagle3Generate } from './eagle.js';
 import { getAggregatedTools } from './mcp.js';
 import { buildToolSystemPrompt } from './mcp_inference.js';
 import { isOrkpackFresh, getConversionScheduler } from './conversion.js';
-import { orkEnvFrom, orkQuantForSource, isOrkpackPath, isOrkpackUsable, stubPathFor } from './orkpack.js';
+import { orkEnvFrom, orkQuantForSource, isOrkpackPath, isOrkpackUsable, stubPathFor, orkpackPathFor } from './orkpack.js';
 import { isRecurrentArch, supportsThinkingToggle, ggufQuantBits } from './gguf.js';
 import { cacheKey, getCachePath, tmpCachePath, putCachePath, isCacheEnabled } from './cache.js';
 
@@ -105,7 +105,7 @@ function resolveOrkPrecision(modelName, options = {}, saved = null) {
   return { orkQuant, orkHybrid };
 }
 
-function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, orkMoeNpu = false, wcacheBudgetMB = null, sourceIsStub = false } = {}) {
+function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, orkMoeNpu = false, wcacheBudgetMB = null, sourceIsStub = false, orkpackPath = null } = {}) {
   const dirs = [LLAMA_RUNTIME_DIR, RUNTIMES_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean);
   const env = { ...process.env, LD_LIBRARY_PATH: dirs.join(':') };
   // Keep the GPU idle unless something explicitly wants it (TurboQuant KV). With
@@ -121,9 +121,9 @@ function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, o
   // (the native-INT4 runtime defaults hybrid off). Must be set at fork time.
   if (orkQuant) env.ORK_QUANT = String(orkQuant);
   if (orkHybrid) env.ORK_HYBRID = '1';
-  // .orkpack: ggml-ork DERIVES the pack path from the loaded model (<model-dir>/<basename>.orkpack —
-  // exactly orkpackPathFor) and loads it with no configuration, so there is nothing to point at. Do NOT
-  // set ORK_PERSIST: it was removed upstream and now GGML_ABORTs the worker at backend init.
+  // .orkpack: do NOT set ORK_PERSIST — it was removed upstream and now GGML_ABORTs the worker at
+  // backend init. The pack is pointed at with ORK_ORKPACK_PATH below instead (ggml-ork's own
+  // derivation reads the command line, which an N-API embedder does not have).
   // ORK_EVICT_SRC drops the source GGUF's mmap'd pages as weights become NPU-resident (peak RSS stays
   // ~max(src, packed) instead of the sum). ORK_NO_STUB keeps a pack the worker happens to build inline
   // from writing a <model>.orkpack.gguf stub into MODELS_DIR, where our .gguf scanners would find it.
@@ -135,6 +135,15 @@ function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, o
   // (buffer_set_tensor never fires for model weights), so the caller has to say so. Read at backend
   // init → set at fork.
   if (sourceIsStub) env.ORK_SOURCE_IS_STUB = '1';
+  // WHERE THE PACK IS. ggml-ork normally derives <model>.orkpack by scanning the COMMAND LINE for the
+  // .gguf it was given — which works for its CLI frontends and not at all for us: the worker drives the
+  // library through N-API, so there is no -m argument to find and the runtime logs "no .gguf found on
+  // the command line — cannot derive the orkpack path" and then disables the packed-weight path
+  // entirely. For a stub that is silent corruption, not a slow load: its packed tensors are holes, so
+  // they read as zeros and the model emits fluent gibberish. ORK_ORKPACK_PATH is the documented
+  // override, and for an embedder it is not optional. (ORK_PERSIST used to supply this path as a side
+  // effect, which is why removing it broke pack loading here and nowhere else.)
+  if (orkpackPath) env.ORK_ORKPACK_PATH = orkpackPath;
   // Experimental MoE-on-NPU expert offload (ggml-ork only): routes MoE expert
   // matmuls (MUL_MAT_ID) onto the NPU. Default off — on RK3588 it loses ~3× vs
   // CPU at M=1 decode (4 GiB IOVA cap + LPDDR4X bandwidth). Read at backend init,
@@ -675,6 +684,11 @@ class EnginePool {
         // experimental MoE-on-NPU expert offload (gguf/ggml-ork only; default off, set per-fork)
         orkMoeNpu: options.ork_moe_npu,
         sourceIsStub: !!options.orkpack,
+        // A pack-backed model names its pack directly; a plain .gguf gets its own pack when that pack
+        // is one this run would actually adopt (same check the cold-start guard makes).
+        orkpackPath: options.orkpack
+          || (backend === 'llama' && isOrkpackFresh(modelPath, { orkQuant: options.ork_quant, orkHybrid: options.ork_hybrid })
+                ? orkpackPathFor(modelPath) : null),
         // global process-RAM cap minus the hot prefix cache → NPU residency budget
         wcacheBudgetMB: resolveWcacheBudgetMB(),
       }) });
