@@ -186,6 +186,17 @@ export function isTrailingGgufShard(name) {
   return s !== null && s.index > 1;
 }
 
+// Approximate a GGUF's weight bit-width from its filename quant tag. Used to choose the .orkpack build
+// tier: the source's precision decides whether the pack gets the NF4 codebook (unquantized source) or a
+// uniform tier. Unknown tags assume 4-bit, the common case.
+export function ggufQuantBits(name) {
+  const n = String(name).toUpperCase();
+  if (/F32/.test(n)) return 32;
+  if (/BF16|FP16|F16/.test(n)) return 16;
+  const m = n.match(/I?Q(\d)/); // Q8_0, Q6_K, Q5_K_M, Q4_K_M, IQ4_XS, IQ3_M, IQ2_…
+  return m ? parseInt(m[1], 10) : 4;
+}
+
 // Is this a ggml-ork "stub" GGUF — <model>.orkpack.gguf, the holed companion the .orkpack finalize
 // writes unless ORK_NO_STUB=1? Its packed tensors are holes that read as zeros and are served from the
 // pack, so it is not a loadable model on its own (the runtime aborts on a stub without its pack) and

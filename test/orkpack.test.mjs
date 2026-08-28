@@ -6,7 +6,9 @@ import path from 'path';
 import {
   readOrkpackFooter, sigQbits, sigCompatible, orkEnvFrom, isOrkpackUsable,
   orkpackPathFor, ORKPACK_VERSION, FOOTER_SIZE, MAGIC,
+  isOrkpackPath, stubPathFor, sourceGgufFor, orkQuantForSource,
 } from '../src/orkpack.js';
+import { ggufQuantBits } from '../src/gguf.js';
 
 // ── Minimal .orkpack writer (mirrors the reader's understanding of the footer) ────
 // struct orkpack_footer { u64 index_off; u32 n_entries; u32 version; u32 ork_fmt; u32 quant_sig; char magic[8]; }
@@ -149,5 +151,52 @@ describe('orkpackPathFor', () => {
     assert.equal(orkpackPathFor('/m/a/b.gguf'), '/m/a/b.orkpack');
     assert.equal(orkpackPathFor('/m/a/b.GGUF'), '/m/a/b.orkpack');
     assert.equal(orkpackPathFor('/m/gguf-repo/x-00001-of-00003.gguf'), '/m/gguf-repo/x-00001-of-00003.orkpack');
+  });
+});
+
+describe('pack identity', () => {
+  test('recognises a pack and derives its companions', () => {
+    assert.equal(isOrkpackPath('a/b.orkpack'), true);
+    assert.equal(isOrkpackPath('a/b.gguf'), false);
+    // The extracted sparse gguf reuses the runtime's own stub name, so only ever one file exists.
+    assert.equal(stubPathFor('/m/x.orkpack'), '/m/x.orkpack.gguf');
+    // Provenance only — the source may well have been deleted after packing, which is the point.
+    assert.equal(sourceGgufFor('/m/x.orkpack'), '/m/x.gguf');
+  });
+});
+
+describe('orkQuantForSource', () => {
+  // The pack decides what the weights are; the gguf is only the material it is built from.
+  test('an UNQUANTIZED source builds an int4 (NF4) pack — the recommended setup', () => {
+    for (const b of [16, 32]) assert.equal(orkQuantForSource(b, 'auto'), '4', `${b}-bit source`);
+  });
+
+  test('an already-quantized >=5-bit source builds int8, because int4 would be uniform not NF4', () => {
+    for (const b of [5, 6, 8]) assert.equal(orkQuantForSource(b, 'auto'), '8', `${b}-bit source`);
+  });
+
+  test('a <5-bit source is left to the runtime mixed dispatch', () => {
+    for (const b of [2, 3, 4]) assert.equal(orkQuantForSource(b, 'auto'), null, `${b}-bit source`);
+  });
+
+  test('an explicit setting always wins over the source', () => {
+    assert.equal(orkQuantForSource(16, 'int8'), '8');
+    assert.equal(orkQuantForSource(4,  'int4'), '4');
+    assert.equal(orkQuantForSource(8,  'int4'), '4');
+  });
+
+  test('a missing/garbage width is left to the runtime', () => {
+    assert.equal(orkQuantForSource(NaN, 'auto'), null);
+    assert.equal(orkQuantForSource(undefined, 'auto'), null);
+  });
+
+  // End to end over real filenames: this is the pairing that actually decides a build.
+  test('real filenames map to the intended tier', () => {
+    const t = (f, exp) => assert.equal(orkQuantForSource(ggufQuantBits(f), 'auto'), exp, f);
+    t('Qwen3-1.7B-F16.gguf',        '4');   // the recommended input
+    t('Qwen3-1.7B-BF16.gguf',       '4');
+    t('Qwen3-1.7B-UD-Q8_K_XL.gguf', '8');
+    t('Qwen3-1.7B-UD-Q4_K_XL.gguf', null);
+    t('Qwen3-27B-IQ4_XS.gguf',      null);
   });
 });

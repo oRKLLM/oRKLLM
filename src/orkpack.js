@@ -36,6 +36,55 @@ const SIG_HY_BIT  = 0x100;   // ORK_HYBRID
 
 export function orkpackPathFor(absGguf) { return absGguf.replace(/\.gguf$/i, '.orkpack'); }
 
+// ---- .orkpack as the servable artifact -------------------------------------------------------------
+// A v6 pack embeds the source GGUF's metadata, so it is self-contained: ggml_backend_ork_extract_gguf
+// rebuilds a SPARSE gguf from the pack alone (the packed tensors stay file HOLES that ork serves, the
+// rest travel inside the pack). That extracted file is what llama.cpp is handed as -m, with
+// ORK_SOURCE_IS_STUB=1 telling ork the holes are its responsibility.
+//
+// This is why the pack — not the gguf — is the model. Serving the FULL gguf alongside the pack carries
+// every matmul weight twice (source bytes + packed int4 in IOVA): 40.8 GiB of working set for a 27B on
+// a 31 GiB board, which does not fail as an OOM but as page churn, submit timeouts and an NPU
+// self-heal loop that reads like a driver fault. The gguf is a build input; the pack is the model.
+export function isOrkpackPath(name) { return /\.orkpack$/i.test(String(name)); }
+
+// The sparse gguf extracted from a pack. Same name the runtime's own build-time stub uses, so the two
+// are interchangeable and only ever one file exists.
+export function stubPathFor(packPath) { return String(packPath) + '.gguf'; }
+
+// The .gguf a pack was built FROM. It may well not exist any more — deleting it after packing is the
+// point of the exercise — so this is for provenance and settings carry-over, never for loading.
+export function sourceGgufFor(packPath) { return String(packPath).replace(/\.orkpack$/i, '.gguf'); }
+
+// The ORK_QUANT tier to BUILD a pack at, from the source gguf's weight width and the per-model
+// npu_quant setting ('auto' | 'int4' | 'int8'). Returns '4', '8', or null to leave it to the runtime.
+//
+// The auto rule is ggml-ork's measured guidance, and it is deliberately NOT "preserve the source
+// precision" — the pack decides what the weights ARE; the gguf is only the material:
+//   • UNQUANTIZED source (F16/F32/BF16) -> int4. The RECOMMENDED setup: an unquantized source
+//     auto-selects the NF4 codebook, smaller AND faster than int8 (Qwen3-1.7B @P=128 on RK3588:
+//     NF4-from-F16 215 tok/s prefill / 6.77 decode, vs the int8 reference ~178).
+//   • ALREADY-QUANTIZED >=5-bit (Q8/Q6/Q5) -> int8. int4 from a quantized source is warned by the
+//     runtime and falls back to UNIFORM int4, not NF4 — 172 / 2.96, less than half the decode.
+//   • <5-bit (Q4_K and below) -> null; the runtime's mixed dispatch decides.
+export function orkQuantForSource(bits, npuQuant = 'auto') {
+  if (npuQuant === 'int8') return '8';
+  if (npuQuant === 'int4') return '4';
+  if (npuQuant !== 'auto') return null;
+  if (!Number.isFinite(bits)) return null;
+  if (bits >= 16) return '4';
+  if (bits >= 5)  return '8';
+  return null;
+}
+
+// Has this .gguf been superseded by its pack? Once the pack exists the gguf is a build input, not a
+// servable model, and listing both would offer the same weights twice — once the cheap way and once the
+// way that double-carries them. THE single enumeration rule, shared by /v1/models and
+// /api/admin/library so the two cannot drift.
+export function supersededByPack(absGguf) {
+  try { return fs.statSync(orkpackPathFor(absGguf)).size > 0; } catch { return false; }
+}
+
 // The 32 bytes at EOF, or null when the file is absent, too short, or unreadable.
 export function readOrkpackFooter(packPath) {
   let fd = null;

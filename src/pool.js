@@ -12,8 +12,8 @@ import { eagle3Generate } from './eagle.js';
 import { getAggregatedTools } from './mcp.js';
 import { buildToolSystemPrompt } from './mcp_inference.js';
 import { isOrkpackFresh, getConversionScheduler } from './conversion.js';
-import { orkEnvFrom } from './orkpack.js';
-import { isRecurrentArch, supportsThinkingToggle } from './gguf.js';
+import { orkEnvFrom, orkQuantForSource, isOrkpackPath, isOrkpackUsable, stubPathFor } from './orkpack.js';
+import { isRecurrentArch, supportsThinkingToggle, ggufQuantBits } from './gguf.js';
 import { cacheKey, getCachePath, tmpCachePath, putCachePath, isCacheEnabled } from './cache.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -79,20 +79,18 @@ const DEFAULT_MAX_CONTEXT_LEN = 4096;
 // absolute build path that doesn't exist on the target). LD_LIBRARY_PATH is
 // searched before DT_RUNPATH, so this wins. Must be set at fork time (the loader
 // reads it at process start, not per dlopen).
-// Approximate a GGUF's weight bit-width from its filename quant tag, to pick the
-// NPU execution precision under 'auto'. The ork NPU runs INT4 (W4A4) or INT8
-// (W8A8); a >=5-bit file rounds up to INT8 so it isn't silently downcast to 4-bit.
-function ggufQuantBits(name) {
-  const n = String(name).toUpperCase();
-  if (/F32/.test(n)) return 32;
-  if (/BF16|FP16|F16/.test(n)) return 16;
-  const m = n.match(/I?Q(\d)/); // Q8_0, Q6_K, Q5_K_M, Q4_K_M, IQ4_XS, IQ3_M, IQ2_…
-  return m ? parseInt(m[1], 10) : 4; // unknown → assume 4-bit (the common case)
-}
-
-// NPU execution precision (ORK_QUANT) + hybrid offload (ORK_HYBRID) for a GGUF, from its per-model
-// settings. The native runtime defaults to pure INT4 (W4A4); under 'auto' we raise a >=5-bit GGUF to
-// INT8 so a Q8/Q6/F16 file isn't silently downcast. 'int4'/'int8' force it.
+// NPU execution precision (ORK_QUANT) + hybrid offload (ORK_HYBRID), from the model's per-model
+// settings. 'int4'/'int8' force it; 'auto' picks from the SOURCE precision.
+//
+// The auto rule follows ggml-ork's measured guidance, and it is not "preserve the source precision" —
+// the .orkpack decides what the weights ARE, the gguf is only the material it is built from:
+//   • UNQUANTIZED source (F16/F32/BF16) -> int4. This is the RECOMMENDED setup: an unquantized source
+//     auto-selects the NF4 codebook, which is both smaller and FASTER than int8 (measured Qwen3-1.7B
+//     @P=128 on RK3588: NF4-from-F16 215 tok/s prefill / 6.77 decode, vs the int8 reference ~178).
+//   • ALREADY-QUANTIZED but >=5-bit (Q8/Q6/Q5) -> int8. Building int4 from a quantized source is warned
+//     by the runtime and falls back to the lossier UNIFORM int4, not NF4 — measured 172 / 2.96, i.e.
+//     less than half the decode. int8 is the better use of an already-quantized source.
+//   • <5-bit (Q4_K and below) -> unset, and the runtime's own mixed dispatch decides.
 //
 // These two are ALSO stamped into the .orkpack footer as its build-config signature, and ggml-ork rejects
 // a pack whose signature is incompatible with the run that loads it (ORK_HYBRID strictly; ORK_QUANT
@@ -102,15 +100,12 @@ function ggufQuantBits(name) {
 function resolveOrkPrecision(modelName, options = {}, saved = null) {
   const s = saved ?? (dbGetModelSettings(modelName) || {});
   const npuQuant = options.npu_quant ?? s.npu_quant ?? 'auto';
-  const orkQuant = npuQuant === 'int8' ? '8'
-    : npuQuant === 'int4' ? '4'
-    : (npuQuant === 'auto' && ggufQuantBits(modelName) >= 5) ? '8'
-    : null; // null → inherit the runtime default (INT4)
+  const orkQuant = orkQuantForSource(ggufQuantBits(modelName), npuQuant);
   const orkHybrid = (options.npu_hybrid ?? s.npu_hybrid ?? false) ? '1' : null;
   return { orkQuant, orkHybrid };
 }
 
-function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, orkMoeNpu = false, wcacheBudgetMB = null } = {}) {
+function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, orkMoeNpu = false, wcacheBudgetMB = null, sourceIsStub = false } = {}) {
   const dirs = [LLAMA_RUNTIME_DIR, RUNTIMES_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean);
   const env = { ...process.env, LD_LIBRARY_PATH: dirs.join(':') };
   // Keep the GPU idle unless something explicitly wants it (TurboQuant KV). With
@@ -135,6 +130,11 @@ function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, o
   // Both are no-ops for the rkllm backend. Read at backend init, so they must be set at fork time.
   env.ORK_EVICT_SRC = '1';
   env.ORK_NO_STUB   = '1';
+  // Loading a pack via its extracted sparse gguf: the model file's packed tensors are HOLES that read
+  // as zeros, and ork must serve them on every path. There is no in-backend hook that can detect this
+  // (buffer_set_tensor never fires for model weights), so the caller has to say so. Read at backend
+  // init → set at fork.
+  if (sourceIsStub) env.ORK_SOURCE_IS_STUB = '1';
   // Experimental MoE-on-NPU expert offload (ggml-ork only): routes MoE expert
   // matmuls (MUL_MAT_ID) onto the NPU. Default off — on RK3588 it loses ~3× vs
   // CPU at M=1 decode (4 GiB IOVA cap + LPDDR4X bandwidth). Read at backend init,
@@ -457,9 +457,11 @@ class EnginePool {
         throw new Error(`Model file not found: ${modelPath}`);
       }
 
-      // Determine backend from file extension
+      // Determine backend from file extension. A .orkpack is served by the same llama/ggml-ork backend
+      // as the .gguf it was built from — it IS that model, in the NPU-native form.
+      const isPack = isOrkpackPath(modelName);
       const isGguf = modelName.toLowerCase().endsWith('.gguf');
-      const backend = isGguf ? 'llama' : 'rkllm';
+      const backend = (isGguf || isPack) ? 'llama' : 'rkllm';
 
       // COLD-START GUARD: never serve a GGUF cold. If its .orkpack isn't fresh, free the single NPU stream
       // (this slot is already unloaded — evict any other loaded slots too) and BUILD the pack now, then load
@@ -468,6 +470,16 @@ class EnginePool {
       // token. The pack is pinned to the serving precision signature so it's loadable. On build failure we
       // fall through and serve without the warm cache (old behavior) rather than block the request.
       const orkPrecision = { orkQuant: options.ork_quant, orkHybrid: options.ork_hybrid };
+      // A PACK-BACKED model is already the converted artifact — there is nothing to build, and nothing
+      // to fall back to: the source .gguf may well have been deleted (that is the point). So validate it
+      // up front and fail loudly rather than dropping into a cold serve that cannot work.
+      if (isPack && !isOrkpackUsable(modelPath, orkPrecision)) {
+        const err = new Error(
+          `.orkpack ${modelName} is not loadable by the installed runtime at this precision ` +
+          `(footer schema / format token / build signature mismatch). Rebuild it from its source GGUF.`);
+        err.code = 'ORKPACK_UNUSABLE';
+        throw err;
+      }
       if (isGguf && !isOrkpackFresh(modelPath, orkPrecision)) {
         const sched = getConversionScheduler();
         if (sched) {
@@ -489,8 +501,16 @@ class EnginePool {
         ? { ...options, base_domain_id: (s.id % this.npuCores) + 1 }
         : { ...options };
 
-      if (isGguf) {
-        // ── llama backend (.gguf) ──────────────────────────────────────────
+      if (isGguf || isPack) {
+        // ── llama backend (.gguf source, or a .orkpack) ────────────────────
+        // A pack is handed to llama.cpp as the SPARSE gguf extracted from it: header/KV/tensor-info
+        // verbatim so stock llama.cpp loads it unchanged, with the packed tensors left as file holes
+        // that ork serves from the pack. The worker extracts it on demand (once) and ORK_SOURCE_IS_STUB
+        // tells the backend those holes are its responsibility.
+        if (isPack) {
+          slotOptions.orkpack   = modelPath;
+          slotOptions.stub_path = stubPathFor(modelPath);
+        }
         const libPath = path.join(LLAMA_RUNTIME_DIR, 'libllama.so');
         const result = await this._tryLoadSlot(s, modelName, modelPath, slotOptions, libPath, 'llama');
         if (result.success) {
@@ -654,6 +674,7 @@ class EnginePool {
         orkHybrid: options.ork_hybrid,
         // experimental MoE-on-NPU expert offload (gguf/ggml-ork only; default off, set per-fork)
         orkMoeNpu: options.ork_moe_npu,
+        sourceIsStub: !!options.orkpack,
         // global process-RAM cap minus the hot prefix cache → NPU residency budget
         wcacheBudgetMB: resolveWcacheBudgetMB(),
       }) });

@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { MODELS_DIR, parseRuntimeVersion } from '../config.js';
 import { supportsThinkingToggle, isRecurrentArch, isTrailingGgufShard, isOrkpackStub, ggufDisplayName } from '../gguf.js';
+import { isOrkpackPath, supersededByPack } from '../orkpack.js';
 import pool from '../pool.js';
 import { isOrkpackFresh, hasOrkpack } from '../conversion.js';
 import { recordRequest } from '../stats.js';
@@ -85,18 +86,27 @@ export default async function apiRoutes(fastify, options) {
   // GET /v1/models
   fastify.get('/models', async (request, reply) => {
     try {
-      // Recursively collect .rkllm and .gguf files, using paths relative to MODELS_DIR as IDs
+      // Recursively collect servable models, using paths relative to MODELS_DIR as IDs.
+      // THE PACK IS THE MODEL: a .orkpack is a first-class entry (it carries the weights and, from v6,
+      // the gguf metadata needed to rebuild a loadable sparse gguf), and the .gguf it was built FROM
+      // drops out — that file is a build input. Listing both would offer the same weights twice, once
+      // the cheap way and once the way that carries every matmul weight a second time.
+      // A .gguf with no pack yet still lists, so it can show its conversion state and be converted.
       function scanDir(dir, prefix = '') {
         const results = [];
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
           if (entry.isDirectory()) {
             results.push(...scanDir(path.join(dir, entry.name), prefix ? `${prefix}/${entry.name}` : entry.name));
-          } else if (entry.name.endsWith('.rkllm') || entry.name.endsWith('.gguf')) {
+          } else if (entry.name.endsWith('.rkllm') || entry.name.endsWith('.gguf') || isOrkpackPath(entry.name)) {
             // Split (sharded) GGUF: llama.cpp loads the whole model from the FIRST
             // shard (-00001-of-), so trailing shards (-00002-of-…) are not separate
             // loadable models — skip them here.
             if (isTrailingGgufShard(entry.name)) continue;
-            if (isOrkpackStub(entry.name)) continue;      // <model>.orkpack.gguf sidecar, not a model
+            // <model>.orkpack.gguf — the sparse companion extracted from a pack. Not its own model:
+            // the pack it belongs to is already listed, and the stub is unloadable without it.
+            if (isOrkpackStub(entry.name)) continue;
+            // A source .gguf whose pack exists is a build input, not a model.
+            if (entry.name.endsWith('.gguf') && supersededByPack(path.join(dir, entry.name))) continue;
             results.push(prefix ? `${prefix}/${entry.name}` : entry.name);
           }
         }
@@ -107,8 +117,10 @@ export default async function apiRoutes(fastify, options) {
       const data = modelFiles.map(file => {
         const stats = fs.statSync(path.join(MODELS_DIR, file));
         const basename = path.basename(file);
+        const isPack = isOrkpackPath(basename);
         const isGguf = basename.endsWith('.gguf');
-        const runtime = isGguf ? 'llama' : 'rkllm';
+        // A pack is served by the llama/ggml-ork backend just as its source gguf was.
+        const runtime = (isGguf || isPack) ? 'llama' : 'rkllm';
 
         // Persist parsed runtime version into model_settings if not already stored (rkllm only)
         const runtimeVersion = isGguf ? null : parseRuntimeVersion(basename);
@@ -123,7 +135,9 @@ export default async function apiRoutes(fastify, options) {
         // NPU-native arena format and persists it next to the model. Reflect filesystem state only —
         // `<model>.orkpack` present → done; sidecar `<model>.orkpack.json` → queued/converting/error.
         let orkConversion;
-        if (isGguf) {
+        // A pack needs no conversion — it IS the converted artifact.
+        if (isPack) orkConversion = { status: 'done', packedBytes: stats.size };
+        else if (isGguf) {
           const absGguf = path.join(MODELS_DIR, file);
           const packPath = absGguf.replace(/\.gguf$/i, '.orkpack');
           // A rebuild in progress (sidecar) takes priority; then a pack that's DONE only if the

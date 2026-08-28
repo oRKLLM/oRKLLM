@@ -1277,6 +1277,48 @@ Napi::Value ConvertDflashGguf(const Napi::CallbackInfo& info) {
   return o;
 }
 
+// ── .orkpack → sparse gguf ─────────────────────────────────────────────────────
+// A v6 .orkpack embeds the source gguf's metadata, so a loadable gguf can be rebuilt from the pack
+// ALONE: header/KV/tensor-info verbatim (stock llama.cpp opens it unchanged) with the packed tensors
+// left as file HOLES that ggml-ork serves. That is what makes the pack the distributable artifact —
+// serving the full gguf beside it would carry every matmul weight twice, once as source bytes and
+// again as packed int4 in IOVA.
+//
+// ggml_backend_ork_extract_gguf lives in libggml-ork.so, a sibling of the libllama.so we were handed,
+// so resolve it there. It is nullptr-guarded: a runtime older than the v6 epoch simply does not export
+// it, and the JS side reports that rather than pretending the pack is corrupt.
+typedef bool (*ork_extract_gguf_t)(const char *, const char *);
+
+static ork_extract_gguf_t resolve_ork_extract() {
+    // Already in the process? (libllama pulls ggml-ork in via the backend registry.)
+    if (auto f = (ork_extract_gguf_t) dlsym(RTLD_DEFAULT, "ggml_backend_ork_extract_gguf")) return f;
+    if (g_libpath.empty()) return nullptr;
+    const std::string dir = g_libpath.substr(0, g_libpath.find_last_of('/') + 1);
+    for (const char* n : { "libggml-ork.so", "libggml-ork.so.0" }) {
+        if (void* h = dlopen((dir + n).c_str(), RTLD_LAZY | RTLD_GLOBAL))
+            if (auto f = (ork_extract_gguf_t) dlsym(h, "ggml_backend_ork_extract_gguf")) return f;
+    }
+    return nullptr;
+}
+
+// extract_orkpack_gguf(packPath, outPath) -> bool. False = this runtime cannot do it, or the pack
+// predates the embedded-metadata format; the caller distinguishes the two by probing for the method.
+Napi::Value ExtractOrkpackGguf(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 2 || !info[0].IsString() || !info[1].IsString()) {
+        Napi::TypeError::New(env, "Expected (packPath, outPath)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    auto fn = resolve_ork_extract();
+    if (!fn) {
+        fprintf(stderr, "[ork] ggml_backend_ork_extract_gguf not found in this runtime\n");
+        return Napi::Boolean::New(env, false);
+    }
+    const std::string pack = info[0].As<Napi::String>().Utf8Value();
+    const std::string out  = info[1].As<Napi::String>().Utf8Value();
+    return Napi::Boolean::New(env, fn(pack.c_str(), out.c_str()));
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("load_library",     Napi::Function::New(env, LoadLibrary));
     exports.Set("init_model",       Napi::Function::New(env, InitModel));
@@ -1287,6 +1329,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("abort_inference",  Napi::Function::New(env, AbortInference));
     exports.Set("clear_kv_cache",   Napi::Function::New(env, ClearKVCache));
     exports.Set("rollback_kv_cache", Napi::Function::New(env, RollbackKVCache));
+    exports.Set("extract_orkpack_gguf", Napi::Function::New(env, ExtractOrkpackGguf));
     return exports;
 }
 

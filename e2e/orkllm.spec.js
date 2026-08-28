@@ -297,8 +297,18 @@ test('Logs page: log terminal appears and receives WebSocket output', async ({ p
 // Test 8: Settings - HuggingFace token
 // ---------------------------------------------------------------------------
 test('Settings page: HuggingFace token saves and persists', async ({ page }) => {
+  // Settings.vue populates its form from a GET /global-settings issued on mount. Every step here waits
+  // for the request that actually carries the state, rather than for a fixed slice of time:
+  //   • typing before that GET lands lets the arriving response overwrite the field, and an EMPTY token
+  //     is then saved — the failure surfaces later, as the reload assertion, which is why it read as a
+  //     slow page rather than a lost write;
+  //   • asserting after a reload races the same fetch.
+  // Both were 3s races that passed on an idle machine and failed under load.
+  const settingsGet = () => page.waitForResponse(r =>
+    r.url().includes('/api/admin/global-settings') && r.request().method() === 'GET');
+
   await login(page);
-  await page.goto('/settings');
+  await Promise.all([settingsGet(), page.goto('/settings')]);
 
   const hfCard = page.locator('.v-card').filter({ hasText: 'HuggingFace' }).first();
   await expect(hfCard).toBeVisible();
@@ -306,12 +316,17 @@ test('Settings page: HuggingFace token saves and persists', async ({ page }) => 
   await expect(hfInput).toBeVisible();
 
   await hfInput.fill('hf_test_token_12345');
-  await hfCard.locator('button:has-text("Save Token")').click();
+  // Wait for the write itself, not just for a toast to appear.
+  await Promise.all([
+    page.waitForResponse(r =>
+      r.url().includes('/api/admin/global-settings') && r.request().method() === 'POST' && r.ok()),
+    hfCard.locator('button:has-text("Save Token")').click(),
+  ]);
+  await expect(page.locator('.v-snackbar')).toContainText(/saved|success/i);
 
-  await expect(page.locator('.v-snackbar')).toContainText(/saved|success/i, { timeout: 3000 });
-
-  await page.reload();
-  await expect(hfCard.locator('input').first()).toHaveValue('hf_test_token_12345', { timeout: 3000 });
+  // Persistence: reload and let the repopulating fetch land before asserting.
+  await Promise.all([settingsGet(), page.reload()]);
+  await expect(hfCard.locator('input').first()).toHaveValue('hf_test_token_12345');
 });
 
 // ---------------------------------------------------------------------------

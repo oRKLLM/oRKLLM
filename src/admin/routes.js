@@ -12,6 +12,7 @@ import { spawn, spawnSync } from 'child_process';
 import { getStats, clearSessionStats, clearAllTimeStats } from '../stats.js';
 import { getMetricsSnapshot } from '../monitor.js';
 import { supportsThinkingToggle, isTrailingGgufShard, isOrkpackStub, ggufDisplayName } from '../gguf.js';
+import { isOrkpackPath, supersededByPack, stubPathFor, sourceGgufFor } from '../orkpack.js';
 import {
   dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings, dbDeleteModelSettings,
   dbCreateUser, dbGetUserById, dbGetUserByUsername, dbGetUserBySubject, dbListUsers, dbUpdateUser, dbUsersEmpty,
@@ -871,13 +872,18 @@ export default async function adminRoutes(fastify, options) {
         // enable_thinking natively; for gguf it depends on the chat template
         // (Qwen3+ yes, LFM2.5-MoE no). The UI hides the Enable-Thinking setting
         // when false so it isn't offered where it can't take effect.
-        else if (/\.(rkllm|gguf)$/i.test(e.name)) {
+        // THE PACK IS THE MODEL: a .orkpack is a servable entry in its own right; the .gguf it was
+        // built from is a build input and drops out once the pack exists (listing both would offer the
+        // same weights twice, the second time via the path that double-carries them).
+        else if (/\.(rkllm|gguf|orkpack)$/i.test(e.name)) {
           // Split (sharded) GGUF: the model loads from the FIRST shard
           // (-00001-of-), which llama.cpp uses to auto-pull the rest. Trailing
           // shards (-00002-of-…) are not separate models — skip them.
           if (isTrailingGgufShard(e.name) || isOrkpackStub(e.name)) continue;
           const abs = path.join(dir, e.name);
+          if (/\.gguf$/i.test(e.name) && supersededByPack(abs)) continue;   // superseded by its pack
           const isRk = /\.rkllm$/i.test(e.name);
+          const isPack = isOrkpackPath(e.name);
           // A draft head can ship as a loose .gguf/.rkllm (no safetensors repo dir, so the
           // config-arch classifier below never sees it). Route it to the Draft Models card by
           // name/path instead of dumping it among the servable models in Available. EAGLE-3
@@ -897,6 +903,20 @@ export default async function adminRoutes(fastify, options) {
             });
           } else if (isRk) {
             available.push({ id: rel, sizeBytes: sizeOf(abs), runtime: 'rkllm', thinkingToggle: true });
+          } else if (isPack) {
+            // The pack IS the converted artifact, so its conversion state is always done. The chat
+            // template lives in the gguf header, which the extracted stub reproduces verbatim — read it
+            // from the stub, else the source if it is still around, else leave the toggle available
+            // rather than hiding a setting we merely failed to determine.
+            const tmpl = [stubPathFor(abs), sourceGgufFor(abs)].find(p => { try { return fs.statSync(p).size > 0; } catch { return false; } });
+            available.push({
+              id: rel,
+              displayName: rel.replace(/\.orkpack$/i, ''),
+              sizeBytes: sizeOf(abs),
+              runtime: 'llama',
+              thinkingToggle: tmpl ? supportsThinkingToggle(tmpl) : true,
+              orkConversion: { status: 'done', packedBytes: sizeOf(abs) },
+            });
           } else {
             available.push({ id: rel, displayName: ggufDisplayName(rel), sizeBytes: sizeOf(abs), runtime: 'llama', thinkingToggle: supportsThinkingToggle(abs), orkConversion: orkConversionState(abs) });
           }

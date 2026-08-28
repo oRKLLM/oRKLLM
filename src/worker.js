@@ -1,3 +1,4 @@
+import fs from 'fs';
 import { createRequire } from 'module';
 import { MockEngine } from './mock_engine.js';
 import { LIBRKLLMRT_PATH } from './config.js';
@@ -58,8 +59,35 @@ process.on('message', async (msg) => {
           console.warn(`Failed to dlopen ${resolvedLibPath}. Falling back to mock engine.`);
           useMock = true;
         } else {
-          console.log(`[Worker:${backend}] Initializing model: ${modelPath}`);
-          const ret = nativeAddon.init_model(modelPath, options || {});
+          // PACK-BACKED LOAD. llama.cpp needs a gguf to open, and for a pack that gguf is the SPARSE
+          // one rebuilt from the pack's own embedded metadata: header/KV/tensor-info verbatim (so stock
+          // llama.cpp loads it with no loader change) and the packed tensors left as file HOLES that
+          // ork serves. Extract once and keep it next to the pack — this is the same file, and the same
+          // name, the runtime's own build-time stub would have written.
+          let loadPath = modelPath;
+          if (options?.orkpack) {
+            const stub = options.stub_path || (options.orkpack + '.gguf');
+            let haveStub = false;
+            try { haveStub = fs.statSync(stub).size > 0; } catch {}
+            if (!haveStub) {
+              if (typeof nativeAddon.extract_orkpack_gguf !== 'function') {
+                process.send({ type: 'loaded', status: -1, error:
+                  'This llama runtime cannot extract a gguf from a .orkpack (needs a build with ' +
+                  'ggml_backend_ork_extract_gguf). Update the llama runtime, or serve the source GGUF.' });
+                return;
+              }
+              console.log(`[Worker:llama] extracting sparse gguf from pack → ${stub}`);
+              if (!nativeAddon.extract_orkpack_gguf(options.orkpack, stub)) {
+                process.send({ type: 'loaded', status: -1, error:
+                  `Could not extract a gguf from ${options.orkpack} — the pack carries no embedded ` +
+                  'metadata (pre-v6 pack). Rebuild it from its source GGUF.' });
+                return;
+              }
+            }
+            loadPath = stub;
+          }
+          console.log(`[Worker:${backend}] Initializing model: ${loadPath}`);
+          const ret = nativeAddon.init_model(loadPath, options || {});
           if (ret !== 0) {
             const msg = backend === 'rkllm'
               ? `rkllm_init failed (code ${ret}): likely RKLLM runtime version mismatch. See server logs.`

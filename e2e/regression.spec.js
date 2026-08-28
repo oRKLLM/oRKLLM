@@ -49,10 +49,20 @@ const modelRow = (page, name) => page.locator('.model-tree-leaf').filter({ hasTe
 
 async function loadModel(page) {
   await page.goto('/models');
-  await expect(modelRow(page, dummyModelName).first()).toBeVisible({ timeout: 5000 });
-  const unloadBtn = modelRow(page, dummyModelName).getByRole('button', { name: 'Unload', exact: true });
+  const row = modelRow(page, dummyModelName).first();
+  await expect(row).toBeVisible({ timeout: 5000 });
+
+  const unloadBtn = row.getByRole('button', { name: 'Unload', exact: true });
+  const loadBtn   = row.getByRole('button', { name: 'Load',   exact: true });
+
+  // Settle before deciding. The row shows NEITHER button while a load is in flight (it renders a
+  // spinner), and isVisible() is an instant poll — so on a row still busy from an earlier test it
+  // answered "no Unload", then waited out the full timeout for a Load button that was never going to
+  // appear in that state. Waiting for either button first turns that race into a wait.
+  await expect(loadBtn.or(unloadBtn)).toBeVisible({ timeout: 30000 });
   if (await unloadBtn.isVisible()) return; // already loaded
-  await modelRow(page, dummyModelName).getByRole('button', { name: 'Load', exact: true }).click();
+
+  await loadBtn.click();
   await expect(page.locator('.v-alert')).toContainText(`Loaded: ${dummyModelName}`, { timeout: 10000 });
 }
 
