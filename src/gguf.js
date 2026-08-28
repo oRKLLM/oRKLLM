@@ -186,6 +186,13 @@ export function isTrailingGgufShard(name) {
   return s !== null && s.index > 1;
 }
 
+// Is this a ggml-ork "stub" GGUF — <model>.orkpack.gguf, the holed companion the .orkpack finalize
+// writes unless ORK_NO_STUB=1? Its packed tensors are holes that read as zeros and are served from the
+// pack, so it is not a loadable model on its own (the runtime aborts on a stub without its pack) and
+// must be filtered out of every model enumeration. We set ORK_NO_STUB on our own builds, but a pack
+// built by another frontend — or by an older oRKLLM — may have left one in MODELS_DIR.
+export function isOrkpackStub(name) { return /\.orkpack\.gguf$/i.test(String(name)); }
+
 // Display name for a model id: strips the `-NNNNN-of-MMMMM.gguf` shard suffix
 // (re-appending `.gguf`) for split models; returns the id unchanged otherwise.
 export function ggufDisplayName(name) {

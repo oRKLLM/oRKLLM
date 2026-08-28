@@ -7,15 +7,19 @@
 //   • idle-driven — converts only when no model is loaded (anyLoaded === false).
 //   • preemptible — a user Load kills the in-flight conversion and re-queues it (the user wins the NPU).
 //
-// The conversion runs a separate `llama-completion` process with ORK_PERSIST set: it packs every
-// weight once (pack→dump→free keeps ≤1 weight resident, so it fits any model size) and finalizes the
-// .orkpack on its clean exit. We deliberately spawn the CLI rather than the serving worker — the worker
-// is hard-killed on unload (no clean ggml-ork teardown → no finalize), whereas a CLI exit finalizes.
+// The conversion runs a separate `llama-completion` process: ggml-ork DERIVES the pack path from the
+// -m model (<model-dir>/<basename>.orkpack — exactly orkpackPathFor) and builds an absent pack itself.
+// It packs every weight once (pack→dump→free keeps ≤1 weight resident, so it fits any model size) and
+// finalizes the .orkpack on its clean exit. We deliberately spawn the CLI rather than the serving worker
+// — the worker is hard-killed on unload (no clean ggml-ork teardown → no finalize), a CLI exit finalizes.
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { MODELS_DIR, LLAMA_RUNTIME_DIR } from './config.js';
-import { isTrailingGgufShard, getGgufArchitecture } from './gguf.js';
+import { isTrailingGgufShard, isOrkpackStub, getGgufArchitecture } from './gguf.js';
+import { orkpackPathFor, isOrkpackUsable, readOrkpackFooter, recordOrkFmt, llamaRuntimeTag, orkEnvFrom } from './orkpack.js';
+
+export { orkpackPathFor };
 
 // Architectures the ggml-ork NPU MUL_MAT accelerator cannot pack into an .orkpack, detected up front
 // so we skip at enqueue time (never spawn a doomed conversion that just churns the NPU):
@@ -27,43 +31,34 @@ const UNSUPPORTED_ARCHS = new Set(['qwen35', 'dflash']);
 
 const RETRY_MS = 30_000;
 
-export function orkpackPathFor(absGguf) { return absGguf.replace(/\.gguf$/i, '.orkpack'); }
-// Freshness sidecar: records the llama-runtime identity that BUILT this .orkpack, so a runtime
-// update (which can change the pack tiling/format) can be detected and the pack regenerated.
-export function orkpackMetaPath(absGguf) { return orkpackPathFor(absGguf) + '.meta.json'; }
 export function hasOrkpack(absGguf) {
   try { return fs.statSync(orkpackPathFor(absGguf)).size > 0; } catch { return false; }
 }
 
-// Identity of the currently-installed llama runtime — the thing that, if it changes, means an
-// existing .orkpack may be tiled/formatted for a different runtime and must be regenerated. The
-// build `tag` (e.g. "b9857-ork") changes on every runtime build, so any runtime update invalidates
-// stale packs. Returns null when the runtime/manifest is absent (then we can't verify → don't churn).
-export function orkpackRuntimeId() {
-  try {
-    const m = JSON.parse(fs.readFileSync(path.join(LLAMA_RUNTIME_DIR, 'manifest.json'), 'utf8'));
-    return m.tag || m.orkDriverCommit || m.llamaCommit || null;
-  } catch { return null; }
+// Is this model's .orkpack one the runtime would ADOPT as-is (no re-conversion)?
+//
+// This asks the PACK, not the calendar. It used to compare a sidecar recording the llama-runtime build
+// tag that wrote the pack — which was wrong in both directions. Too coarse: the fork cuts ~8 build tags
+// a day, so every runtime sync invalidated and rebuilt every pack on the box (measured upstream: 53
+// packs / 220 GiB) even though ork-driver's on-disk format has not changed since 2026-07-20. Too loose:
+// a tag match said nothing about the build-config PRECISION signature, so a pack built at one precision
+// looked fresh to a load that would serve at another — and ggml-ork rejects that pack, which for one
+// over ORK_ORKPACK_MAX_REGEN_MB (2048) means abort(), not a rebuild.
+//
+// The footer answers both exactly; see src/orkpack.js. Pass the precision this model will SERVE at so
+// the signature check is the same one the runtime will apply; omit it for a weaker structural check.
+export function isOrkpackFresh(absGguf, precision = null) {
+  return isOrkpackUsable(orkpackPathFor(absGguf), precision);
 }
 
-// A .orkpack is FRESH iff it exists AND its freshness sidecar records the currently-installed
-// runtime. Missing sidecar (built by an older oRKLLM that didn't stamp) or a different runtime id
-// ⇒ stale ⇒ regenerate. When the current runtime id is unknown we cannot verify, so we fall back to
-// mere existence (avoid needlessly discarding a possibly-good cache).
-export function isOrkpackFresh(absGguf) {
-  if (!hasOrkpack(absGguf)) return false;
-  const cur = orkpackRuntimeId();
-  if (!cur) return true;                       // can't determine runtime → trust existence
-  try {
-    const meta = JSON.parse(fs.readFileSync(orkpackMetaPath(absGguf), 'utf8'));
-    return meta && meta.runtime === cur;
-  } catch { return false; }                    // no/unreadable sidecar → treat as stale
-}
-
-// Remove a stale .orkpack and all its sidecars (freshness meta, progress json, partial .tmp).
+// Remove an unusable .orkpack and every sidecar that belongs to it. The .gmax tuning profile and the
+// stub GGUF describe the pack's specific contents, so leaving them behind would attach an old profile
+// to a freshly built pack (ggml-ork only unlinks .gmax when IT sees the pack as stale — when we delete
+// first, it just sees "absent" and that cleanup never runs). .meta.json is the retired freshness
+// sidecar, swept here so old installs don't leave litter.
 function removeOrkpack(absGguf) {
   const pack = orkpackPathFor(absGguf);
-  for (const p of [pack, pack + '.tmp', pack + '.json', orkpackMetaPath(absGguf)]) {
+  for (const p of [pack, pack + '.tmp', pack + '.json', pack + '.meta.json', pack + '.gmax', pack + '.gguf']) {
     try { fs.unlinkSync(p); } catch {}
   }
 }
@@ -88,35 +83,39 @@ export class ConversionScheduler {
     return cands.find(p => { try { return fs.statSync(p).isFile(); } catch { return false; } }) || null;
   }
 
-  // Walk MODELS_DIR and enqueue every .gguf that needs a (re)build: one with no .orkpack, OR one
-  // whose .orkpack is STALE for the current runtime (built by a different llama runtime — the tiling
-  // /format can change across runtime versions). A stale pack is deleted here so it isn't loaded
-  // (ggml-ork would reject it and re-pack inline every serve); the idle converter rebuilds it fresh.
+  // Walk MODELS_DIR and enqueue every .gguf that needs a (re)build: one with no .orkpack, OR one whose
+  // .orkpack this runtime would REFUSE (see isOrkpackFresh — footer schema, on-disk format token, and
+  // the precision signature we'd serve it at). A refused pack is deleted here rather than left to be
+  // met at load time: ggml-ork would re-pack it inline on every serve, and for a pack over
+  // ORK_ORKPACK_MAX_REGEN_MB it aborts instead. Deleting first also means the rebuild sees "absent",
+  // not "stale", so no oversize-regeneration guard stands in its way.
   // Called at startup (initialization) AND after a runtime install / user-initiated runtime change.
   scanAndEnqueue() {
-    const cur = orkpackRuntimeId();
+    const tag = llamaRuntimeTag();
     let invalidated = 0;
     const walk = (dir) => {
       let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
       for (const e of ents) {
         const p = path.join(dir, e.name);
         if (e.isDirectory()) { walk(p); continue; }
-        if (!/\.gguf$/i.test(e.name) || isTrailingGgufShard(e.name)) continue;
-        if (hasOrkpack(p) && !isOrkpackFresh(p)) {
-          console.log(`[conversion] stale .orkpack for ${path.relative(MODELS_DIR, p)} (runtime changed → ${cur ?? 'unknown'}) — discarding + rebuilding`);
+        if (!/\.gguf$/i.test(e.name) || isTrailingGgufShard(e.name) || isOrkpackStub(e.name)) continue;
+        const rel = path.relative(MODELS_DIR, p);
+        if (hasOrkpack(p) && !isOrkpackFresh(p, this._precisionFor(rel))) {
+          console.log(`[conversion] unusable .orkpack for ${rel} — discarding + rebuilding`);
           removeOrkpack(p);
           invalidated++;
         }
-        if (!hasOrkpack(p)) this.enqueue(path.relative(MODELS_DIR, p));
+        if (!hasOrkpack(p)) this.enqueue(rel);
       }
     };
     walk(MODELS_DIR);
-    if (invalidated) console.log(`[conversion] revalidation: ${invalidated} stale .orkpack(s) discarded for runtime ${cur ?? 'unknown'}`);
+    if (invalidated) console.log(`[conversion] revalidation: ${invalidated} unusable .orkpack(s) discarded (runtime ${tag ?? 'unknown'})`);
     return invalidated;
   }
 
-  // Public entry point for a runtime change (install / user-initiated switch in Settings): re-check
-  // ALL models against the newly-installed runtime and rebuild any whose cache is now stale.
+  // Public entry point for a runtime change (install / user-initiated switch in Settings): re-check ALL
+  // models against the newly-installed runtime. A runtime update on its own does NOT invalidate anything
+  // — only a pack the new runtime would actually refuse is discarded and rebuilt.
   revalidateForRuntime() { return this.scanAndEnqueue(); }
 
   enqueue(rel) {
@@ -144,7 +143,21 @@ export class ConversionScheduler {
     if (!this.binPath) { console.warn('[conversion] no llama-completion binary found — conversions disabled'); return; }
     if (this.pool.anyLoaded || (this.pool.queue && this.pool.queue.length)) { this._scheduleRetry(); return; }
     const rel = this.queue.shift();
-    this._spawnBuild(rel).finally(() => this._pump());   // idle-driven: build one, then chain to the next
+    // Same precision env the pool will SERVE this model with — see _buildEnvFor.
+    this._spawnBuild(rel, this._buildEnvFor(rel)).finally(() => this._pump());   // idle-driven: build one, then chain
+  }
+
+  // The .orkpack footer stamps a build-config signature (ORK_QUANT + ORK_HYBRID) and ggml-ork REJECTS a
+  // pack whose signature is incompatible with the run loading it — ORK_HYBRID strictly, ORK_QUANT whenever
+  // the run sets it. A rejected pack counts as STALE, and stale over ORK_ORKPACK_MAX_REGEN_MB (default
+  // 2048) makes the runtime abort() instead of rebuilding. So an idle build must not use the runtime
+  // default precision; it must use whatever the pool would serve this model with.
+  _buildEnvFor(rel) { return orkEnvFrom(this._precisionFor(rel)); }
+
+  // The precision this model will be SERVED at — the same values the pool resolves at load. Asked of
+  // the pool rather than imported, because pool.js imports this module (importing it back would cycle).
+  _precisionFor(rel) {
+    try { return this.pool?.orkPrecision?.(rel) ?? {}; } catch { return {}; }
   }
 
   // Blocking, priority build of ONE model's .orkpack — for the pool's build-then-load cold-start guard.
@@ -178,8 +191,13 @@ export class ConversionScheduler {
       try { fs.writeFileSync(pack + '.json', JSON.stringify({ status: 'converting', progress: 0 })); } catch {}
       let srcSize = 0; try { srcSize = fs.statSync(abs).size; } catch {}
 
+      // ORK_PERSIST is REMOVED upstream and now GGML_ABORTs the process — the pack path is derived from
+      // -m, so it must NOT be set. ORK_NO_STUB=1 suppresses the companion stub GGUF that finalize would
+      // otherwise drop at <model>.orkpack.gguf: a holed copy of the source (~2 GiB for a 12 GiB pack) that
+      // our own .gguf scanners would list as a servable model and re-enqueue, and that is unloadable
+      // without its pack.
       const env = { ...process.env,
-        ORK_PERSIST: pack, ORK_EVICT_SRC: '1', ...envExtra,   // envExtra (e.g. ORK_QUANT) matches the serve
+        ORK_EVICT_SRC: '1', ORK_NO_STUB: '1', ...envExtra,   // envExtra (ORK_QUANT/ORK_HYBRID) matches the serve
         LD_LIBRARY_PATH: [LLAMA_RUNTIME_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':') };
       // A single 1-token forward pass packs+dumps every weight; --no-repack keeps weights host so the
       // ggml-ork matmul offload fires; -ngl 99 offloads all layers. `--device ORK` PINS them to the NPU:
@@ -211,8 +229,11 @@ export class ConversionScheduler {
         try { fs.unlinkSync(pack + '.json'); } catch {}
         const built = hasOrkpack(abs);
         if (built) {
-          // Stamp the runtime that built this pack so a later runtime change invalidates it.
-          try { fs.writeFileSync(orkpackMetaPath(abs), JSON.stringify({ runtime: orkpackRuntimeId(), builtAt: Date.now() })); } catch {}
+          // This pack was written by the CURRENTLY-installed runtime, so its footer states the on-disk
+          // format token that runtime expects. Record it — that is the one field of the freshness check
+          // we cannot compute ourselves without loading the NPU runtime (see src/orkpack.js).
+          const f = readOrkpackFooter(pack);
+          if (f) recordOrkFmt(f.orkFmt);
         }
         // Success at INFO; a failure (crash/kill or no pack produced) is a real problem → WARN.
         if (built) console.log(`[conversion] ${rel}: converted`);

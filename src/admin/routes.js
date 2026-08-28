@@ -11,7 +11,7 @@ import path from 'path';
 import { spawn, spawnSync } from 'child_process';
 import { getStats, clearSessionStats, clearAllTimeStats } from '../stats.js';
 import { getMetricsSnapshot } from '../monitor.js';
-import { supportsThinkingToggle, isTrailingGgufShard, ggufDisplayName } from '../gguf.js';
+import { supportsThinkingToggle, isTrailingGgufShard, isOrkpackStub, ggufDisplayName } from '../gguf.js';
 import {
   dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings, dbDeleteModelSettings,
   dbCreateUser, dbGetUserById, dbGetUserByUsername, dbGetUserBySubject, dbListUsers, dbUpdateUser, dbUsersEmpty,
@@ -819,6 +819,7 @@ export default async function adminRoutes(fastify, options) {
         if (e.isDirectory()) scan(path.join(dir, e.name), rel);
         else if (/EAGLE3|Eagle3Draft/i.test(rel) && /\.(rkllm|gguf|safetensors)$/i.test(e.name)) {
           if (isTrailingGgufShard(e.name)) continue;   // split-GGUF head: only the first shard is loadable
+          if (isOrkpackStub(e.name)) continue;          // <model>.orkpack.gguf sidecar, not a model
           heads.push({ id: rel, format: /\.rkllm$/i.test(e.name) ? 'npu' : 'vulkan' });
         }
       }
@@ -874,7 +875,7 @@ export default async function adminRoutes(fastify, options) {
           // Split (sharded) GGUF: the model loads from the FIRST shard
           // (-00001-of-), which llama.cpp uses to auto-pull the rest. Trailing
           // shards (-00002-of-…) are not separate models — skip them.
-          if (isTrailingGgufShard(e.name)) continue;
+          if (isTrailingGgufShard(e.name) || isOrkpackStub(e.name)) continue;
           const abs = path.join(dir, e.name);
           const isRk = /\.rkllm$/i.test(e.name);
           // A draft head can ship as a loose .gguf/.rkllm (no safetensors repo dir, so the
