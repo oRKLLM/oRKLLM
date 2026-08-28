@@ -1290,13 +1290,24 @@ Napi::Value ConvertDflashGguf(const Napi::CallbackInfo& info) {
 typedef bool (*ork_extract_gguf_t)(const char *, const char *);
 
 static ork_extract_gguf_t resolve_ork_extract() {
-    // Already in the process? (libllama pulls ggml-ork in via the backend registry.)
+    // Already in the process? ggml's backend registry dlopens ggml-ork when it initialises, which
+    // usually happens inside load_library — but not dependably, so the explicit search below stands.
     if (auto f = (ork_extract_gguf_t) dlsym(RTLD_DEFAULT, "ggml_backend_ork_extract_gguf")) return f;
-    if (g_libpath.empty()) return nullptr;
+    if (g_libpath.empty()) {
+        fprintf(stderr, "[ork] extract: load_library has not been called — no runtime dir to search\n");
+        return nullptr;
+    }
     const std::string dir = g_libpath.substr(0, g_libpath.find_last_of('/') + 1);
-    for (const char* n : { "libggml-ork.so", "libggml-ork.so.0" }) {
-        if (void* h = dlopen((dir + n).c_str(), RTLD_LAZY | RTLD_GLOBAL))
-            if (auto f = (ork_extract_gguf_t) dlsym(h, "ggml_backend_ork_extract_gguf")) return f;
+    // The bundle ships libggml-ork.so -> .so.0 -> .so.0.<ver>; a stripped install may have only the
+    // versioned file, so try each. dlerror() is reported per candidate: a silent failure here was
+    // indistinguishable from "this runtime is too old", and sent the diagnosis down the wrong path.
+    for (const char* n : { "libggml-ork.so", "libggml-ork.so.0", "libggml-ork.so.0.15.1" }) {
+        const std::string p = dir + n;
+        void* h = dlopen(p.c_str(), RTLD_LAZY | RTLD_GLOBAL);
+        if (!h) { fprintf(stderr, "[ork] extract: dlopen(%s) failed: %s\n", p.c_str(), dlerror()); continue; }
+        if (auto f = (ork_extract_gguf_t) dlsym(h, "ggml_backend_ork_extract_gguf")) return f;
+        fprintf(stderr, "[ork] extract: %s loaded but has no ggml_backend_ork_extract_gguf "
+                        "(runtime predates the v6 pack epoch)\n", p.c_str());
     }
     return nullptr;
 }
@@ -1310,10 +1321,7 @@ Napi::Value ExtractOrkpackGguf(const Napi::CallbackInfo& info) {
         return env.Null();
     }
     auto fn = resolve_ork_extract();
-    if (!fn) {
-        fprintf(stderr, "[ork] ggml_backend_ork_extract_gguf not found in this runtime\n");
-        return Napi::Boolean::New(env, false);
-    }
+    if (!fn) return Napi::Boolean::New(env, false);   // resolve_ork_extract already said why
     const std::string pack = info[0].As<Napi::String>().Utf8Value();
     const std::string out  = info[1].As<Napi::String>().Utf8Value();
     return Napi::Boolean::New(env, fn(pack.c_str(), out.c_str()));

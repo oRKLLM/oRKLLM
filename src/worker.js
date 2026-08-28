@@ -78,9 +78,14 @@ process.on('message', async (msg) => {
               }
               console.log(`[Worker:llama] extracting sparse gguf from pack → ${stub}`);
               if (!nativeAddon.extract_orkpack_gguf(options.orkpack, stub)) {
+                // Two different causes reach here — the runtime cannot do it, or the pack predates the
+                // embedded-metadata format — and from JS they are indistinguishable. The addon logs
+                // which one to stderr (see resolve_ork_extract), so point at that rather than guess:
+                // an earlier version asserted "pre-v6 pack" and sent the diagnosis the wrong way.
                 process.send({ type: 'loaded', status: -1, error:
-                  `Could not extract a gguf from ${options.orkpack} — the pack carries no embedded ` +
-                  'metadata (pre-v6 pack). Rebuild it from its source GGUF.' });
+                  `Could not extract a gguf from ${options.orkpack}. Either this llama runtime ` +
+                  'predates ggml_backend_ork_extract_gguf, or the pack has no embedded metadata ' +
+                  '(pre-v6) — the server log carries an [ork] line saying which.' });
                 return;
               }
             }
