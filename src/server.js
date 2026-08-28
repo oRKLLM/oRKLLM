@@ -258,16 +258,19 @@ if (fs.existsSync(distPath)) {
     root: distPath,
     prefix: '/',
     cacheControl: false, // set Cache-Control ourselves below (the default `public, max-age=0` would override)
-    setHeaders(res, filePath) {
+    // @fastify/static v10 calls this as fn(reply, path, stat) with the fastify Reply — v9 passed the
+    // raw node res and `res.setHeader`. Using the old signature does not throw at registration; it
+    // throws per request inside the send pump, which surfaces as every static route HANGING.
+    setHeaders(reply, filePath) {
       const base = path.basename(filePath);
       if (base === 'sw.js' || base === 'registerSW.js' || base.endsWith('.webmanifest') || base === 'index.html') {
         // PWA control files + SPA shell must revalidate so updates are detected.
-        res.setHeader('Cache-Control', 'no-cache');
+        reply.header('Cache-Control', 'no-cache');
       } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
         // Vite content-hashed bundles — safe to cache forever.
-        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        reply.header('Cache-Control', 'public, max-age=31536000, immutable');
       } else {
-        res.setHeader('Cache-Control', 'public, max-age=3600');
+        reply.header('Cache-Control', 'public, max-age=3600');
       }
     }
   });
