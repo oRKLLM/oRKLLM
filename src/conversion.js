@@ -30,6 +30,9 @@ export { orkpackPathFor };
 const UNSUPPORTED_ARCHS = new Set(['qwen35', 'dflash']);
 
 const RETRY_MS = 30_000;
+// How much of a failed conversion's stderr to keep, and how many of its last lines to log.
+const STDERR_TAIL_CHARS = 16_384;
+const STDERR_LOG_LINES  = 12;
 
 export function hasOrkpack(absGguf) {
   try { return fs.statSync(orkpackPathFor(absGguf)).size > 0; } catch { return false; }
@@ -208,7 +211,15 @@ export class ConversionScheduler {
       const args = ['-m', abs, '--device', 'ORK', '-ngl', '99', '-t', '4', '-c', '256', '--no-repack',
                     '-p', 'x', '-n', '1', '--temp', '0', '-no-cnv'];
       console.log(`[conversion] building ${rel}.orkpack …`);
-      const proc = spawn(this.binPath, args, { env, stdio: 'ignore' });
+      // Keep the child's stderr. It was 'ignore', which meant every failure reported only
+      // "no .orkpack produced" with the reason discarded — the runtime prints exactly why it declined
+      // (wrong device, unsupported arch, a stale pack it refuses to regenerate, an abort), and that
+      // line is the whole diagnosis. Bounded to the tail so a chatty run cannot grow unboundedly.
+      const proc = spawn(this.binPath, args, { env, stdio: ['ignore', 'ignore', 'pipe'] });
+      let errTail = '';
+      proc.stderr?.on('data', (d) => {
+        errTail = (errTail + d.toString()).slice(-STDERR_TAIL_CHARS);
+      });
       this.current = { rel, abs, proc };
 
       // Live progress: ggml-ork streams packed weights into <pack>.tmp — poll its growth vs the source
@@ -237,7 +248,12 @@ export class ConversionScheduler {
         }
         // Success at INFO; a failure (crash/kill or no pack produced) is a real problem → WARN.
         if (built) console.log(`[conversion] ${rel}: converted`);
-        else console.warn(`[conversion] ${rel}: ${ok ? 'no .orkpack produced' : 'failed/killed'}`);
+        else {
+          console.warn(`[conversion] ${rel}: ${ok ? 'no .orkpack produced' : 'failed/killed'}`);
+          // The runtime's own last words — without these the failure is undiagnosable from the logs.
+          const tail = errTail.trim().split('\n').filter(Boolean).slice(-STDERR_LOG_LINES);
+          for (const line of tail) console.warn(`[conversion] ${rel}: | ${line}`);
+        }
         resolve(built);
       };
       proc.on('exit',  (code) => done(code === 0));
