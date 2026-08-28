@@ -120,6 +120,33 @@ function tagBuildNum(tag) {
   return m ? parseInt(m[1], 10) : -1;
 }
 
+// The mirror publishes TWO kinds of release under the SAME bNNNN build number:
+//   • bNNNN-ork — our NPU runtime bundle, asset `llama-cpp-rockchip-npu-bNNNN-ork.tar.gz`
+//                 (the CI job uploads exactly `llama-cpp-rockchip-npu-*.tar.gz`)
+//   • bNNNN     — a mirror of the corresponding UPSTREAM llama.cpp release, whose assets include
+//                 `llama-bNNNN-bin-ubuntu-arm64.tar.gz`, `…-android-arm64.tar.gz`, `…-macos-x64…`
+// Both end in .tar.gz and both parse to the same tagBuildNum, so selecting on the extension alone left
+// the tie to GitHub's array order — and the upstream one carries no ggml-ork backend at all (its first
+// .tar.gz is an Android build). Today the -ork releases happen to sort first because they are published
+// later; that is luck, not a rule. Select the asset by NAME instead, so the two can never be confused.
+const ORK_ASSET_RE = /^llama-cpp-rockchip-npu-.*\.tar\.gz$/i;
+
+// The runtime-bundle asset of a release, or null when this release has none (i.e. it is an upstream
+// mirror release, not one of ours).
+export function orkAsset(release) {
+  return release?.assets?.find(a => ORK_ASSET_RE.test(a.name)) ?? null;
+}
+
+// Pick the release to install from a GitHub releases page. Pure — exported for unit tests.
+// With `tag`, that exact tag (and only if it actually carries a runtime bundle). Without, the highest
+// tag build number: NOT releases[0] / publish order, which is unreliable because the fork's CI rebuilds
+// the whole tag window concurrently and the uploads finish out of order.
+export function pickLlamaRelease(releases, tag = null) {
+  const ours = (releases ?? []).filter(r => orkAsset(r));
+  if (tag) return ours.find(r => r.tag_name === tag) ?? null;
+  return ours.sort((a, b) => tagBuildNum(b.tag_name) - tagBuildNum(a.tag_name))[0] ?? null;
+}
+
 export async function getLlamaReleases() {
   const isARM64Linux = process.platform === 'linux' && process.arch === 'arm64';
   if (!isARM64Linux) return [];
@@ -131,16 +158,16 @@ export async function getLlamaReleases() {
       // GitHub's array/publish order, which is unreliable when concurrent CI builds
       // upload out of order. syncLlamaRuntime fetches a wider window, so any listed
       // tag still resolves.
-      const res = await httpsGet(mirrorApi(slug) + '?per_page=20');
+      // Wide page: the upstream mirror releases share this listing, so a page sized to the number we
+      // want to SHOW could come back with too few of ours after filtering.
+      const res = await httpsGet(mirrorApi(slug) + '?per_page=60');
       if (res.status !== 200) continue;
       const releases = JSON.parse(res.body.toString());
       return releases
-        .filter(r => r.assets?.some(a => a.name.endsWith('.tar.gz')))
-        .map(r => {
-          const asset = r.assets.find(a => a.name.endsWith('.tar.gz'));
-          return { tag: r.tag_name, publishedAt: r.published_at,
-                   assetDigest: asset?.digest ?? null, assetSize: asset?.size ?? null };
-        })
+        .map(r => ({ r, asset: orkAsset(r) }))
+        .filter(({ asset }) => asset)
+        .map(({ r, asset }) => ({ tag: r.tag_name, publishedAt: r.published_at,
+                                  assetDigest: asset.digest ?? null, assetSize: asset.size ?? null }))
         .sort((a, b) => tagBuildNum(b.tag) - tagBuildNum(a.tag))
         .slice(0, 10);
     } catch { /* try next */ }
@@ -162,7 +189,7 @@ export async function syncLlamaRuntime(tag = null, { force = false } = {}) {
   for (const slug of LLAMA_RUNTIME_MIRRORS) {
     let releases;
     try {
-      const res = await httpsGet(mirrorApi(slug) + '?per_page=20');
+      const res = await httpsGet(mirrorApi(slug) + '?per_page=60');
       if (res.status !== 200) {
         console.warn(`[LlamaSync] Mirror ${slug}: HTTP ${res.status} — skipping`);
         continue;
@@ -173,16 +200,18 @@ export async function syncLlamaRuntime(tag = null, { force = false } = {}) {
       continue;
     }
 
-    // "latest" = highest tag build number (NOT releases[0] / publish order, which is
-    // unreliable when concurrent CI builds upload out of order).
-    const release = tag
-      ? releases.find(r => r.tag_name === tag)
-      : releases
-          .filter(r => r.assets?.some(a => a.name.endsWith('.tar.gz')))
-          .sort((a, b) => tagBuildNum(b.tag_name) - tagBuildNum(a.tag_name))[0];
-    if (!release) continue;
+    const release = pickLlamaRelease(releases, tag);
+    if (!release) {
+      // Distinguish "no such tag" from "that tag is an upstream mirror release, not a runtime bundle" —
+      // the second is an easy mistake to make by hand (b10664 vs b10664-ork).
+      if (tag && releases.some(r => r.tag_name === tag)) {
+        console.warn(`[LlamaSync] Mirror ${slug}: ${tag} carries no runtime bundle ` +
+                     `(no llama-cpp-rockchip-npu-*.tar.gz asset) — did you mean ${tag}-ork?`);
+      }
+      continue;
+    }
 
-    const asset = release.assets?.find(a => a.name.endsWith('.tar.gz'));
+    const asset = orkAsset(release);
     if (!asset) continue;
 
     // Up to date? Compare the release asset against what's installed by **content**
