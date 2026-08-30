@@ -1277,6 +1277,9 @@
                     Keeps most weights at native int4 and promotes the worst-quantized ones to int8, ranked by
                     the measured per-weight error the pack records. Runs two passes automatically &mdash; the first
                     measures, the second promotes.
+                    <strong>Not yet honoured by the runtime:</strong> measured on b10687-ork the promotion
+                    budget goes unspent and the pack comes out identical to a uniform build &mdash; the tier
+                    is currently decided by each weight's source width alone.
                   </template>
                   <template v-else>
                     Not applicable: an int8 pack is already at the higher tier, so there is nothing to promote to.
@@ -1295,10 +1298,8 @@
                   v-if="quantBits === 4 && quantSelected && !quantSelected.uncompressed"
                   type="warning" variant="tonal" density="compact" class="mb-4 text-caption"
                 >
-                  This source already carries a per-tensor mix of widths, and the pack routes each weight by the
-                  width it finds — so mixed precision has nothing left to decide and the promotion budget goes
-                  unspent. An F16 / BF16 release gives every tensor the same width, which is what lets measured
-                  error pick the weights worth keeping at int8.
+                  Quantizing an already-quantized source compounds error &mdash; an F16 / BF16 release packs
+                  from full-precision weights instead.
                 </v-alert>
 
                 <v-btn
