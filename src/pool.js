@@ -12,7 +12,7 @@ import { eagle3Generate } from './eagle.js';
 import { getAggregatedTools } from './mcp.js';
 import { buildToolSystemPrompt } from './mcp_inference.js';
 import { isOrkpackFresh, getConversionScheduler } from './conversion.js';
-import { orkEnvFrom, orkQuantForSource, isOrkpackPath, isOrkpackUsable, stubPathFor, orkpackPathFor } from './orkpack.js';
+import { orkEnvFrom, orkQuantForSource, isOrkpackPath, isOrkpackUsable, stubPathFor, orkpackPathFor, readOrkpackFooter, sigPrecision } from './orkpack.js';
 import { isRecurrentArch, supportsThinkingToggle, ggufQuantBits } from './gguf.js';
 import { cacheKey, getCachePath, tmpCachePath, putCachePath, isCacheEnabled } from './cache.js';
 
@@ -100,12 +100,38 @@ const DEFAULT_MAX_CONTEXT_LEN = 4096;
 function resolveOrkPrecision(modelName, options = {}, saved = null) {
   const s = saved ?? (dbGetModelSettings(modelName) || {});
   const npuQuant = options.npu_quant ?? s.npu_quant ?? 'auto';
+  const hybridSet = options.npu_hybrid ?? s.npu_hybrid;
+
+  // A PACK is the artifact, not the material: its footer records the tier it was actually built at, and
+  // that is the authority. Deriving from the FILENAME here would be actively wrong — an F16-named source
+  // packed at int8 resolves to ORK_QUANT=4 under 'auto', which ork_sig_compatible then REJECTS, and a
+  // rejection reads as STALE (→ rebuild, or abort() over ORK_ORKPACK_MAX_REGEN_MB). So under 'auto' adopt
+  // the pack's own precision; an explicit int4/int8 still forces, and a genuine mismatch fails loudly in
+  // isOrkpackUsable rather than silently regenerating a multi-GB pack.
+  if (isOrkpackPath(modelName)) {
+    const foot = readOrkpackFooter(path.join(MODELS_DIR, modelName));
+    if (foot) {
+      const built = sigPrecision(foot.quantSig);
+      return {
+        orkQuant: npuQuant === 'auto' ? built.orkQuant : orkQuantForSource(ggufQuantBits(modelName), npuQuant),
+        orkHybrid: hybridSet === undefined || hybridSet === null ? built.orkHybrid : (hybridSet ? '1' : null),
+      };
+    }
+  }
+
   const orkQuant = orkQuantForSource(ggufQuantBits(modelName), npuQuant);
-  const orkHybrid = (options.npu_hybrid ?? s.npu_hybrid ?? false) ? '1' : null;
+  const orkHybrid = (hybridSet ?? false) ? '1' : null;
   return { orkQuant, orkHybrid };
 }
 
-function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, orkMoeNpu = false, wcacheBudgetMB = null, sourceIsStub = false, orkpackPath = null } = {}) {
+// Does this model id load through the llama/ggml-ork backend? Both a .gguf and the .orkpack built from
+// it do, and every option resolved for one applies to the other.
+function isLlamaBackedModel(modelName) {
+  const n = String(modelName).toLowerCase();
+  return n.endsWith('.gguf') || isOrkpackPath(n);
+}
+
+function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, orkMoeNpu = false, wcacheBudgetMB = null, sourceIsStub = false, orkpackPath = null, useMmap = true } = {}) {
   const dirs = [LLAMA_RUNTIME_DIR, RUNTIMES_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean);
   const env = { ...process.env, LD_LIBRARY_PATH: dirs.join(':') };
   // Keep the GPU idle unless something explicitly wants it (TurboQuant KV). With
@@ -125,10 +151,14 @@ function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, o
   // backend init. The pack is pointed at with ORK_ORKPACK_PATH below instead (ggml-ork's own
   // derivation reads the command line, which an N-API embedder does not have).
   // ORK_EVICT_SRC drops the source GGUF's mmap'd pages as weights become NPU-resident (peak RSS stays
-  // ~max(src, packed) instead of the sum). ORK_NO_STUB keeps a pack the worker happens to build inline
-  // from writing a <model>.orkpack.gguf stub into MODELS_DIR, where our .gguf scanners would find it.
+  // ~max(src, packed) instead of the sum). It is ONLY safe under mmap: ggml-ork's own note is that
+  // "with --no-mmap the mapping is anonymous and DONTNEED would zero data". Setting it unconditionally
+  // left that correctness property resting on the addon's use_mmap default happening to be true, so
+  // tie it to the value actually being used instead.
+  if (useMmap) env.ORK_EVICT_SRC = '1';
+  // ORK_NO_STUB keeps a pack the worker happens to build inline from writing a <model>.orkpack.gguf
+  // stub into MODELS_DIR, where our .gguf scanners would find it.
   // Both are no-ops for the rkllm backend. Read at backend init, so they must be set at fork time.
-  env.ORK_EVICT_SRC = '1';
   env.ORK_NO_STUB   = '1';
   // Loading a pack via its extracted sparse gguf: the model file's packed tensors are HOLES that read
   // as zeros, and ork must serve them on every path. There is no in-backend hook that can detect this
@@ -401,7 +431,10 @@ class EnginePool {
     // asymmetric policy (K precision >= V; never lead with turbo K) is enforced in
     // the UI; the addon maps these strings to ggml_type and the runtime ignores
     // them for the rkllm backend.
-    if (modelName.toLowerCase().endsWith('.gguf')) {
+    // A .orkpack is served by this same backend, so it needs these options too. Gating on '.gguf'
+    // alone silently dropped EVERY per-model setting for a pack-backed model — npu_quant, npu_hybrid,
+    // kv_cache_quant, use_mmap — which showed up as a worker with no ORK_QUANT for a Q8 model.
+    if (isLlamaBackedModel(modelName)) {
       const saved = dbGetModelSettings(modelName) || {};
       // For the llama backend the per-model "KV Cache Compression" dropdown
       // (kv_cache_quant) selects the in-context KV V-cache type: 'q8_0' or
@@ -684,6 +717,8 @@ class EnginePool {
         // experimental MoE-on-NPU expert offload (gguf/ggml-ork only; default off, set per-fork)
         orkMoeNpu: options.ork_moe_npu,
         sourceIsStub: !!options.orkpack,
+        // ORK_EVICT_SRC is only safe when the source is actually mmap'd (see workerEnv).
+        useMmap: options.use_mmap !== false,
         // A pack-backed model names its pack directly; a plain .gguf gets its own pack when that pack
         // is one this run would actually adopt (same check the cold-start guard makes).
         orkpackPath: options.orkpack

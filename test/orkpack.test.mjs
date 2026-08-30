@@ -6,7 +6,7 @@ import path from 'path';
 import {
   readOrkpackFooter, sigQbits, sigCompatible, orkEnvFrom, isOrkpackUsable,
   orkpackPathFor, ORKPACK_VERSION, FOOTER_SIZE, MAGIC,
-  isOrkpackPath, stubPathFor, sourceGgufFor, orkQuantForSource,
+  isOrkpackPath, stubPathFor, sourceGgufFor, orkQuantForSource, sigPrecision,
 } from '../src/orkpack.js';
 import { ggufQuantBits } from '../src/gguf.js';
 
@@ -69,6 +69,23 @@ describe('sigQbits', () => {
     assert.equal(sigQbits(sig({ q: '8' })), 8);
     assert.equal(sigQbits(sig({})), 8);            // source-driven default reads as the int8 tier
     assert.equal(sigQbits(sig({ q: '4', hy: 1 })), 4);   // the HY bit must not bleed into the tier
+  });
+});
+
+describe('sigPrecision', () => {
+  test('reports the precision the pack was built at', () => {
+    assert.deepEqual(sigPrecision(sig({ q: '4' })),         { orkQuant: '4', orkHybrid: null });
+    assert.deepEqual(sigPrecision(sig({ q: '8' })),         { orkQuant: '8', orkHybrid: null });
+    assert.deepEqual(sigPrecision(sig({ q: '8', hy: 1 })),  { orkQuant: '8', orkHybrid: '1' });
+  });
+
+  test('a pack always adopts its own precision', () => {
+    // The property the load path depends on: resolving a pack under 'auto' can never produce an env
+    // the runtime would then reject as stale.
+    for (const q of ['4', '8']) for (const hy of [0, 1]) {
+      const v = sig({ q, hy });
+      assert.equal(sigCompatible(v, sigPrecision(v)), true, `q${q} hy${hy}`);
+    }
   });
 });
 

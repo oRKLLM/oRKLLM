@@ -110,6 +110,13 @@ export function readOrkpackFooter(packPath) {
 // The weight tier a pack was BUILT at, decoded from its signature (ork_sig_qbits).
 export function sigQbits(sig) { return (sig & SIG_QB_MASK) === 0x34 /* '4' */ ? 4 : 8; }
 
+// The precision a pack was BUILT at, in the same {orkQuant, orkHybrid} shape the load path uses. This is
+// what a run must adopt to be compatible with it — the pack is the artifact, so under 'auto' it is the
+// authority, not the filename. (sigCompatible(sig, sigPrecision(sig)) is true by construction.)
+export function sigPrecision(sig) {
+  return { orkQuant: String(sigQbits(sig)), orkHybrid: (sig & SIG_HY_BIT) ? '1' : null };
+}
+
 // Mirror of ggml-ork's ork_sig_compatible: would a run at this precision ADOPT this pack, or reject it?
 //   • ORK_HYBRID is PRESCRIPTIVE — it changes WHICH tensors are packed at all, so a mismatch is a
 //     genuinely unusable file and must match exactly.
