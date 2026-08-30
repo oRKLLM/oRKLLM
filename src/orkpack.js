@@ -33,6 +33,14 @@ const ORKPACK_VERSION = 6;
 // Build-config precision signature bits (mirror of ggml-ork's ork_build_sig).
 const SIG_QB_MASK = 0x0ff;   // the forced-precision char: '4', '8', or 0 = source-driven default
 const SIG_HY_BIT  = 0x100;   // ORK_HYBRID
+// Hadamard rotation. ggml-ork's ork_sig_compatible deliberately does NOT check this bit and its own
+// comment calls that "a known hole … build/run-must-match by convention". We DO check it, because the
+// consequence of a mismatch is not a refused load but a silently garbage model: rotation is orthogonal
+// (R*A)·(R*B) == A*B, so a rotated pack run unrotated produces plausible-looking nonsense. Native W4A4
+// is unconditionally rotated (unrotated W4A4 measures PPL ~104 vs ~24), so the bit is set for any pack
+// built at the 4-bit tier unless ORK_I4_NOROT was used. Checking it costs nothing and closes the hole
+// on our side; the runtime is free to keep ignoring it.
+const SIG_HD_BIT  = 0x200;   // hadamard rotation (implied by native W4A4)
 
 export function orkpackPathFor(absGguf) { return absGguf.replace(/\.gguf$/i, '.orkpack'); }
 
@@ -114,6 +122,8 @@ export function sigQbits(sig) { return (sig & SIG_QB_MASK) === 0x34 /* '4' */ ? 
 // what a run must adopt to be compatible with it — the pack is the artifact, so under 'auto' it is the
 // authority, not the filename. (sigCompatible(sig, sigPrecision(sig)) is true by construction.)
 export function sigPrecision(sig) {
+  // No orkNoRot: a clear HD bit does not mean the pack was built unrotated (see sigCompatible), so
+  // there is nothing here a run could safely adopt.
   return { orkQuant: String(sigQbits(sig)), orkHybrid: (sig & SIG_HY_BIT) ? '1' : null };
 }
 
@@ -124,17 +134,38 @@ export function sigPrecision(sig) {
 //     precision simply adopts it. It is only a gate when the run forces a precision.
 // (ggml-ork deliberately does NOT check the rotation bit here; neither do we. It sets ORK_I4_NOROT
 // apart as build/run-must-match by convention, and oRKLLM never sets it.)
-export function sigCompatible(packSig, { orkQuant = null, orkHybrid = null } = {}) {
+export function sigCompatible(packSig, { orkQuant = null, orkHybrid = null, orkNoRot = null } = {}) {
   if ((packSig & SIG_HY_BIT) !== (orkHybrid ? SIG_HY_BIT : 0)) return false;
+  // Rotation (SIG_HD_BIT), which ggml-ork itself skips. Checked in ONE direction only, deliberately.
+  //
+  // A set bit is trustworthy: it can only have been stamped by a build that rotated, so refusing to
+  // serve it from an ORK_I4_NOROT run is always right. A CLEAR bit is not evidence of anything — the
+  // runtime's own comment calls the field "vestigial in the sig", and the only real 4-bit pack
+  // available to check (v5, sig 0x34) carries HD=0 despite having been built rotated. Treating clear
+  // as "unrotated" would therefore reject every existing int4 pack as stale, which above
+  // ORK_ORKPACK_MAX_REGEN_MB means abort() rather than rebuild.
+  //
+  // So: catch the direction the bit can actually prove, and leave the other to the build/run-must-match
+  // convention until a v6 int4 pack confirms the bit is populated. oRKLLM never sets ORK_I4_NOROT, so
+  // this is inert today; it exists so that changing that cannot silently produce a garbage model
+  // (rotation is orthogonal — (R*A)·(R*B) == A*B — so a mismatch reads as fluent nonsense, not an error).
+  if (orkNoRot && (packSig & SIG_HD_BIT)) return false;
   if (orkQuant) return sigQbits(packSig) === (String(orkQuant)[0] === '4' ? 4 : 8);
   return true;
 }
 
 // The env a pack build / a serving worker needs so both land on the same signature.
-export function orkEnvFrom({ orkQuant = null, orkHybrid = null } = {}) {
+export function orkEnvFrom({ orkQuant = null, orkHybrid = null, orkNoRot = null,
+                             orkMixedW4A4 = null, orkPromote = null } = {}) {
   const env = {};
   if (orkQuant)  env.ORK_QUANT  = String(orkQuant);
   if (orkHybrid) env.ORK_HYBRID = '1';
+  if (orkNoRot)  env.ORK_I4_NOROT = '1';
+  // Native W4A4 — the only path that issues real 4-bit MACs. ORK_QUANT=4 alone is the int4 STORAGE
+  // tier: 4-bit on disk, inflated to int8 on the NPU and computed by the W8A8 kernel. These two select
+  // the COMPUTE path, so they must be set identically on the build AND on the serving worker.
+  if (orkMixedW4A4) { env.ORK_MIXED_W4A4 = '1'; env.ORK_MIXED_DISPATCH = '1'; }
+  if (orkPromote)   env.ORK_I4_PROMOTE = String(orkPromote);
   return env;
 }
 

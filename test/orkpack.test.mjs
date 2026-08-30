@@ -72,6 +72,23 @@ describe('sigQbits', () => {
   });
 });
 
+describe('rotation bit (SIG_HD_BIT)', () => {
+  test('a rotated pack is refused by an ORK_I4_NOROT run', () => {
+    assert.equal(sigCompatible(sig({ q: '4', hd: 1 }), { orkQuant: '4', orkNoRot: '1' }), false);
+  });
+
+  test('a clear bit is never treated as proof of an unrotated build', () => {
+    // The runtime calls the field vestigial and the only real int4 pack we have carries HD=0 despite
+    // being built rotated. Reading clear as "unrotated" would reject every existing int4 pack as stale.
+    assert.equal(sigCompatible(sig({ q: '4', hd: 0 }), { orkQuant: '4' }), true);
+    assert.equal(sigCompatible(sig({ q: '4', hd: 0 }), { orkQuant: '4', orkNoRot: '1' }), true);
+  });
+
+  test('an int8 pack is never judged on rotation', () => {
+    assert.equal(sigCompatible(sig({ q: '8' }), { orkQuant: '8', orkNoRot: '1' }), true);
+  });
+});
+
 describe('sigPrecision', () => {
   test('reports the precision the pack was built at', () => {
     assert.deepEqual(sigPrecision(sig({ q: '4' })),         { orkQuant: '4', orkHybrid: null });

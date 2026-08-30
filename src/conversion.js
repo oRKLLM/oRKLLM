@@ -46,6 +46,18 @@ function stderrHighlights(text) {
   return (signal.length ? signal : lines).slice(-STDERR_LOG_LINES);
 }
 
+// The env pair a given quantize configuration builds at — and, necessarily, that the serving run must
+// adopt. ORK_QUANT alone is the int4 STORAGE tier: 4-bit on disk, inflated to int8 on the NPU and
+// computed by the W8A8 kernel, so no 4-bit MAC ever runs. A genuinely mixed int4/int8 pack additionally
+// needs the NATIVE W4A4 compute path, and a promotion tier that PERSISTS int8 rather than re-inflating:
+// 'i8' is plain int8 with per-channel scales, where the default 'rot8' keeps the Hadamard basis — 11%
+// worse on the runtime's own sweep, the rotation that helps 4 bits hurting 8.
+export function orkPrecisionForBuild(bits, mixed) {
+  const p = { orkQuant: String(bits) };
+  if (mixed && bits === 4) { p.orkMixedW4A4 = '1'; p.orkPromote = 'i8'; }
+  return p;
+}
+
 export function hasOrkpack(absGguf) {
   try { return fs.statSync(orkpackPathFor(absGguf)).size > 0; } catch { return false; }
 }
@@ -197,13 +209,16 @@ export class ConversionScheduler {
   // Spawn ONE conversion subprocess; resolves true iff the .orkpack was produced. Shared by the idle pump
   // and the blocking convertNow. Holds this.current for the build's duration so the two paths can't run
   // concurrently on the single NPU stream.
-  _spawnBuild(rel, envExtra = {}) {
+  _spawnBuild(rel, envExtra = {}, packArgs = [], label = null) {
     const pr = new Promise((resolve) => {
       const abs  = path.join(MODELS_DIR, rel);
       const pack = orkpackPathFor(abs);
       if (hasOrkpack(abs)) { this.queued.delete(rel); resolve(true); return; }   // built since enqueue
       // progress sidecar — /v1/models reads <model>.orkpack.json → UI shows "converting"
-      try { fs.writeFileSync(pack + '.json', JSON.stringify({ status: 'converting', progress: 0 })); } catch {}
+      const sidecar = (progress) => { try {
+        fs.writeFileSync(pack + '.json', JSON.stringify({ status: 'converting', progress, ...(label ? { label } : {}) }));
+      } catch {} };
+      sidecar(0);
       let srcSize = 0; try { srcSize = fs.statSync(abs).size; } catch {}
 
       // ORK_PERSIST is REMOVED upstream and now GGML_ABORTs the process — the pack path is derived from
@@ -221,8 +236,9 @@ export class ConversionScheduler {
       // MUL_MAT runs on Vulkan, and ggml-ork packs ZERO weights → no .orkpack. Targeting the ORK device
       // (rather than disabling Vulkan) routes the matmuls to the NPU while leaving the GPU available.
       const args = ['-m', abs, '--device', 'ORK', '-ngl', '99', '-t', '4', '-c', '256', '--no-repack',
+                    ...packArgs,
                     '-p', 'x', '-n', '1', '--temp', '0', '-no-cnv'];
-      console.log(`[conversion] building ${rel}.orkpack …`);
+      console.log(`[conversion] building ${rel}.orkpack …${label ? ' (' + label + ')' : ''}`);
       // Keep the child's stderr. It was 'ignore', which meant every failure reported only
       // "no .orkpack produced" with the reason discarded — the runtime prints exactly why it declined
       // (wrong device, unsupported arch, a stale pack it refuses to regenerate, an abort), and that
@@ -240,7 +256,7 @@ export class ConversionScheduler {
         try {
           const w = fs.statSync(pack + '.tmp').size;
           const p = srcSize > 0 ? Math.min(99, Math.round(100 * w / srcSize)) : 0;
-          fs.writeFileSync(pack + '.json', JSON.stringify({ status: 'converting', progress: p }));
+          sidecar(p);
         } catch { /* .tmp not created yet (model still loading) — keep the last value */ }
       }, 1500);
 
@@ -272,6 +288,63 @@ export class ConversionScheduler {
     });
     this.currentPromise = pr;   // cleared in done()
     return pr;
+  }
+
+  // Build ONE model's pack to an explicit configuration, replacing whatever is there. This is the
+  // user-driven "Quantize" action, as opposed to the idle pump's build-at-serving-defaults.
+  //
+  // A MIXED build is inherently TWO passes and the user does not choose them — promotion is ranked by
+  // qerr, the measured per-weight quantisation error, and only a completed pack records it. So pass 1
+  // builds uniform (recording qerr), pass 2 rebuilds reading it back via --pack-qerr-source. Pass 1's
+  // pack is moved aside rather than copied: ggml-ork derives the output path from -m, so pass 2 would
+  // otherwise overwrite the very file it ranks from, and _spawnBuild short-circuits on an existing pack.
+  // The aside copy is scaffolding and is removed either way.
+  async quantize(rel, cfg = {}) {
+    if (!this.binPath) return { ok: false, error: 'no llama-completion binary' };
+    const bits  = cfg.bits === 8 ? 8 : 4;
+    const mixed = !!cfg.mixed;
+    const abs   = path.join(MODELS_DIR, rel);
+    const pack  = orkpackPathFor(abs);
+    const qerrAt = pack.replace(/\.orkpack$/i, '.qerr.orkpack');
+
+    if (!fs.existsSync(abs)) return { ok: false, error: 'no such model: ' + rel };
+    const arch = getGgufArchitecture(abs);
+    if (UNSUPPORTED_ARCHS.has(arch)) return { ok: false, error: "arch '" + arch + "' cannot be packed" };
+
+    // The NPU is single-stream: take it from the idle pump, as a user Load does.
+    this.queued.delete(rel);
+    if (this.current) { this.preempt(); try { await this.currentPromise; } catch {} }
+
+    const env = orkEnvFrom(orkPrecisionForBuild(bits, mixed));
+    const clean = () => { for (const f of [qerrAt, qerrAt + '.gguf', qerrAt + '.tmp']) { try { fs.unlinkSync(f); } catch {} } };
+    try {
+      removeOrkpack(abs);                      // an explicit rebuild replaces, never adopts
+      clean();
+
+      // Pass 1 — uniform. For a mixed build its real product is the recorded qerr.
+      const p1 = ['--pack-bits', String(bits), '--no-pack-mixed'];
+      if (!await this._spawnBuild(rel, env, p1, mixed ? 'pass 1 of 2 - measuring' : 'quantizing')) {
+        return { ok: false, error: 'pass 1 produced no .orkpack' };
+      }
+      if (!mixed) return { ok: true, bits, mixed };
+
+      // Pass 2 — promote the worst-quantised weights, ranked by pass 1's qerr.
+      fs.renameSync(pack, qerrAt);
+      try { fs.renameSync(pack + '.gguf', qerrAt + '.gguf'); } catch {}
+      const p2 = ['--pack-bits', String(bits), '--pack-mixed',
+                  '--pack-qerr-source', qerrAt,
+                  '--pack-budget',   String(cfg.budgetMB ?? 8),
+                  '--pack-qerr-min', String(cfg.qerrMin ?? 0.05)];
+      if (cfg.promote) p2.push('--pack-promote', String(cfg.promote));
+      if (!await this._spawnBuild(rel, env, p2, 'pass 2 of 2 - promoting')) {
+        try { fs.renameSync(qerrAt, pack); } catch {}   // keep the uniform pack; never leave nothing servable
+        return { ok: false, error: 'pass 2 failed; kept the uniform pack' };
+      }
+      return { ok: true, bits, mixed };
+    } finally {
+      clean();
+      this._pump();
+    }
   }
 
   // A user Load is taking the NPU — kill any in-flight conversion and re-queue it for later idle time.

@@ -22,6 +22,10 @@
           <v-icon start>mdi-download-outline</v-icon>
           Downloader
         </v-tab>
+        <v-tab value="quantize">
+          <v-icon start>mdi-cog-transfer-outline</v-icon>
+          Quantization
+        </v-tab>
       </v-tabs>
 
       <v-tabs-window v-model="tab">
@@ -1203,6 +1207,132 @@
           </v-card>
         </v-tabs-window-item>
 
+        <!-- Quantization Tab -->
+        <v-tabs-window-item value="quantize">
+
+          <v-alert v-if="!quantSources.length" type="info" variant="tonal" border="start" density="comfortable" class="mb-4">
+            No GGUF source models found. Download one from the <a href="#" @click.prevent="tab = 'downloader'">Downloader</a> tab —
+            an uncompressed (F16 / BF16) release gives the best result.
+          </v-alert>
+
+          <v-row v-else>
+            <!-- Source picker -->
+            <v-col cols="12" md="7">
+              <v-card class="glass-card pa-5 mb-4">
+                <div class="text-subtitle-1 font-weight-bold mb-1">1 &middot; Source model</div>
+                <div class="text-caption text-grey mb-4">
+                  The GGUF the pack is built from. Its weights are the material; the .orkpack is the artifact that gets served.
+                </div>
+
+                <v-list class="bg-transparent pa-0" density="comfortable">
+                  <v-list-item
+                    v-for="m in quantSources"
+                    :key="m.id"
+                    :active="quantModel === m.id"
+                    @click="selectQuantSource(m)"
+                    rounded="lg"
+                    class="mb-2 border"
+                  >
+                    <template #prepend>
+                      <v-radio :model-value="quantModel === m.id" :true-value="true" density="compact" hide-details />
+                    </template>
+                    <v-list-item-title class="text-body-2 font-weight-medium">{{ m.displayName || m.id }}</v-list-item-title>
+                    <v-list-item-subtitle class="text-caption">
+                      <v-chip size="x-small" variant="tonal" :color="m.uncompressed ? 'success' : 'warning'" class="mr-1">
+                        {{ m.quantLabel }}
+                      </v-chip>
+                      <span v-if="!m.uncompressed" class="text-warning">already quantized</span>
+                      <span v-else class="text-success">uncompressed &mdash; ideal source</span>
+                      <span v-if="m.packStatus === 'done'" class="text-grey"> &middot; pack built</span>
+                    </v-list-item-subtitle>
+                  </v-list-item>
+                </v-list>
+              </v-card>
+            </v-col>
+
+            <!-- Configuration -->
+            <v-col cols="12" md="5">
+              <v-card class="glass-card pa-5 mb-4">
+                <div class="text-subtitle-1 font-weight-bold mb-1">2 &middot; Precision</div>
+                <div class="text-caption text-grey mb-4">
+                  The NPU computes at one width per matmul &mdash; W4A4 or W8A8. There is no W4A8.
+                </div>
+
+                <v-btn-toggle v-model="quantBits" mandatory divided variant="outlined" density="comfortable" class="mb-4 w-100">
+                  <v-btn :value="4" class="flex-grow-1">int4</v-btn>
+                  <v-btn :value="8" class="flex-grow-1">int8</v-btn>
+                </v-btn-toggle>
+
+                <v-switch
+                  v-model="quantMixed"
+                  :disabled="quantBits !== 4"
+                  color="primary"
+                  density="compact"
+                  hide-details
+                  class="mb-1"
+                  label="Mixed precision"
+                />
+                <div class="text-caption text-grey mb-4">
+                  <template v-if="quantBits === 4">
+                    Keeps most weights at native int4 and promotes the worst-quantized ones to int8, ranked by
+                    the measured per-weight error the pack records. Runs two passes automatically &mdash; the first
+                    measures, the second promotes.
+                  </template>
+                  <template v-else>
+                    Not applicable: an int8 pack is already at the higher tier, so there is nothing to promote to.
+                  </template>
+                </div>
+
+                <template v-if="quantMixed && quantBits === 4">
+                  <div class="text-caption font-weight-medium mb-1">
+                    Promotion budget &mdash; {{ quantBudget }} MiB
+                  </div>
+                  <div class="text-caption text-grey mb-2">How much extra pack size promotion may spend.</div>
+                  <v-slider v-model="quantBudget" :min="1" :max="512" :step="1" density="compact" hide-details class="mb-4" />
+                </template>
+
+                <v-alert
+                  v-if="quantBits === 4 && quantSelected && !quantSelected.uncompressed"
+                  type="warning" variant="tonal" density="compact" class="mb-4 text-caption"
+                >
+                  Quantizing an already-quantized source compounds error. An F16 / BF16 release of this model
+                  will pack noticeably better at 4 bits.
+                </v-alert>
+
+                <v-btn
+                  color="primary" block size="large"
+                  :disabled="!quantModel || quantBusy"
+                  :loading="quantBusy"
+                  @click="startQuantize"
+                >
+                  <v-icon start>mdi-cog-transfer-outline</v-icon>
+                  Quantize
+                </v-btn>
+                <div class="text-caption text-grey mt-2 text-center">
+                  Runs to completion on its own. The NPU is single-stream, so any loaded model is unloaded first.
+                </div>
+              </v-card>
+            </v-col>
+          </v-row>
+
+          <!-- Progress -->
+          <v-card v-if="quantJob" class="glass-card pa-5">
+            <div class="d-flex align-center justify-space-between mb-2">
+              <div class="text-subtitle-1 font-weight-bold">{{ quantJob.name }}</div>
+              <v-chip size="small" variant="tonal" :color="quantJob.status === 'error' ? 'error' : 'primary'">
+                {{ quantJob.label || quantJob.status }}
+              </v-chip>
+            </div>
+            <v-progress-linear
+              :model-value="quantJob.progress"
+              :indeterminate="quantJob.status === 'converting' && !quantJob.progress"
+              :color="quantJob.status === 'error' ? 'error' : 'primary'"
+              height="8" rounded class="mb-2"
+            />
+            <div class="text-caption text-grey">{{ quantJob.progress }}%</div>
+          </v-card>
+        </v-tabs-window-item>
+
       </v-tabs-window>
     </v-container>
 
@@ -1253,6 +1383,15 @@ export default {
   data: () => ({
     user: { username: 'admin', role: 'admin', authProvider: 'local' },
     tab: 'manager',
+    // Quantization tab — pick a GGUF source, choose a tier, build its .orkpack. A mixed build is two
+    // passes and runs them itself; the user configures once and waits.
+    quantModel: null,
+    quantBits: 4,
+    quantMixed: true,
+    quantBudget: 8,
+    quantBusy: false,
+    quantJob: null,      // { name, status, progress, label } polled from /library
+    quantTimer: null,
     models: [],
     eagle3Heads: [],
     // Downloaded models sorted into categories (GET /api/admin/library)
@@ -1367,6 +1506,25 @@ export default {
     themeName: localStorage.getItem('orkllm-theme') || 'customDarkTheme'
   }),
   computed: {
+    // GGUF sources available to quantize. Excludes .rkllm (different runtime entirely) and .orkpack
+    // (already the artifact). `uncompressed` drives the guidance: the 4-bit tier packs from full-
+    // precision weights far better than from an already-quantized file.
+    quantSources() {
+      return (this.library.available || [])
+        .filter(m => /\.gguf$/i.test(m.id || ''))
+        .map(m => {
+          const q = this.quantOf(m.id) || '';
+          return {
+            ...m,
+            quantLabel: q || 'unknown',
+            uncompressed: /^(F16|BF16|F32)$/i.test(q),
+            packStatus: m.orkConversion?.status || 'none',
+          };
+        });
+    },
+    quantSelected() {
+      return this.quantSources.find(m => m.id === this.quantModel) || null;
+    },
     isDark() {
       return this.themeName === 'customDarkTheme';
     },
@@ -1479,12 +1637,14 @@ export default {
   },
   beforeUnmount() {
     if (this.dlPollTimer) clearInterval(this.dlPollTimer);
+    if (this.quantTimer) clearInterval(this.quantTimer);
     if (this.statusPoller) clearInterval(this.statusPoller);
     this.stopRuntimeSyncPoller?.();
   },
   watch: {
     tab(val) {
       if (val === 'downloader') this.refreshDownloadQueue();
+      if (val === 'quantize') this.fetchLibrary();
     },
     searchOpen(open) {
       // Lazy-load files for each newly-expanded repo accordion.
@@ -1492,6 +1652,67 @@ export default {
     },
   },
   methods: {
+    // ---- Quantization tab ----------------------------------------------------------------------
+    // Source candidates: the .gguf models under MODELS_DIR. A pack-backed entry is not a source (it is
+    // already the artifact), and a source's own weight width decides how well 4-bit will go — an
+    // already-quantized GGUF compounds error, so it is flagged rather than hidden.
+    selectQuantSource(m) {
+      this.quantModel = m.id;
+      // int4 from an already-quantized source is the case worth steering away from, so default a
+      // compressed source to int8 and let the user override.
+      if (!m.uncompressed && this.quantBits === 4) this.quantBits = 8;
+    },
+
+    async startQuantize() {
+      if (!this.quantModel) return;
+      this.quantBusy = true;
+      try {
+        const res = await fetch('/api/admin/quantize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: this.quantModel,
+            bits: this.quantBits,
+            mixed: this.quantBits === 4 && this.quantMixed,
+            budgetMB: this.quantBudget,
+          }),
+        });
+        const data = await this._readJson(res);
+        if (!res.ok) throw new Error(data.error || 'failed to start');
+        this.quantJob = { name: this.quantSelected?.displayName || this.quantModel, status: 'converting', progress: 0, label: 'starting' };
+        this.startQuantPoll();
+        this.$notify('Quantization started', 'success');
+      } catch (e) {
+        this.$notify(e.message, 'error');
+        this.quantBusy = false;
+      }
+    },
+
+    // Progress comes from the same per-model conversion state the Manager already shows — the build
+    // writes a sidecar the library endpoint reflects. Polling that keeps one source of truth rather
+    // than inventing a second job registry for the same work.
+    startQuantPoll() {
+      if (this.quantTimer) clearInterval(this.quantTimer);
+      this.quantTimer = setInterval(async () => {
+        await this.fetchLibrary();
+        const row = (this.library.available || []).find(m => m.id === this.quantModel);
+        const st = row?.orkConversion;
+        if (!st || st.status === 'done' || st.status === 'none') {
+          clearInterval(this.quantTimer); this.quantTimer = null;
+          this.quantBusy = false;
+          if (st?.status === 'done') {
+            this.quantJob = { ...this.quantJob, status: 'done', progress: 100, label: 'done' };
+            this.$notify('Quantization complete', 'success');
+          } else {
+            this.quantJob = { ...this.quantJob, status: 'error', label: 'failed — see logs' };
+            this.$notify('Quantization did not produce a pack — check the Logs page', 'error');
+          }
+          return;
+        }
+        this.quantJob = { ...this.quantJob, status: st.status, progress: st.progress || 0, label: st.label || st.status };
+      }, 2000);
+    },
+
     // Flip a card's accordion between fully expanded and fully collapsed and
     // record the new state (drives the toggle's label/icon). `key` is the card
     // (available|drafts|base); the matching `$refs` entry is its ModelTree.

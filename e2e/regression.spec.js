@@ -752,6 +752,51 @@ test.describe('Dual-runtime (rkllm + llama)', () => {
 // "filter is not a function". The endpoint actually returns { repoId, files:[…] }.
 // Intercept it with that shape and assert the picker renders (with quant chips)
 // and does not crash — no live HuggingFace dependency.
+test.describe('Quantization tab', () => {
+  // The tab is source-first, so it needs a .gguf to list — its empty state is otherwise all that renders.
+  // F16 in the name so the "uncompressed, ideal source" classification is the one under test.
+  const quantGgufName = 'quantsrc-F16.gguf';
+  const quantGgufPath = path.join(modelsDir, quantGgufName);
+  test.beforeAll(() => fs.writeFileSync(quantGgufPath, 'fake-gguf-data', 'utf-8'));
+  test.afterAll(() => { try { fs.unlinkSync(quantGgufPath); } catch {} });
+
+  test('Models page has a Quantization tab listing GGUF sources with a precision choice', async ({ page }) => {
+    await login(page);
+    await page.goto('/models');
+    await page.getByRole('tab', { name: /Quantization/i }).click();
+
+    // The tab is source-first: pick a .gguf, then a tier.
+    // Scope to the source card: the Manager tab keeps its own copy of every model name in the DOM.
+    const sourceCard = page.locator('.v-card').filter({ hasText: 'Source model' });
+    await expect(sourceCard.getByText('quantsrc-F16.gguf')).toBeVisible();
+    await expect(sourceCard.getByText(/uncompressed .* ideal source/i)).toBeVisible();
+    await expect(page.getByText(/The NPU computes at one width per matmul/i)).toBeVisible();
+    await expect(page.getByRole('button', { name: 'int4', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'int8', exact: true })).toBeVisible();
+  });
+
+  test('Mixed precision is offered for int4 and explicitly ruled out for int8', async ({ page }) => {
+    await login(page);
+    await page.goto('/models');
+    await page.getByRole('tab', { name: /Quantization/i }).click();
+
+    await page.getByRole('button', { name: 'int8', exact: true }).click();
+    await expect(page.getByText(/nothing to promote to/i)).toBeVisible();
+
+    await page.getByRole('button', { name: 'int4', exact: true }).click();
+    await expect(page.getByText(/promotes the worst-quantized ones to int8/i)).toBeVisible();
+  });
+
+  test('POST /api/admin/quantize rejects a non-gguf source', async ({ page }) => {
+    await login(page);
+    const res = await page.request.post('/api/admin/quantize', {
+      data: { model: 'something.rkllm', bits: 4 },
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).error).toMatch(/must be a \.gguf/i);
+  });
+});
+
 test('Downloader: Find Files renders the picker for a multi-quant repo', async ({ page }) => {
   await login(page);
   await page.goto('/models');

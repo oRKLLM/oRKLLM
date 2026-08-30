@@ -857,7 +857,7 @@ export default async function adminRoutes(fastify, options) {
       const packPath = ggufPath.replace(/\.gguf$/i, '.orkpack');
       try { const st = fs.statSync(packPath); if (st.size > 0) return { status: 'done', packedBytes: st.size }; } catch {}
       const s = readJson(packPath + '.json');
-      if (s && s.status) return { status: s.status, progress: Math.max(0, Math.min(100, Math.round(s.progress || 0))) };
+      if (s && s.status) return { status: s.status, progress: Math.max(0, Math.min(100, Math.round(s.progress || 0))), ...(s.label ? { label: s.label } : {}) };
       return { status: 'none' };
     };
 
@@ -1517,6 +1517,34 @@ export default async function adminRoutes(fastify, options) {
   //   { headDir, baseRepoId }  → range-download just embed_tokens from a HF repo
   //   { headDir, baseDir }     → slice it from an already-downloaded base model
   // Runs as a download-queue job (progress visible in the queue).
+  // Quantize ONE .gguf into an .orkpack at an explicit configuration. Returns 202 immediately: a pack
+  // build is minutes-long and a mixed one runs two passes, so the client polls /library for the
+  // per-model conversion state ({status, progress, label}) exactly as it does for an idle build.
+  //
+  // The chosen tier is ALSO persisted to the model's settings. It has to be: the pack's precision is
+  // stamped into its footer and a serving run whose ORK_QUANT disagrees has the pack refused as stale
+  // (rebuild, or abort() over ORK_ORKPACK_MAX_REGEN_MB). Writing npu_quant here is what makes the idle
+  // scheduler and the load path agree with what the user just built, instead of quietly rebuilding it.
+  fastify.post('/quantize', async (request, reply) => {
+    const { model, bits, mixed, budgetMB, qerrMin } = request.body || {};
+    if (!model || typeof model !== 'string') return reply.status(400).send({ error: 'model required' });
+    if (model.includes('..')) return reply.status(400).send({ error: 'invalid path' });
+    if (!/\.gguf$/i.test(model)) return reply.status(400).send({ error: 'quantization source must be a .gguf' });
+    const nbits = Number(bits) === 8 ? 8 : 4;
+
+    const sched = getConversionScheduler();
+    if (!sched) return reply.status(503).send({ error: 'conversion scheduler unavailable' });
+    if (sched.status().current) return reply.status(409).send({ error: 'a conversion is already running' });
+
+    dbSetModelSettings(model, { ...(dbGetModelSettings(model) || {}),
+      npu_quant: nbits === 8 ? 'int8' : 'int4', pack_mixed: !!mixed });
+
+    sched.quantize(model, { bits: nbits, mixed: !!mixed, budgetMB, qerrMin })
+      .then(r => { if (!r.ok) console.warn(`[quantize] ${model}: ${r.error}`); })
+      .catch(e => console.warn(`[quantize] ${model}: ${e.message}`));
+    return reply.status(202).send({ started: true, model, bits: nbits, mixed: !!mixed });
+  });
+
   fastify.post('/eagle3/embeddings', async (request, reply) => {
     const { headDir, baseRepoId, baseDir, reuseDir, hfToken: tokenOverride } = request.body || {};
     if (!headDir) return reply.status(400).send({ error: 'headDir required' });
