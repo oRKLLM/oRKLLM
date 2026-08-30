@@ -1277,9 +1277,6 @@
                     Keeps most weights at native int4 and promotes the worst-quantized ones to int8, ranked by
                     the measured per-weight error the pack records. Runs two passes automatically &mdash; the first
                     measures, the second promotes.
-                    <strong>Not yet honoured by the runtime:</strong> measured on b10687-ork the promotion
-                    budget goes unspent and the pack comes out identical to a uniform build &mdash; the tier
-                    is currently decided by each weight's source width alone.
                   </template>
                   <template v-else>
                     Not applicable: an int8 pack is already at the higher tier, so there is nothing to promote to.
