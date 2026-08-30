@@ -1295,8 +1295,10 @@
                   v-if="quantBits === 4 && quantSelected && !quantSelected.uncompressed"
                   type="warning" variant="tonal" density="compact" class="mb-4 text-caption"
                 >
-                  Quantizing an already-quantized source compounds error. An F16 / BF16 release of this model
-                  will pack noticeably better at 4 bits.
+                  This source already carries a per-tensor mix of widths, and the pack routes each weight by the
+                  width it finds — so mixed precision has nothing left to decide and the promotion budget goes
+                  unspent. An F16 / BF16 release gives every tensor the same width, which is what lets measured
+                  error pick the weights worth keeping at int8.
                 </v-alert>
 
                 <v-btn

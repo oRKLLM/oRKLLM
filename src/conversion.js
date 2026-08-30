@@ -293,6 +293,13 @@ export class ConversionScheduler {
   // Build ONE model's pack to an explicit configuration, replacing whatever is there. This is the
   // user-driven "Quantize" action, as opposed to the idle pump's build-at-serving-defaults.
   //
+  // MEASURED on RK3588 (b10687-ork, Qwen3-1.7B-UD-Q4_K_XL): a pack from an already-quantized source is
+  // mixed before qerr ever runs — ggml-ork routes each weight by the width it FINDS (q4_K/iq4_xs -> W4A4,
+  // q5_K/q6_K -> W8A8; 260/132 of them here), so the uniform and mixed builds came out byte-identical and
+  // the 32 MiB promotion budget went entirely unspent. qerr only has work to do on a UNIFORM-width source
+  // (F16/BF16), where source width cannot discriminate and measured error is the only signal. That, not
+  // "compounding error", is the real reason the UI steers at an uncompressed source.
+  //
   // A MIXED build is inherently TWO passes and the user does not choose them — promotion is ranked by
   // qerr, the measured per-weight quantisation error, and only a completed pack records it. So pass 1
   // builds uniform (recording qerr), pass 2 rebuilds reading it back via --pack-qerr-source. Pass 1's
