@@ -38,7 +38,10 @@
 #else
 #include <dlfcn.h>
 #define DYNLIB_HANDLE void*
-#define DYNLIB_LOAD(p) dlopen(p, RTLD_LAZY|RTLD_LOCAL)
+// ORKLLM_RTLD_GLOBAL=1 loads libllama with globally-visible symbols, the way a normally-LINKED
+// frontend (ork_bench, llama-completion) exposes them. ggml dlopens its backends at registry init, so
+// whether the parent is RTLD_LOCAL or RTLD_GLOBAL changes what those backends bind against.
+#define DYNLIB_LOAD(p) dlopen(p, RTLD_LAZY | (std::getenv("ORKLLM_RTLD_GLOBAL") ? RTLD_GLOBAL : RTLD_LOCAL))
 #define DYNLIB_GETSYM(h,n) dlsym(h,n)
 #define DYNLIB_FREE(h) dlclose(h)
 #endif
@@ -500,6 +503,17 @@ Napi::Value InitModel(const Napi::CallbackInfo& info) {
     }
 
     g_ctx = fn_ctx_init(g_model, cpar);
+    if (std::getenv("ORKLLM_LOGIT_DEBUG")) {
+        // Dump what we ACTUALLY built, not what we believe we built — the reference harness is
+        // compared against these numbers, so they must be observed rather than assumed.
+        std::fprintf(stderr, "[CPAR-DBG] n_ctx=%u n_batch=%u n_ubatch=%u n_outputs_max=%d "
+                             "offload_kqv=%d flash_attn=%d type_k=%d type_v=%d n_seq_max=%u n_threads=%d ngl=%d\n",
+                     (unsigned) cpar.n_ctx, (unsigned) cpar.n_batch, (unsigned) cpar.n_ubatch,
+                     (int) cpar.n_outputs_max, (int) cpar.offload_kqv, (int) cpar.flash_attn_type,
+                     (int) cpar.type_k, (int) cpar.type_v, (unsigned) cpar.n_seq_max,
+                     (int) cpar.n_threads, (int) mpar.n_gpu_layers);
+        std::fflush(stderr);
+    }
     if (!g_ctx) {
         fn_model_free(g_model); g_model = nullptr;
         return Napi::Number::New(env, -2);
@@ -523,10 +537,15 @@ Napi::Value InitModel(const Napi::CallbackInfo& info) {
     // Since layers have been offloaded to NPU/GPU, the raw GGUF weights in physical
     // memory are a redundant duplicate. Dropping them saves up to 21 GB of RAM!
     // Any CPU-bound layers will page-fault back on demand.
-    int fd = open(s_modelPath.c_str(), O_RDONLY);
-    if (fd >= 0) {
-        posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
-        close(fd);
+    // ORKLLM_NO_FADVISE=1 disables this. It is safe for a normal GGUF (dropped pages re-fault from
+    // the file), but a pack-backed load is handed a SPARSE STUB whose packed tensors are file HOLES —
+    // anything re-faulted there returns ZEROS, not weights.
+    if (!std::getenv("ORKLLM_NO_FADVISE")) {
+        int fd = open(s_modelPath.c_str(), O_RDONLY);
+        if (fd >= 0) {
+            posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+            close(fd);
+        }
     }
 #endif
 
@@ -772,6 +791,17 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
                 b.seq_id[j][0] = 0;
                 b.logits[j] = (inferMode == 1 || inferMode == 2) ? 1 : (j == batch - 1 ? 1 : 0);
             }
+            if (std::getenv("ORKLLM_LOGIT_DEBUG")) {
+                std::string ps, ss, ls;
+                for (int j = 0; j < batch; j++) {
+                    ps += std::to_string(b.pos[j]) + ",";
+                    ss += std::to_string(b.n_seq_id[j]) + ":" + std::to_string(b.seq_id[j][0]) + ",";
+                    ls += std::to_string((int) b.logits[j]);
+                }
+                std::fprintf(stderr, "[BATCH-DBG] n_tokens=%d pos=[%s] nseq:seq=[%s] logits=[%s]\n",
+                             b.n_tokens, ps.c_str(), ss.c_str(), ls.c_str());
+                std::fflush(stderr);
+            }
             auto td0 = std::chrono::high_resolution_clock::now();
             int decode_ret = fn_decode(g_ctx, b);
             auto td1 = std::chrono::high_resolution_clock::now();
@@ -831,6 +861,41 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
         // Optional: save KV cache to disk after prefill
         if (!saveCachePath.empty() && fn_state_save) {
             fn_state_save(g_ctx, saveCachePath.c_str(), 0, toks.data(), (size_t)n);
+        }
+
+        // ORKLLM_LOGIT_DEBUG=1: dump what the model actually produced at the end of prefill.
+        //
+        // This exists because the same request through this addon and through the runtime's own CLI
+        // diverge: the CLI is coherent and this path is not, while every load/context/sampling parameter
+        // matches. The distribution is what separates the two hypotheses — if the top-1 token is right
+        // but the tail is noise, the logits are subtly wrong (weights/attention); if the whole ranking
+        // is wrong, the prompt or the positions are.
+        if (std::getenv("ORKLLM_LOGIT_DEBUG") && fn_get_logits_ith) {
+            const float * lg = fn_get_logits_ith(g_ctx, -1);
+            if (lg) {
+                // top-5 by logit, without sorting the whole vocab
+                int   ti[5] = {0,0,0,0,0};
+                float tv[5] = {-1e30f,-1e30f,-1e30f,-1e30f,-1e30f};
+                for (int v = 0; v < n_vocab; v++) {
+                    for (int k = 0; k < 5; k++) {
+                        if (lg[v] > tv[k]) {
+                            for (int m = 4; m > k; m--) { tv[m] = tv[m-1]; ti[m] = ti[m-1]; }
+                            tv[k] = lg[v]; ti[k] = v; break;
+                        }
+                    }
+                }
+                std::fprintf(stderr, "[LOGIT-DBG] prompt_tokens=%d n_past=%d first=%d last=%d\n",
+                             n, n_past, n > 0 ? toks[0] : -1, n > 0 ? toks[n-1] : -1);
+                // FULL token list — comparing only count/first/last is not the same as comparing prompts.
+                { std::string ids; for (int q = 0; q < n; q++) ids += std::to_string(toks[q]) + ",";
+                  std::fprintf(stderr, "[LOGIT-DBG] ids=%s\n", ids.c_str()); }
+                for (int k = 0; k < 5; k++) {
+                    char pc[128]; int pl = fn_tok2piece(g_vocab, ti[k], pc, sizeof(pc) - 1, 0, true);
+                    if (pl < 0) pl = 0; pc[pl] = '\0';
+                    std::fprintf(stderr, "[LOGIT-DBG]   top%d id=%-6d logit=%9.4f  %s\n", k+1, ti[k], tv[k], pc);
+                }
+                std::fflush(stderr);
+            }
         }
 
         // Generate
@@ -1327,6 +1392,65 @@ Napi::Value ExtractOrkpackGguf(const Napi::CallbackInfo& info) {
     return Napi::Boolean::New(env, fn(pack.c_str(), out.c_str()));
 }
 
+// ── SELFTEST ──────────────────────────────────────────────────────────────────
+// Reproduce ork_bench's decode sequence INSIDE this process, to split the remaining search space.
+//
+// oRKLLM and ork_bench disagree on the logits for a byte-identical prompt on the same pack, with every
+// parameter, env var and context field verified equal. What is left is in-process: the addon's own
+// sequence, or Node hosting itself. This path deliberately mirrors ork_bench — llama_batch_get_one
+// instead of the hand-built batch, and NO clearCtxMemory() beforehand — so:
+//   prints ~30.64  -> the fault is in Run's own sequence, and can be bisected there
+//   prints ~16.89  -> the fault follows the process, not the code path
+Napi::Value SelfTest(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (!g_ctx || !g_vocab || !fn_batch_one || !fn_tokenize || !fn_decode || !fn_get_logits_ith) {
+        Napi::Error::New(env, "selftest: call load_library + init_model first").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    std::string prompt = info[0].As<Napi::String>().Utf8Value();
+
+    int rc = 0, n = 0;
+    std::vector<llama_token> toks(8192);
+    [&] {
+        n = fn_tokenize(g_vocab, prompt.c_str(), (int32_t) prompt.size(),
+                        toks.data(), 8192, /*add_special=*/true, /*parse_special=*/true);
+        if (n <= 0) { rc = -1; return; }
+        toks.resize(n);
+
+        // ork_bench's exact call — no manual pos/seq_id/logits, and no memory clear first.
+        llama_batch b = fn_batch_one(toks.data(), n);
+        rc = fn_decode(g_ctx, b);
+        if (rc != 0) return;
+
+        const float * lg = fn_get_logits_ith(g_ctx, -1);
+        if (!lg) { rc = -2; return; }
+        const int n_vocab = fn_n_vocab(g_vocab);
+        int ti[5] = {0,0,0,0,0}; float tv[5] = {-1e30f,-1e30f,-1e30f,-1e30f,-1e30f};
+        for (int v = 0; v < n_vocab; v++)
+            for (int k = 0; k < 5; k++)
+                if (lg[v] > tv[k]) { for (int m = 4; m > k; m--) { tv[m]=tv[m-1]; ti[m]=ti[m-1]; }
+                                     tv[k]=lg[v]; ti[k]=v; break; }
+        // Floating-point control register: a host runtime (V8) can change rounding mode or enable
+        // flush-to-zero, which silently changes every float result the library computes.
+#if defined(__aarch64__)
+        { uint64_t fpcr = 0, fpsr = 0;
+          __asm__ __volatile__("mrs %0, fpcr" : "=r"(fpcr));
+          __asm__ __volatile__("mrs %0, fpsr" : "=r"(fpsr));
+          std::fprintf(stderr, "[SELFTEST] fpcr=0x%llx fpsr=0x%llx\n",
+                       (unsigned long long) fpcr, (unsigned long long) fpsr); }
+#endif
+        std::string ids; for (int q = 0; q < n; q++) ids += std::to_string(toks[q]) + ",";
+        std::fprintf(stderr, "[SELFTEST] prompt_tokens=%d ids=%s\n", n, ids.c_str());
+        for (int k = 0; k < 5; k++) {
+            char pc[128]; int pl = fn_tok2piece(g_vocab, ti[k], pc, sizeof(pc)-1, 0, true);
+            if (pl < 0) pl = 0; pc[pl] = '\0';
+            std::fprintf(stderr, "[SELFTEST]   top%d id=%-6d logit=%9.4f  %s\n", k+1, ti[k], tv[k], pc);
+        }
+        std::fflush(stderr);
+    }();
+    return Napi::Number::New(env, rc);
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("load_library",     Napi::Function::New(env, LoadLibrary));
     exports.Set("init_model",       Napi::Function::New(env, InitModel));
@@ -1338,6 +1462,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("clear_kv_cache",   Napi::Function::New(env, ClearKVCache));
     exports.Set("rollback_kv_cache", Napi::Function::New(env, RollbackKVCache));
     exports.Set("extract_orkpack_gguf", Napi::Function::New(env, ExtractOrkpackGguf));
+    exports.Set("selftest",             Napi::Function::New(env, SelfTest));
     return exports;
 }
 
