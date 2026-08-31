@@ -12,7 +12,7 @@ import { eagle3Generate } from './eagle.js';
 import { getAggregatedTools } from './mcp.js';
 import { buildToolSystemPrompt } from './mcp_inference.js';
 import { isOrkpackFresh, getConversionScheduler } from './conversion.js';
-import { orkEnvFrom, orkQuantForSource, isOrkpackPath, isOrkpackUsable, stubPathFor, orkpackPathFor, readOrkpackFooter, sigPrecision } from './orkpack.js';
+import { orkEnvFrom, orkQuantForSource, isOrkpackPath, isOrkpackUsable, stubPathFor, orkpackPathFor, readOrkpackFooter, sigPrecision, sourceGgufFor } from './orkpack.js';
 import { isRecurrentArch, supportsThinkingToggle, ggufQuantBits } from './gguf.js';
 import { cacheKey, getCachePath, tmpCachePath, putCachePath, isCacheEnabled } from './cache.js';
 
@@ -97,8 +97,24 @@ const DEFAULT_MAX_CONTEXT_LEN = 4096;
 // whenever the run sets it) — a rejection reads as STALE, and stale over ORK_ORKPACK_MAX_REGEN_MB
 // (default 2048) aborts the process instead of rebuilding. So the build and the serve must resolve these
 // identically: ONE function, used by the load path and by the conversion scheduler.
+// Per-model settings for a model that may be served from its .orkpack.
+//
+// A pack and the .gguf it was built from are ONE logical model with TWO ids, and settings are keyed by
+// id. Everything written against the gguf — npu_quant and pack_mixed from the Quantization route,
+// speculative_mode, ctx_window, sampling — was invisible once the pack became the servable entry, so a
+// pack load silently took every default. That is the same class as the '.gguf'-only options gate, one
+// layer down: the gate was widened to let packs reach the option block, but the block then read an
+// empty object. Prefer the pack's own row (a user can still tune the pack specifically) and fall back
+// to the source gguf's.
+function modelSettingsFor(modelName) {
+  const direct = dbGetModelSettings(modelName);
+  if (direct && Object.keys(direct).length) return direct;
+  if (isOrkpackPath(modelName)) return dbGetModelSettings(sourceGgufFor(modelName)) || {};
+  return direct || {};
+}
+
 function resolveOrkPrecision(modelName, options = {}, saved = null) {
-  const s = saved ?? (dbGetModelSettings(modelName) || {});
+  const s = saved ?? modelSettingsFor(modelName);
   const npuQuant = options.npu_quant ?? s.npu_quant ?? 'auto';
   const hybridSet = options.npu_hybrid ?? s.npu_hybrid;
 
@@ -356,7 +372,7 @@ class EnginePool {
   // Build ordered list of lib paths to try for a given model
   // Order: cached winner → parsed version → all others → fallback LIBRKLLMRT_PATH
   static runtimeCandidates(modelName) {
-    const settings = dbGetModelSettings(modelName) || {};
+    const settings = modelSettingsFor(modelName);
     const cachedPath = settings.workingLibPath;
     const parsedVersion = parseRuntimeVersion(modelName);
     const available = EnginePool.getAvailableRuntimes();
@@ -420,7 +436,7 @@ class EnginePool {
     // silently defaults to 2048, which is too small for some chat templates
     // (e.g. Qwen3-VL) and makes every prompt overflow → empty replies.
     if (options.max_context_len == null || options.max_context_len === 0) {
-      const saved = dbGetModelSettings(modelName) || {};
+      const saved = modelSettingsFor(modelName);
       const fromSetting = Number(saved.ctx_window) > 0 ? Number(saved.ctx_window) : 0;
       options = { ...options, max_context_len: fromSetting || DEFAULT_MAX_CONTEXT_LEN };
     }
@@ -435,7 +451,7 @@ class EnginePool {
     // alone silently dropped EVERY per-model setting for a pack-backed model — npu_quant, npu_hybrid,
     // kv_cache_quant, use_mmap — which showed up as a worker with no ORK_QUANT for a Q8 model.
     if (isLlamaBackedModel(modelName)) {
-      const saved = dbGetModelSettings(modelName) || {};
+      const saved = modelSettingsFor(modelName);
       // For the llama backend the per-model "KV Cache Compression" dropdown
       // (kv_cache_quant) selects the in-context KV V-cache type: 'q8_0' or
       // 'turbo2/3/4' (anything else → f16). Turbo forces K to q8_0 (asymmetric —
@@ -623,7 +639,7 @@ class EnginePool {
       for (const libPath of candidates) {
         const result = await this._tryLoadSlot(s, modelName, modelPath, slotOptions, libPath, 'rkllm');
         if (result.success) {
-          const settings = dbGetModelSettings(modelName) || {};
+          const settings = modelSettingsFor(modelName);
           if (settings.workingLibPath !== libPath) {
             dbSetModelSettings(modelName, { ...settings, workingLibPath: libPath });
           }
@@ -647,7 +663,7 @@ class EnginePool {
         for (const libPath of freshCandidates) {
           const result2 = await this._tryLoadSlot(s, modelName, modelPath, slotOptions, libPath, 'rkllm');
           if (result2.success) {
-            const settings = dbGetModelSettings(modelName) || {};
+            const settings = modelSettingsFor(modelName);
             dbSetModelSettings(modelName, { ...settings, workingLibPath: libPath });
             s.isLoaded = true;
             applyPerformance();
@@ -1443,7 +1459,7 @@ class EnginePool {
         targets.push({ name: 'all_combined', tools, desc: 'all tools combined' });
       }
 
-      const saved = dbGetModelSettings(modelName) || {};
+      const saved = modelSettingsFor(modelName);
       const isGguf = modelName.toLowerCase().endsWith('.gguf');
       const canToggleThinking = isGguf && supportsThinkingToggle(modelPath);
       const seedNoThink = canToggleThinking && !saved.thinking_enabled;
