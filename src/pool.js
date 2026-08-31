@@ -467,6 +467,10 @@ class EnginePool {
         // pressure and is necessary to load models >15B on a 32 GB board without OOM.
         // Overridable per-model via the `use_mmap` setting.
         use_mmap: options.use_mmap ?? saved.use_mmap ?? true,
+        // Embeddings mode costs 3.4x on prefill (it computes output for every position, not just the
+        // one the batch asks for), so only turn it on for the one path that needs it: Eagle-3 reads the
+        // last hidden layer via infer_mode 1. Init-time, hence part of the slot-reuse key below.
+        embeddings: options.embeddings ?? (saved.speculative_mode === 'eagle3'),
         // With TurboQuant KV: scope the Vulkan backend to the KV/turbo ops only
         // (ggml_vk_set_mode TURBOQUANT) so model layers stay on the NPU and the
         // recurrent multi-turn decode isn't corrupted, and keep weights off Vulkan
@@ -485,7 +489,8 @@ class EnginePool {
           s.activeModel?.options?.kv_type_v === options.kv_type_v &&
           s.activeModel?.options?.ork_quant === options.ork_quant &&
           s.activeModel?.options?.ork_hybrid === options.ork_hybrid &&
-          s.activeModel?.options?.use_mmap === options.use_mmap) {
+          s.activeModel?.options?.use_mmap === options.use_mmap &&
+          s.activeModel?.options?.embeddings === options.embeddings) {
         this.resetIdleTimer(s);
         return { status: 0, activeModel: s.activeModel };
       }

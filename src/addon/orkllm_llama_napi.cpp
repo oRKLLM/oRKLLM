@@ -477,11 +477,23 @@ Napi::Value InitModel(const Napi::CallbackInfo& info) {
     cpar.n_ctx     = opts.Has("max_context_len") ? (uint32_t)opts.Get("max_context_len").As<Napi::Number>().Int32Value() : 4096;
     cpar.n_batch   = 512;
     cpar.n_ubatch  = 512;
-    cpar.n_outputs_max = cpar.n_batch;
+    // Only the positions the batch flags actually need an output slot. Generation flags one (the last);
+    // the hidden-state modes flag all, so size this off the embeddings decision rather than always 512.
+    cpar.n_outputs_max = cpar.embeddings ? cpar.n_batch : 1;
     cpar.n_threads = 4;
     cpar.n_threads_batch = 4;
     cpar.offload_kqv = true;
-    cpar.embeddings = true;
+    // Embeddings mode is INIT-TIME and expensive: it makes the graph produce output for every position
+    // instead of only the one the batch asks for, so the lm_head projection runs once per prompt token.
+    // Measured on RK3588 (Qwen3-1.7B, same model/pack/process, ordering-controlled): 39.1 tok/s prefill
+    // with it on vs 133.2 with it off — 3.4x, paid by EVERY chat completion. It was unconditional.
+    //
+    // Only infer_mode 1 (last hidden layer, for Eagle-3) actually needs it; /v1/embeddings is a mock and
+    // never reaches this addon. So it is opt-in per load. A context built without it simply returns null
+    // from llama_get_embeddings_ith, which the Eagle path already treats as "hidden states unavailable"
+    // and falls back to standard generation — degraded speculation, never a crash.
+    cpar.embeddings = opts.Has("embeddings") && opts.Get("embeddings").IsBoolean()
+                    ? opts.Get("embeddings").As<Napi::Boolean>().Value() : false;
     cpar.n_rs_seq = 16;
     // Let g_abort interrupt an in-flight llama_decode (esp. a long single-batch
     // prefill) — so the Chat "Stop" / client-disconnect abort takes effect promptly
