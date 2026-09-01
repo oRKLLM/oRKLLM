@@ -106,6 +106,40 @@ export function getState() {
 // detected from cpu_capacity, so this no-ops cleanly on uniform-core SoCs.
 let coreSets;   // undefined=undetected, null=not big.LITTLE, else {little:"0-3", big:"4-7"}
 
+// Split a {cpu: capacity} map into little/big by the LARGEST RELATIVE GAP in the sorted capacities,
+// not by equality with the maximum.
+//
+// Exact-equality-to-max is wrong on any SoC whose big cores sit in more than one cluster at slightly
+// different clocks, and RK3588 is exactly that: cpu0-3 A55 @405, cpu4-5 A76 @1003, cpu6-7 A76 @1024.
+// `cap === max` selected only cpu6,7 — half the big cluster — and classified two A76s as little. Measured
+// cost on a 512-token prefill (Qwen3-1.7B int4 pack, warm, same shape): pinned to the two cores it
+// actually chose, 176.3 tok/s; pinned to the whole big cluster, 251.6. The pin itself is worth having —
+// 4-7 beats unrestricted 0-7 (251.6 vs 237.8) — so the idea was sound and only the classification wrong.
+//
+// The real boundary is the big JUMP (405 -> 1003 is 2.48x) and not the small one (1003 -> 1024 is 1.02x),
+// so requiring the split to be at least MIN_TIER_RATIO keeps a same-cluster clock difference from being
+// mistaken for a cluster boundary, and keeps a uniform SoC classified as uniform.
+const MIN_TIER_RATIO = 1.25;
+
+export function splitCoreSets(cap) {
+  const cpus = Object.keys(cap).map(Number).sort((a, b) => a - b);
+  if (!cpus.length) return null;
+  const uniq = [...new Set(cpus.map((c) => cap[c]))].sort((a, b) => a - b);
+  if (uniq.length < 2) return null;                       // uniform cores: nothing to split
+
+  let boundary = 0, best = 0;                             // boundary = first capacity counted as "big"
+  for (let i = 1; i < uniq.length; i++) {
+    const ratio = uniq[i] / uniq[i - 1];
+    if (ratio > best) { best = ratio; boundary = uniq[i]; }
+  }
+  if (best < MIN_TIER_RATIO) return null;                 // all one tier, just clocked differently
+
+  const little = cpus.filter((c) => cap[c] < boundary);
+  const big    = cpus.filter((c) => cap[c] >= boundary);
+  if (!little.length || !big.length) return null;
+  return { little: little.join(','), big: big.join(',') };
+}
+
 function detectCoreSets() {
   if (coreSets !== undefined) return coreSets;
   coreSets = null;
@@ -117,14 +151,7 @@ function detectCoreSets() {
       const p = `${CPU_BASE}/cpu${c}/cpu_capacity`;
       if (fs.existsSync(p)) cap[c] = parseInt(fs.readFileSync(p, 'utf-8').trim(), 10);
     }
-    const caps = Object.values(cap);
-    if (caps.length === cpus.length && new Set(caps).size > 1) {   // heterogeneous → big.LITTLE
-      const max = Math.max(...caps);
-      coreSets = {
-        little: cpus.filter((c) => cap[c] !== max).join(','),
-        big:    cpus.filter((c) => cap[c] === max).join(','),
-      };
-    }
+    if (Object.keys(cap).length === cpus.length) coreSets = splitCoreSets(cap);
   } catch { /* leave null */ }
   return coreSets;
 }
