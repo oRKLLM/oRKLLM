@@ -227,7 +227,7 @@ export class ConversionScheduler {
       // our own .gguf scanners would list as a servable model and re-enqueue, and that is unloadable
       // without its pack.
       const env = { ...process.env,
-        ORK_EVICT_SRC: '1', ORK_NO_STUB: '1', ...envExtra,   // envExtra (ORK_QUANT/ORK_HYBRID) matches the serve
+        ORK_NO_STUB: '1', ...envExtra,   // envExtra (ORK_QUANT/ORK_HYBRID) matches the serve
         LD_LIBRARY_PATH: [LLAMA_RUNTIME_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':') };
       // A single 1-token forward pass packs+dumps every weight; --no-repack keeps weights host so the
       // ggml-ork matmul offload fires; -ngl 99 offloads all layers. `--device ORK` PINS them to the NPU:

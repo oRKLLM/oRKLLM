@@ -147,7 +147,7 @@ function isLlamaBackedModel(modelName) {
   return n.endsWith('.gguf') || isOrkpackPath(n);
 }
 
-function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, orkMoeNpu = false, wcacheBudgetMB = null, sourceIsStub = false, orkpackPath = null, useMmap = true } = {}) {
+function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, orkMoeNpu = false, wcacheBudgetMB = null, sourceIsStub = false, orkpackPath = null } = {}) {
   const dirs = [LLAMA_RUNTIME_DIR, RUNTIMES_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean);
   const env = { ...process.env, LD_LIBRARY_PATH: dirs.join(':') };
   // Keep the GPU idle unless something explicitly wants it (TurboQuant KV). With
@@ -166,15 +166,9 @@ function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, o
   // .orkpack: do NOT set ORK_PERSIST — it was removed upstream and now GGML_ABORTs the worker at
   // backend init. The pack is pointed at with ORK_ORKPACK_PATH below instead (ggml-ork's own
   // derivation reads the command line, which an N-API embedder does not have).
-  // ORK_EVICT_SRC drops the source GGUF's mmap'd pages as weights become NPU-resident (peak RSS stays
-  // ~max(src, packed) instead of the sum). It is ONLY safe under mmap: ggml-ork's own note is that
-  // "with --no-mmap the mapping is anonymous and DONTNEED would zero data". Setting it unconditionally
-  // left that correctness property resting on the addon's use_mmap default happening to be true, so
-  // tie it to the value actually being used instead.
-  if (useMmap) env.ORK_EVICT_SRC = '1';
   // ORK_NO_STUB keeps a pack the worker happens to build inline from writing a <model>.orkpack.gguf
   // stub into MODELS_DIR, where our .gguf scanners would find it.
-  // Both are no-ops for the rkllm backend. Read at backend init, so they must be set at fork time.
+  // A no-op for the rkllm backend. Read at backend init, so it must be set at fork time.
   env.ORK_NO_STUB   = '1';
   // Loading a pack via its extracted sparse gguf: the model file's packed tensors are HOLES that read
   // as zeros, and ork must serve them on every path. There is no in-backend hook that can detect this
@@ -738,8 +732,6 @@ class EnginePool {
         // experimental MoE-on-NPU expert offload (gguf/ggml-ork only; default off, set per-fork)
         orkMoeNpu: options.ork_moe_npu,
         sourceIsStub: !!options.orkpack,
-        // ORK_EVICT_SRC is only safe when the source is actually mmap'd (see workerEnv).
-        useMmap: options.use_mmap !== false,
         // A pack-backed model names its pack directly; a plain .gguf gets its own pack when that pack
         // is one this run would actually adopt (same check the cold-start guard makes).
         orkpackPath: options.orkpack
