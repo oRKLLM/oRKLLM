@@ -50,15 +50,28 @@ if (!MODEL) {
 
 const UNIT = 'Memory bandwidth rather than arithmetic throughput usually limits single stream decoding on embedded systems on chip. ';
 
-// Build a prompt whose TOKEN count is close to the target. Tokenisation is model-specific, so this
-// approximates by characters and reports what the server actually tokenised — the reported number is
-// the one to trust, not the requested one.
+// Build a prompt whose TOKEN count is close to the target. Tokenisation is model-specific, and the
+// whole point of these lengths is to straddle the n_batch cap (512) — an assumed chars-per-token gets
+// that wrong and quietly leaves every length under the cap, where all three strategies are identical
+// by construction and the measurement is empty. So the ratio is CALIBRATED against the model itself:
+// one probe request, chars/tokens from the server's own count, then every prompt is sized from that.
+let CPT = 4.6;                      // replaced by calibrate() before any measurement
 function promptFor(tokens) {
-  const approxCharsPerToken = 4.6;
-  const want = Math.round(tokens * approxCharsPerToken);
+  const want = Math.round(tokens * CPT);
   let s = '';
   while (s.length < want) s += UNIT;
   return s.slice(0, want);
+}
+
+async function calibrate() {
+  const probeChars = 3000;
+  let probe = '';
+  while (probe.length < probeChars) probe += UNIT;
+  probe = probe.slice(0, probeChars);
+  const p = await once(probe);
+  if (!p || !p.prefill_tokens) { console.error('calibration failed — is the model loaded?'); process.exit(1); }
+  CPT = probeChars / p.prefill_tokens;
+  console.log(`calibration: ${probeChars} chars -> ${p.prefill_tokens} tokens (${CPT.toFixed(2)} chars/token)`);
 }
 
 function once(prompt) {
@@ -89,6 +102,9 @@ const rate = (p) => (p && p.prefill_time_ms) ? p.prefill_tokens / (p.prefill_tim
 
 (async () => {
   console.log(`strategy=${LABEL}  model=${MODEL}  reps=${REPS}`);
+  await calibrate();
+  // The cap is what the strategies differ around; say plainly which lengths actually cross it.
+  console.log('  requested lengths: ' + LENGTHS.join(', ') + '  (cap=512 — anything under it is ONE chunk in every strategy)');
   console.log('  tokens   first    settled(mean of last 3)   spread   note');
   const rows = [];
   for (const want of LENGTHS) {
