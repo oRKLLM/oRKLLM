@@ -19,7 +19,7 @@
 // few bytes that matter, no runtime, no model load.
 import fs from 'fs';
 import path from 'path';
-import { LLAMA_RUNTIME_DIR } from './config.js';
+import { LLAMA_RUNTIME_DIR, getPlatform } from './config.js';
 
 // struct orkpack_footer { u64 index_off; u32 n_entries; u32 version; u32 ork_fmt; u32 quant_sig; char magic[8]; }
 // 8-byte aligned, no tail padding needed (24 + 8 = 32).
@@ -192,12 +192,23 @@ export function llamaRuntimeTag() {
 // overwhelmingly common case is that a runtime update does not change the format at all.
 const FMT_STATE = () => path.join(LLAMA_RUNTIME_DIR, 'orkpack-fmt.json');
 
+// The calibration is keyed by runtime tag AND chipset. A .orkpack holds weights pre-tiled for the NPU's
+// MAC geometry, so it is inherently chipset-specific — an RK3576 pack is not loadable on an RK3588 and
+// vice versa. Nothing in the footer we read (magic/version/ork_fmt/quant_sig) states the chipset, so if
+// MODELS_DIR is ever shared between boards (NFS, a copied models tree) a cross-chipset pack is only
+// rejected if ork-driver's own ork_fmt token happens to differ per chip — which is not something we can
+// determine from here. Keying our calibration by platform at least stops a shared or copied state file
+// from certifying another chip's format as this one's. An unknown platform degrades to tag-only, and an
+// unknown ork_fmt is simply not used as a signal, so this fails closed.
 export function expectedOrkFmt() {
   const tag = llamaRuntimeTag();
   if (!tag) return null;
+  const plat = getPlatform() ?? null;
   try {
     const s = JSON.parse(fs.readFileSync(FMT_STATE(), 'utf8'));
-    return s && s.tag === tag && Number.isInteger(s.orkFmt) ? s.orkFmt : null;
+    if (!s || s.tag !== tag || !Number.isInteger(s.orkFmt)) return null;
+    if ((s.platform ?? null) !== plat) return null;         // different chip (or pre-platform state)
+    return s.orkFmt;
   } catch { return null; }
 }
 
@@ -208,8 +219,9 @@ export function recordOrkFmt(orkFmt) {
   if (expectedOrkFmt() === orkFmt) return;                 // already calibrated
   try {
     fs.mkdirSync(LLAMA_RUNTIME_DIR, { recursive: true });
-    fs.writeFileSync(FMT_STATE(), JSON.stringify({ tag, orkFmt, observedAt: Date.now() }));
-    console.log(`[orkpack] runtime ${tag} builds packs at ork_fmt=${orkFmt} — calibrated`);
+    const plat = getPlatform() ?? null;
+    fs.writeFileSync(FMT_STATE(), JSON.stringify({ tag, platform: plat, orkFmt, observedAt: Date.now() }));
+    console.log(`[orkpack] runtime ${tag} on ${plat ?? 'unknown-chipset'} builds packs at ork_fmt=${orkFmt} — calibrated`);
   } catch { /* advisory only */ }
 }
 
