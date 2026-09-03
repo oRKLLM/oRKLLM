@@ -339,23 +339,70 @@ struct RunContext {
 // picking one on reasoning. See the oRKLLM wiki, "Serving Prefill Gap".
 enum ork_chunk_strategy { CHUNK_FILL = 0, CHUNK_BALANCED = 1, CHUNK_BORROW = 2 };
 
+// MEASURED on RK3588, b10701-ork, Qwen3-1.7B-UD-Q4_K_XL.orkpack (5 reps/length, settled = mean of the
+// last 3; identical-plan pairs put the noise floor at 1-2% for prompts over the cap):
+//
+//   tokens      fill              balanced            borrow
+//      402      87.4 [402]        85.4 [402]          90.0 [402]        <- control, one chunk everywhere
+//      520      72.8 [512 8]      77.2 [260 260]      81.8 [392 128]
+//      529      74.7 [512 17]     79.8 [265 264]      78.5 [401 128]
+//      639      74.5 [512 127]    76.8 [320 319]      75.7 [511 128]
+//      696      72.6 [512 184]    73.0 [348 348]      71.3 [512 184]    <- borrow == fill, tail >= floor
+//     1021      63.0 [512 509]    61.5 [511 510]      63.7 [512 509]    <- borrow == fill
+//   geomean     73.84             75.24               76.41
+//
+// A 402-token prompt prefills at 87 tok/s; adding 118 tokens to make 520 DROPS it to 73, because the
+// division becomes [512, 8] and that 8-token chunk pays a whole call's fixed cost. Both repairs beat
+// fill wherever the plans actually differ, and the penalty they recover shrinks as the tail grows
+// (tail 8 -> +6%, 17 -> +7%, 127 -> +3%, 184 -> nothing), which is why a FLOOR is the right shape of fix.
+//
+// BORROW is the default rather than balanced, for two reasons beyond its higher geomean:
+//   1. It is a LOCAL repair. Chunks stay at the cap and only a sub-floor tail is rewritten, so for most
+//      prompts the plan is byte-identical to fill. Balanced makes every chunk a function of n, so M is
+//      novel on almost every request.
+//   2. That difference is UNDERSTATED here. This harness replays six fixed lengths, so balanced's
+//      derived M is warm by rep 2 — a real workload's prompt lengths vary continuously, and ork_bench
+//      documents NPU prefill warm-up as shape-dependent. The benchmark favours balanced relative to
+//      production, and borrow still wins.
+//
+// Kept selectable because the conclusion is chipset- and model-specific (see the AGENTS.md note): the
+// numbers above are one SoC, one pack tier, one hidden dimension.
 static int ork_chunk_strategy(void) {
     static int v = -1;
     if (v < 0) {
         const char * e = std::getenv("ORKLLM_CHUNK_STRATEGY");
-        v = CHUNK_FILL;
+        v = CHUNK_BORROW;                      // measured default (table above)
         if (e) {
-            if (!strcmp(e, "balanced")) v = CHUNK_BALANCED;
+            if (!strcmp(e, "fill")) v = CHUNK_FILL;
+            else if (!strcmp(e, "balanced")) v = CHUNK_BALANCED;
             else if (!strcmp(e, "borrow")) v = CHUNK_BORROW;
         }
     }
     return v;
 }
+// The floor is the smallest tail worth issuing as its own call. Swept on the same board/model
+// (borrow, 5 reps, settled tok/s):
+//
+//   tokens    floor128   floor192   floor256
+//      520        82.2       81.7       79.9
+//      529        78.3       80.6       81.8
+//      639        74.0       76.2       76.4
+//      696        71.3       72.9       73.3
+//   geomean       76.33      77.76      77.77
+//
+// 192 and 256 tie on the geomean (0.01 apart) and both beat 128 by ~1.9%. 192 is chosen on a structural
+// argument the geomean cannot see: at 256 a two-chunk prompt degenerates INTO balanced — n=520 plans as
+// [264 256], i.e. an even split whose size is a function of n — which reintroduces the novel-shape cost
+// that made borrow preferable in the first place, and 520 is exactly where floor 256 measured worst.
+// 192 captures the same gain while keeping the leading chunk near the cap and reused across requests.
+//
+// Note this is the ECONOMIC floor (below which a call is not worth its fixed cost), NOT ORK_MINM=32,
+// which is merely where the NPU MUL_MAT route becomes available.
 static int ork_chunk_floor(void) {
     static int v = -1;
     if (v < 0) {
         const char * e = std::getenv("ORKLLM_CHUNK_FLOOR");
-        v = (e && atoi(e) > 0) ? atoi(e) : 128;   // economic floor, not ORK_MINM (see the table above)
+        v = (e && atoi(e) > 0) ? atoi(e) : 192;   // measured default (table above)
     }
     return v;
 }
