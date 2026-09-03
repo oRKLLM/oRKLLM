@@ -316,6 +316,88 @@ struct RunContext {
 
 // ── N-API exported methods ────────────────────────────────────────────────────
 
+// ── PREFILL CHUNK PLANNING ────────────────────────────────────────────────────
+// Prefill is issued in chunks of at most n_batch. How the prompt is divided is not neutral: the measured
+// per-token cost on RK3588 (Qwen3-1.7B int4 .orkpack, warm, one decode each) is
+//
+//     M=32  7.27   M=64  4.78   M=128  3.79   M=256  3.63   M=384  3.85   M=512  4.08   ms/token
+//
+// so there are two separate traps. A chunk below ~128 pays a large fixed per-call cost amortised over
+// almost nothing (ORK_MINM=32 is where the NPU route becomes AVAILABLE, not where it becomes worth
+// taking), and M=512 is itself ~12% off the optimum near 256.
+//
+// The default FILL strategy leaves whatever remainder falls out of n % cap: a 519-token prompt becomes
+// 512 + 7, and that 7-token tail measured 444.8 ms — 63.5 ms/token, 5x the amortised rate.
+//
+// Which strategy actually wins is NOT settled, because two effects pull opposite ways:
+//   • tail cost      — argues for eliminating small chunks (BALANCED, BORROW)
+//   • shape re-warm  — ork_bench documents NPU prefill warm-up as SHAPE-DEPENDENT, and six identical
+//                      519-token requests measurably warmed (42.6 -> 55-61 tok/s). A cap-sized chunk is
+//                      reused across every request; an M derived from n is novel per prompt length,
+//                      so BALANCED may trade a known tail cost for a fresh re-warm on each request.
+// Hence all three are selectable and measurable from one build (ORKLLM_CHUNK_STRATEGY), rather than
+// picking one on reasoning. See the oRKLLM wiki, "Serving Prefill Gap".
+enum ork_chunk_strategy { CHUNK_FILL = 0, CHUNK_BALANCED = 1, CHUNK_BORROW = 2 };
+
+static int ork_chunk_strategy(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char * e = std::getenv("ORKLLM_CHUNK_STRATEGY");
+        v = CHUNK_FILL;
+        if (e) {
+            if (!strcmp(e, "balanced")) v = CHUNK_BALANCED;
+            else if (!strcmp(e, "borrow")) v = CHUNK_BORROW;
+        }
+    }
+    return v;
+}
+static int ork_chunk_floor(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char * e = std::getenv("ORKLLM_CHUNK_FLOOR");
+        v = (e && atoi(e) > 0) ? atoi(e) : 128;   // economic floor, not ORK_MINM (see the table above)
+    }
+    return v;
+}
+
+// Divide n prompt tokens into chunks of at most `cap`. Pure; exported for unit testing because the
+// alternative is only exercisable on the one board that shows the effect.
+//
+//   FILL      cap, cap, …, remainder            — current behaviour; tail can be 1 token
+//   BALANCED  k = ceil(n/cap), M = ceil(n/k)    — even split. M lands in [~cap/2, cap], so the floor is
+//                                                 satisfied structurally and no tail is ever tiny.
+//   BORROW    cap-sized chunks, but if the tail would fall below `floor_m`, take tokens from the
+//             preceding chunk so the tail reaches exactly `floor_m` — keeps most chunks at cap (and so
+//             warm across requests) while never leaving an unamortised tail.
+//
+// n <= cap is always ONE chunk under every strategy: a 15-token prompt must not become 3x5.
+static std::vector<int> ork_plan_prefill_chunks(int n, int cap, int floor_m, int strategy) {
+    std::vector<int> out;
+    if (n <= 0 || cap <= 0) return out;
+    if (n <= cap) { out.push_back(n); return out; }
+
+    if (strategy == CHUNK_BALANCED) {
+        const int k = (n + cap - 1) / cap;
+        const int m = (n + k - 1) / k;
+        int left = n;
+        for (int i = 0; i < k && left > 0; i++) { const int t = (i == k - 1) ? left : std::min(m, left); out.push_back(t); left -= t; }
+        return out;
+    }
+
+    // FILL, and BORROW which is FILL plus a tail correction
+    int left = n;
+    while (left > 0) { const int t = std::min(left, cap); out.push_back(t); left -= t; }
+
+    if (strategy == CHUNK_BORROW && out.size() >= 2) {
+        const size_t last = out.size() - 1;
+        const int need = floor_m - out[last];
+        // Only borrow if the donor stays above the floor itself — otherwise a two-chunk prompt just
+        // shy of the cap would rob one unamortised chunk to create another.
+        if (need > 0 && out[last - 1] - need >= floor_m) { out[last - 1] -= need; out[last] += need; }
+    }
+    return out;
+}
+
 Napi::Value LoadLibrary(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     if (info.Length() < 1 || !info[0].IsString()) {
@@ -791,9 +873,18 @@ Napi::Value Run(const Napi::CallbackInfo& info) {
 
         auto t0 = std::chrono::high_resolution_clock::now();
 
-        // Decode the prompt (prefill)
+        // Decode the prompt (prefill), in chunks chosen by the configured strategy (see
+        // ork_plan_prefill_chunks — the division is not neutral, a tiny tail costs ~5x per token).
+        const std::vector<int> plan = ork_plan_prefill_chunks(n, 512, ork_chunk_floor(), ork_chunk_strategy());
+        if (std::getenv("ORKLLM_PREFILL_DEBUG")) {
+            std::string ps; for (int c : plan) ps += std::to_string(c) + " ";
+            std::fprintf(stderr, "[PF-PLAN] n=%d strategy=%d floor=%d chunks=[%s]\n",
+                         n, ork_chunk_strategy(), ork_chunk_floor(), ps.c_str());
+            std::fflush(stderr);
+        }
+        size_t plan_idx = 0;
         for (int i = 0; i < n && !g_abort; ) {
-            int batch = std::min(n - i, 512);
+            int batch = (plan_idx < plan.size()) ? plan[plan_idx++] : std::min(n - i, 512);
             auto b = fn_batch_init(batch, 0, 1);
             b.n_tokens = batch;
             for (int j = 0; j < batch; j++) {
@@ -1463,6 +1554,19 @@ Napi::Value SelfTest(const Napi::CallbackInfo& info) {
     return Napi::Number::New(env, rc);
 }
 
+// Exported purely so the chunk planner can be unit-tested from node; it touches no runtime state.
+Napi::Value PlanPrefillChunks(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    const int n     = info.Length() > 0 && info[0].IsNumber() ? info[0].As<Napi::Number>().Int32Value() : 0;
+    const int cap   = info.Length() > 1 && info[1].IsNumber() ? info[1].As<Napi::Number>().Int32Value() : 512;
+    const int floor_m = info.Length() > 2 && info[2].IsNumber() ? info[2].As<Napi::Number>().Int32Value() : 128;
+    const int strat = info.Length() > 3 && info[3].IsNumber() ? info[3].As<Napi::Number>().Int32Value() : 0;
+    const std::vector<int> plan = ork_plan_prefill_chunks(n, cap, floor_m, strat);
+    Napi::Array out = Napi::Array::New(env, plan.size());
+    for (size_t i = 0; i < plan.size(); i++) out.Set((uint32_t) i, Napi::Number::New(env, plan[i]));
+    return out;
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("load_library",     Napi::Function::New(env, LoadLibrary));
     exports.Set("init_model",       Napi::Function::New(env, InitModel));
@@ -1474,6 +1578,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("clear_kv_cache",   Napi::Function::New(env, ClearKVCache));
     exports.Set("rollback_kv_cache", Napi::Function::New(env, RollbackKVCache));
     exports.Set("extract_orkpack_gguf", Napi::Function::New(env, ExtractOrkpackGguf));
+    exports.Set("plan_prefill_chunks",  Napi::Function::New(env, PlanPrefillChunks));
     exports.Set("selftest",             Napi::Function::New(env, SelfTest));
     return exports;
 }
