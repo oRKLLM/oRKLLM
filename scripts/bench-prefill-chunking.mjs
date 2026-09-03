@@ -27,8 +27,11 @@
 //     node scripts/bench-prefill-chunking.mjs --model <id> --label balanced
 //   Repeat for fill and borrow, then compare. Remove the var when done.
 //
-// Optionally set ORKLLM_PREFILL_DEBUG=1 for the service to get [PF-PLAN] and [PF-DECODE] in the journal,
-// which shows the actual chunk list and the per-chunk llama_decode time.
+// ORKLLM_PREFILL_DEBUG=1 on the service puts [PF-PLAN] in the journal — the chunk list actually used,
+// which is the only proof the strategy took effect (a typo'd value silently falls back to fill).
+// ORKLLM_VERBOSE=2 additionally logs each chunk's llama_decode time ("[Llama TRACE] prefill fn_decode of
+// N tokens took X ms"), which is what separates a fixed per-call cost from a genuinely slower small
+// chunk — the distinction that decides where the floor belongs.
 
 import http from 'node:http';
 
