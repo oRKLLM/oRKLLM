@@ -18,8 +18,9 @@
 // Reading the footer ourselves is the same trick src/gguf.js already uses for GGUF headers: parse the
 // few bytes that matter, no runtime, no model load.
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
-import { LLAMA_RUNTIME_DIR, getPlatform } from './config.js';
+import { LLAMA_RUNTIME_DIR, getPlatform, getPlatformSource, getNpuCoreCount, getDeviceDrivers } from './config.js';
 
 // struct orkpack_footer { u64 index_off; u32 n_entries; u32 version; u32 ork_fmt; u32 quant_sig; char magic[8]; }
 // 8-byte aligned, no tail padding needed (24 + 8 = 32).
@@ -223,6 +224,109 @@ export function recordOrkFmt(orkFmt) {
     fs.writeFileSync(FMT_STATE(), JSON.stringify({ tag, platform: plat, orkFmt, observedAt: Date.now() }));
     console.log(`[orkpack] runtime ${tag} on ${plat ?? 'unknown-chipset'} builds packs at ork_fmt=${orkFmt} — calibrated`);
   } catch { /* advisory only */ }
+}
+
+// ---- provenance sidecar (<pack>.prov.json) ----
+//
+// A .orkpack is a HARDWARE-SPECIFIC build artifact: the weights inside it are pre-tiled for one NPU's
+// MAC geometry, produced by one ork-driver against one kernel driver. Its 32-byte footer records only
+// what the runtime needs in order to decide adoption (schema version, format token, precision
+// signature) — nothing about the machine that built it. So a pack that turns up on a box (copied,
+// restored from a backup, served off a shared MODELS_DIR) is unattributable: you cannot ask it which
+// chip it was tiled for.
+//
+// This is the same problem a pg_dump header solves. pg_dump stamps the server version, the dump format
+// version and the creating tool into the archive so a restore can refuse — or at least explain — a
+// mismatch, instead of failing obscurely deep in the data. We stamp the equivalent beside the pack at
+// GENERATION time: chipset (read from the kernel), NPU core count and kernel driver version, the OS and
+// kernel it was built on, the llama-runtime build tag, the ork-driver version the build itself reported,
+// the precision the build was configured for, the footer as written, and the identity of the source GGUF.
+//
+// Deliberately ADVISORY, never a gate. Freshness stays the footer's job (isOrkpackUsable): a pack built
+// by a bare llama-completion run outside oRKLLM has no sidecar at all, and treating "no sidecar" as
+// "stale" would condemn a perfectly good pack and, over ORK_ORKPACK_MAX_REGEN_MB, abort the runtime.
+// Absent or unreadable provenance therefore means UNKNOWN, not wrong.
+//
+// The real fix belongs upstream — a provenance block inside the pack cannot be separated from it by a
+// file copy, and a sidecar can. Until ggml-ork carries one, this is the record we can keep.
+const PROV_SCHEMA = 1;
+export const provPathFor = (packPath) => packPath + '.prov.json';
+
+// Pretty OS name from /etc/os-release (e.g. "Debian GNU/Linux 12 (bookworm)"). null off-Linux.
+function osPrettyName() {
+  try {
+    const m = fs.readFileSync('/etc/os-release', 'utf8').match(/^PRETTY_NAME="?(.*?)"?$/m);
+    return m ? m[1] : null;
+  } catch { return null; }
+}
+
+/**
+ * Record who/what/where built this pack. Called once, right after a build produces the pack.
+ * `source` identifies the GGUF it was built from, `build` the precision + CLI configuration, and
+ * `orkDriver` the version string the build process itself printed (e.g. "1.0.99 (W4A4)") — the runtime
+ * is the only party that knows it, so the caller passes it through from the child's stderr.
+ * Best-effort: a failure to write provenance must never fail a successful build.
+ */
+export function writeOrkpackProvenance(packPath, { source = null, build = null, orkDriver = null } = {}) {
+  try {
+    const footer = readOrkpackFooter(packPath);
+    const drivers = getDeviceDrivers?.() || null;
+    const rec = {
+      schema: PROV_SCHEMA,
+      createdAt: new Date().toISOString(),
+      producer: 'oRKLLM',
+      // The machine. Chipset is read from the kernel, never configured — see getPlatform().
+      hardware: {
+        chipset: getPlatform() ?? null,
+        chipsetSource: getPlatformSource?.() ?? null,
+        npuCores: getNpuCoreCount(),
+        npuDriver: drivers?.npu ?? null,
+        arch: process.arch,
+      },
+      // The OS it was tiled on.
+      system: {
+        os: osPrettyName(),
+        kernel: os.release(),
+        hostname: os.hostname(),
+      },
+      // The software that did the tiling.
+      runtime: {
+        llamaTag: llamaRuntimeTag(),
+        orkDriver: orkDriver ?? null,
+      },
+      // What was asked for, and what came out.
+      build: build ?? null,
+      footer: footer ? {
+        version: footer.version, orkFmt: footer.orkFmt, quantSig: footer.quantSig,
+        nEntries: footer.nEntries, size: footer.size,
+      } : null,
+      source,
+    };
+    fs.writeFileSync(provPathFor(packPath), JSON.stringify(rec, null, 2));
+    return rec;
+  } catch { return null; }
+}
+
+/** Read a pack's provenance, or null when absent/unreadable/a schema we don't know. */
+export function readOrkpackProvenance(packPath) {
+  try {
+    const rec = JSON.parse(fs.readFileSync(provPathFor(packPath), 'utf8'));
+    return rec && rec.schema === PROV_SCHEMA ? rec : null;
+  } catch { return null; }
+}
+
+/**
+ * Does this pack's recorded provenance CONTRADICT the machine we are on? Advisory, and deliberately
+ * one-directional: only a chipset that is present in the record AND differs from the detected one is a
+ * mismatch. No record, no chipset in the record, or an undetectable local chipset all return null
+ * ("unknown") — never false confidence in either direction.
+ */
+export function provenanceChipsetMismatch(packPath) {
+  const rec = readOrkpackProvenance(packPath);
+  const built = rec?.hardware?.chipset ?? null;
+  const here = getPlatform() ?? null;
+  if (!built || !here) return null;
+  return built === here ? false : { builtFor: built, running: here };
 }
 
 // Is this .orkpack one the runtime would ADOPT (no re-conversion)? Structural validity plus, when a

@@ -12,7 +12,8 @@ import { eagle3Generate } from './eagle.js';
 import { getAggregatedTools } from './mcp.js';
 import { buildToolSystemPrompt } from './mcp_inference.js';
 import { isOrkpackFresh, getConversionScheduler } from './conversion.js';
-import { orkEnvFrom, orkQuantForSource, isOrkpackPath, isOrkpackUsable, stubPathFor, orkpackPathFor, readOrkpackFooter, sigPrecision, sourceGgufFor } from './orkpack.js';
+import { orkEnvFrom, orkQuantForSource, isOrkpackPath, isOrkpackUsable, stubPathFor, orkpackPathFor, readOrkpackFooter, sigPrecision, sourceGgufFor,
+         provenanceChipsetMismatch } from './orkpack.js';
 import { isRecurrentArch, supportsThinkingToggle, ggufQuantBits } from './gguf.js';
 import { cacheKey, getCachePath, tmpCachePath, putCachePath, isCacheEnabled } from './cache.js';
 
@@ -530,11 +531,23 @@ class EnginePool {
       // A PACK-BACKED model is already the converted artifact — there is nothing to build, and nothing
       // to fall back to: the source .gguf may well have been deleted (that is the point). So validate it
       // up front and fail loudly rather than dropping into a cold serve that cannot work.
+      // Provenance is advisory (see writeOrkpackProvenance) — a pack built outside oRKLLM has none, so
+      // its absence proves nothing and must never block a load. But when a pack DOES say which chip it
+      // was tiled for and that is not this chip, say so: the weights are laid out for another NPU's MAC
+      // geometry, which the footer alone cannot express, and it is the likeliest explanation for both a
+      // rejection here and any garbage a load might otherwise produce.
+      const chipMismatch = isPack ? provenanceChipsetMismatch(modelPath) : null;
+      if (chipMismatch) {
+        console.warn(`[EnginePool] ${modelName}: .orkpack was built for ${chipMismatch.builtFor} but this board is ` +
+          `${chipMismatch.running} — packs are chipset-specific and must be rebuilt per chip`);
+      }
       if (isPack && !isOrkpackUsable(modelPath, orkPrecision)) {
         const err = new Error(
           `.orkpack ${modelName} is not loadable by the installed runtime at this precision ` +
-          `(footer schema / format token / build signature mismatch). Rebuild it from its source GGUF.`);
-        err.code = 'ORKPACK_UNUSABLE';
+          `(footer schema / format token / build signature mismatch)` +
+          (chipMismatch ? `; its provenance records it was built for ${chipMismatch.builtFor}, not ${chipMismatch.running}` : '') +
+          `. Rebuild it from its source GGUF.`);
+        err.code = chipMismatch ? 'ORKPACK_WRONG_CHIPSET' : 'ORKPACK_UNUSABLE';
         throw err;
       }
       if (isGguf && !isOrkpackFresh(modelPath, orkPrecision)) {

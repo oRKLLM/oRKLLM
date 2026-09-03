@@ -132,20 +132,69 @@ export function checkPassword(password, hash, salt) {
 // tree. Used by the engine pool (per-core model pinning, parallel-model cap)
 // and surfaced in the admin status. Cached after first read.
 let _platformCache = undefined;
+let _platformSource = null;
 
 const NPU_CORES_BY_SOC = { rk3576: 2, rk3588: 3, rk3588s: 3 };
 
-/** Detected SoC slug (e.g. 'rk3576', 'rk3588') or null when undetectable. */
+// The chipset is read from the kernel, never configured — oRKLLM only ever runs
+// on Rockchip silicon, so the SoC is a property of the machine and the OS already
+// knows it. Sources are tried in order of authority: the device tree is what the
+// kernel itself booted from, the soc0 bus nodes are the driver-model view of the
+// same thing, and cpuinfo is the last resort on kernels that expose neither.
+// /proc/device-tree is conventionally a symlink to the sysfs devicetree, but not
+// on every kernel config, so both are probed.
+const PLATFORM_SOURCES = [
+  '/proc/device-tree/compatible',
+  '/sys/firmware/devicetree/base/compatible',
+  '/sys/devices/soc0/machine',
+  '/sys/devices/soc0/family',
+  '/sys/devices/soc0/soc_id',
+  '/proc/cpuinfo',
+];
+
+/**
+ * Pull an SoC slug out of one kernel-provided string. Prefers an explicit
+ * `rockchip,rkNNNN` compatible tuple; falls back to a bare `rkNNNN` token for
+ * the nodes that carry only a bare name (soc0/family, some cpuinfo Hardware
+ * lines). Exported for unit testing — the file reads are what make the caller
+ * board-only, the parsing is pure.
+ */
+export function parseSocSlug(raw) {
+  if (!raw) return null;
+  const text = String(raw).replace(/\0/g, ' ');
+  const m = text.match(/rockchip,\s*(rk\d{3,4}[a-z]?\d?)/i) || text.match(/\b(rk\d{4}[a-z]?\d?)\b/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+/**
+ * Detected SoC slug (e.g. 'rk3576', 'rk3588'), read from the kernel. null only
+ * when this is not Rockchip hardware at all (dev machine, mock mode) — on a
+ * board a null is an anomaly, so it is logged once rather than passing silently.
+ */
 export function getPlatform() {
   if (_platformCache !== undefined) return _platformCache;
-  try {
-    const compat = fs.readFileSync('/proc/device-tree/compatible', 'utf8').replace(/\0/g, ' ');
-    const m = compat.match(/rockchip,(rk\d+[a-z]?)/i);
-    _platformCache = m ? m[1].toLowerCase() : null;
-  } catch {
-    _platformCache = null;
+  _platformCache = null;
+  for (const p of PLATFORM_SOURCES) {
+    let raw;
+    try { raw = fs.readFileSync(p, 'utf8'); } catch { continue; }
+    const slug = parseSocSlug(raw);
+    if (slug) {
+      _platformCache = slug;
+      _platformSource = p;
+      break;
+    }
+  }
+  if (!_platformCache && process.platform === 'linux' && process.arch === 'arm64') {
+    console.warn('[config] chipset undetectable from the kernel on ARM64 Linux — ' +
+      `tried ${PLATFORM_SOURCES.join(', ')}; NPU core count and .orkpack calibration fall back to safe defaults`);
   }
   return _platformCache;
+}
+
+/** Which kernel node answered getPlatform(), for diagnostics. null if none did. */
+export function getPlatformSource() {
+  getPlatform();
+  return _platformSource;
 }
 
 /**

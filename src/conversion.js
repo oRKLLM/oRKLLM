@@ -17,7 +17,8 @@ import fs from 'fs';
 import path from 'path';
 import { MODELS_DIR, LLAMA_RUNTIME_DIR } from './config.js';
 import { isTrailingGgufShard, isOrkpackStub, getGgufArchitecture } from './gguf.js';
-import { orkpackPathFor, isOrkpackUsable, readOrkpackFooter, recordOrkFmt, llamaRuntimeTag, orkEnvFrom } from './orkpack.js';
+import { orkpackPathFor, isOrkpackUsable, readOrkpackFooter, recordOrkFmt, llamaRuntimeTag, orkEnvFrom,
+         writeOrkpackProvenance, provPathFor } from './orkpack.js';
 
 export { orkpackPathFor };
 
@@ -85,7 +86,7 @@ export function isOrkpackFresh(absGguf, precision = null) {
 // sidecar, swept here so old installs don't leave litter.
 function removeOrkpack(absGguf) {
   const pack = orkpackPathFor(absGguf);
-  for (const p of [pack, pack + '.tmp', pack + '.json', pack + '.meta.json', pack + '.gmax', pack + '.gguf']) {
+  for (const p of [pack, pack + '.tmp', pack + '.json', pack + '.meta.json', provPathFor(pack), pack + '.gmax', pack + '.gguf']) {
     try { fs.unlinkSync(p); } catch {}
   }
 }
@@ -245,8 +246,17 @@ export class ConversionScheduler {
       // line is the whole diagnosis. Bounded to the tail so a chatty run cannot grow unboundedly.
       const proc = spawn(this.binPath, args, { env, stdio: ['ignore', 'ignore', 'pipe'] });
       let errTail = '';
+      // The build announces its own driver: "[ork] ork-driver 1.0.99 (W8A8)". That version+mode pair is
+      // known only to the runtime, and it is exactly what a later reader needs to know which software
+      // tiled these weights — capture the first sighting for the provenance record.
+      let orkDriver = null;
       proc.stderr?.on('data', (d) => {
-        errTail = (errTail + d.toString()).slice(-STDERR_TAIL_CHARS);
+        const chunk = d.toString();
+        if (!orkDriver) {
+          const m = chunk.match(/ork-driver\s+(\S+(?:\s+\([^)]*\))?)/);
+          if (m) orkDriver = m[1];
+        }
+        errTail = (errTail + chunk).slice(-STDERR_TAIL_CHARS);
       });
       this.current = { rel, abs, proc };
 
@@ -273,6 +283,19 @@ export class ConversionScheduler {
           // we cannot compute ourselves without loading the NPU runtime (see src/orkpack.js).
           const f = readOrkpackFooter(pack);
           if (f) recordOrkFmt(f.orkFmt);
+          // Stamp who/what/where built it. A pack carries no record of the machine it was tiled for, and
+          // it is only valid on that chipset — so write the provenance beside it while we still know.
+          let srcStat = null; try { srcStat = fs.statSync(abs); } catch {}
+          writeOrkpackProvenance(pack, {
+            source: { rel, bytes: srcStat?.size ?? null, mtimeMs: srcStat?.mtimeMs ?? null },
+            build: {
+              orkQuant:  envExtra.ORK_QUANT  ?? null,
+              orkHybrid: envExtra.ORK_HYBRID ?? null,
+              packArgs:  packArgs.length ? packArgs : null,
+              label,
+            },
+            orkDriver,
+          });
         }
         // Success at INFO; a failure (crash/kill or no pack produced) is a real problem → WARN.
         if (built) console.log(`[conversion] ${rel}: converted`);
