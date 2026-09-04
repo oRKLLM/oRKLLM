@@ -323,7 +323,7 @@ struct RunContext {
 //     M=32  7.27   M=64  4.78   M=128  3.79   M=256  3.63   M=384  3.85   M=512  4.08   ms/token
 //
 // so there are two separate traps. A chunk below ~128 pays a large fixed per-call cost amortised over
-// almost nothing (ORK_MINM=32 is where the NPU route becomes AVAILABLE, not where it becomes worth
+// almost nothing (ORK_MINM (default 8) is where the NPU route becomes AVAILABLE, not where it becomes worth
 // taking), and M=512 is itself ~12% off the optimum near 256.
 //
 // The default FILL strategy leaves whatever remainder falls out of n % cap: a 519-token prompt becomes
@@ -396,7 +396,7 @@ static int ork_chunk_strategy(void) {
 // that made borrow preferable in the first place, and 520 is exactly where floor 256 measured worst.
 // 192 captures the same gain while keeping the leading chunk near the cap and reused across requests.
 //
-// Note this is the ECONOMIC floor (below which a call is not worth its fixed cost), NOT ORK_MINM=32,
+// Note this is the ECONOMIC floor (below which a call is not worth its fixed cost), NOT ORK_MINM (default 8),
 // which is merely where the NPU MUL_MAT route becomes available.
 static int ork_chunk_floor(void) {
     static int v = -1;
