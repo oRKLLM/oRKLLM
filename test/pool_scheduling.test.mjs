@@ -7,7 +7,7 @@ import path from 'path';
 
 // Isolated DB so importing the pool never touches a real install.
 process.env.ORKLLM_DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'orkllm-pool-')), 'orkllm.db');
-const { pool } = await import('../src/pool.js');
+const { pool, workerEnv } = await import('../src/pool.js');
 
 const PACK = 'unsloth/Qwen3.5-4B-GGUF/Qwen3.5-4B-UD-Q4_K_XL.orkpack';
 const RKLLM = 'x/model.rkllm';
@@ -77,5 +77,49 @@ describe('pool scheduling: one ggml-ork worker on the NPU', () => {
       assert.equal(s0.activeGeneration, null);
       assert.equal(s0.idleTimer, null);
     } finally { pool.load = origLoad; }
+  });
+  test('a run that ends in state 3 WITHOUT an abort is a failure, not an empty success', async () => {
+    const s0 = slot(0, { model: PACK });
+    pool._slots = [s0];
+    pool.queue = [];
+    const origLoad = pool.load; pool.load = async () => ({ status: 0 });
+    try {
+      const p = pool.generate(PACK, 'p', {}, () => {}, {});
+      await new Promise(r => setImmediate(r));
+      assert.equal(s0.worker.sent[0].type, 'run');
+      s0.worker.emit('message', { type: 'token', state: 3, text: '' });   // e.g. llama_decode failed
+      await assert.rejects(p, /inference backend/);
+      assert.equal(s0.activeGeneration, null);
+    } finally { pool.load = origLoad; }
+  });
+
+  test('state 3 after a pool-wide abort still resolves (aborted, not failed)', async () => {
+    const s0 = slot(0, { model: PACK });
+    pool._slots = [s0];
+    pool.queue = [];
+    const origLoad = pool.load; pool.load = async () => ({ status: 0 });
+    try {
+      const p = pool.generate(PACK, 'p', {}, () => {}, {});
+      await new Promise(r => setImmediate(r));
+      await pool.abort();
+      assert.equal(s0.worker.sent.at(-1).type, 'abort');
+      s0.worker.emit('message', { type: 'token', state: 3, text: '' });
+      await p;
+    } finally { pool.load = origLoad; }
+  });
+});
+
+describe('worker environment', () => {
+  test('ggml-ork group fusion is off by default (its fused/per-tensor wcache key collision leaks NPU IOVA per request)', () => {
+    const saved = { nf: process.env.ORK_NO_FUSE, of: process.env.ORKLLM_ORK_FUSE };
+    try {
+      delete process.env.ORK_NO_FUSE; delete process.env.ORKLLM_ORK_FUSE;
+      assert.equal(workerEnv().ORK_NO_FUSE, '1');
+      process.env.ORKLLM_ORK_FUSE = '1';
+      assert.equal('ORK_NO_FUSE' in workerEnv(), false);
+    } finally {
+      if (saved.nf === undefined) delete process.env.ORK_NO_FUSE; else process.env.ORK_NO_FUSE = saved.nf;
+      if (saved.of === undefined) delete process.env.ORKLLM_ORK_FUSE; else process.env.ORKLLM_ORK_FUSE = saved.of;
+    }
   });
 });

@@ -723,7 +723,9 @@ export default async function apiRoutes(fastify, options) {
         } catch (err) {
           genFinished = true; // failed/stopped — don't let the error-path close abort again
           stopHeartbeat();
-          const errChunk = { error: { message: err.message, type: 'invalid_request_error' } };
+          // A generation failure is the server's, not the request's (a decode error used to be reported as a
+          // successful empty reply; now it arrives here and the client sees it as an error).
+          const errChunk = { error: { message: err.message, type: 'server_error' } };
           if (session) {
             session.chunks.push(errChunk);
             session.finished = true;

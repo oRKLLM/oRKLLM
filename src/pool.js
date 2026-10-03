@@ -148,7 +148,7 @@ function isLlamaBackedModel(modelName) {
   return n.endsWith('.gguf') || isOrkpackPath(n);
 }
 
-function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, orkMoeNpu = false, wcacheBudgetMB = null, sourceIsStub = false, orkpackPath = null } = {}) {
+export function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, orkMoeNpu = false, wcacheBudgetMB = null, sourceIsStub = false, orkpackPath = null } = {}) {
   const dirs = [LLAMA_RUNTIME_DIR, RUNTIMES_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean);
   const env = { ...process.env, LD_LIBRARY_PATH: dirs.join(':') };
   // Keep the GPU idle unless something explicitly wants it (TurboQuant KV). With
@@ -164,6 +164,18 @@ function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, o
   // (the native-INT4 runtime defaults hybrid off). Must be set at fork time.
   if (orkQuant) env.ORK_QUANT = String(orkQuant);
   if (orkHybrid) env.ORK_HYBRID = '1';
+  // ggml-ork group fusion (QKV / gate+up concatenated into one weight, default-on for prefill M>=2) caches
+  // the fused weight under its FIRST member's data pointer -- the same wcache key the per-tensor weight has,
+  // which decode (M=1, unfused) uses. So every request rebuilds the fused weight at prefill and the
+  // per-tensor one at decode, and each rebuild drops the old entry with ork_w_free(), which frees host
+  // memory only ("device buffers freed at ctx teardown"). Measured on Qwen3.5-4B (.orkpack, b10739-ork):
+  // +100 NPU buffers and +675 MiB IOVA per request, never released, until a bcreate hits the 3900 MiB
+  // per-domain IOVA guard (the 9th request on one worker) and llama_decode fails. With ORK_NO_FUSE=1 the
+  // live set stays flat (692 buffers / 3025 MiB over 4 requests) and requests get faster (no re-pack).
+  // A native fix belongs in ggml-ork; until a runtime carries it, keep fusion off. ORK_NO_FUSE is read as
+  // presence-only, so an explicit ORK_NO_FUSE in the environment is honoured as-is, and ORKLLM_ORK_FUSE=1
+  // opts back in (for a runtime with the fix).
+  if (!('ORK_NO_FUSE' in process.env) && process.env.ORKLLM_ORK_FUSE !== '1') env.ORK_NO_FUSE = '1';
   // .orkpack: do NOT set ORK_PERSIST — it was removed upstream and now GGML_ABORTs the worker at
   // backend init. The pack is pointed at with ORK_ORKPACK_PATH below instead (ggml-ork's own
   // derivation reads the command line, which an N-API embedder does not have).
@@ -221,6 +233,7 @@ function createSlot(id) {
     isLoaded:         false,
     loadingPromise:   null,
     loadingModel:     null,   // model name while loadingPromise is set (NPU-exclusivity check)
+    abortSent:        false,  // an 'abort' went to this worker during the current run (state 3 = aborted, not failed)
     activeGeneration: null,
     idleTimer:        null,
   };
@@ -1324,6 +1337,7 @@ class EnginePool {
             this.queue.splice(qi, 1);
             reject(new Error('Request aborted while queued'));
           } else if (req.slot?.worker && req.slot.activeGeneration) {
+            req.slot.abortSent = true;
             req.slot.worker.send({ type: 'abort' });
           }
         }, { once: true });
@@ -1364,9 +1378,17 @@ class EnginePool {
         const tokenHandler = (msg) => {
           if (msg.type === 'token') {
             onToken(msg);
-            if (msg.state === 2 || msg.state === 3) {
+            if (msg.state === 2) {
               cleanup();
               genResolve(msg);
+            } else if (msg.state === 3) {
+              cleanup();
+              // State 3 is RUN_ERROR. The llama addon also ends an ABORTED run with it, so it is a normal
+              // end only when an abort was actually sent to this worker; otherwise the backend failed
+              // (llama_decode error, tokenize failure) and must not reach the client as finish:"stop"
+              // with whatever partial (often empty) text there was.
+              if (req.aborted || slot.abortSent) genResolve(msg);
+              else genReject(new Error('Generation failed in the inference backend (run ended with an error state; see the server log)'));
             }
           } else if (msg.type === 'error') {
             cleanup();
@@ -1389,6 +1411,7 @@ class EnginePool {
 
         slot.worker.on('message', tokenHandler);
         slot.worker.on('exit',    exitHandler);
+        slot.abortSent = false;
         slot.worker.send({
           type:          'run',
           prompt,
@@ -1416,7 +1439,7 @@ class EnginePool {
   async abort() {
     // Abort all active generations across all slots
     for (const s of this._slots) {
-      if (s.worker && s.activeGeneration) s.worker.send({ type: 'abort' });
+      if (s.worker && s.activeGeneration) { s.abortSent = true; s.worker.send({ type: 'abort' }); }
     }
   }
 
