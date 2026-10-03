@@ -110,11 +110,27 @@ export function readGgufString(filePath, key) {
   }
 }
 
+// A .orkpack is not a GGUF (no GGUF magic), so every metadata read against the pack path returned
+// null: no chat template (=> the thinking toggle was never detected and `Enable Thinking: OFF` was
+// silently ignored) and no architecture (=> the recurrent-arch prefix-cache exclusion never applied).
+// The pack carries the source's metadata in its sparse companion `<pack>.gguf` (extracted by the
+// worker on first load, header/KV verbatim), and usually still sits next to its source `<model>.gguf`.
+// Read the metadata from whichever of those exists.
+export function ggufMetadataPathFor(filePath) {
+  const p = String(filePath);
+  if (!/\.orkpack$/i.test(p)) return p;
+  for (const cand of [p + '.gguf', p.replace(/\.orkpack$/i, '.gguf')]) {
+    try { if (fs.statSync(cand).size > 0) return cand; } catch { /* try next */ }
+  }
+  return p;
+}
+
 // Cache of chat templates by "path:mtimeMs" so we parse each model file once.
 const _tmplCache = new Map();
 
 // The model's chat template (GGUF `tokenizer.chat_template`), or '' if absent.
 export function getGgufChatTemplate(filePath) {
+  filePath = ggufMetadataPathFor(filePath);
   let key = filePath;
   try {
     const st = fs.statSync(filePath);
@@ -138,6 +154,7 @@ const _archCache = new Map();
 
 // The model's `general.architecture` (e.g. "qwen3", "lfm2moe"), or '' if absent.
 export function getGgufArchitecture(filePath) {
+  filePath = ggufMetadataPathFor(filePath);
   let key = filePath;
   try {
     const st = fs.statSync(filePath);
@@ -154,7 +171,10 @@ export function getGgufArchitecture(filePath) {
 // prefix cache relies on — is unsupported or pathologically slow: on LFM2.5-MoE a
 // cached multi-turn request collapsed to ~17 s/token (≈200×). The prefix cache is
 // disabled for these models (see routes.js); plain prefill is fast.
-const RECURRENT_ARCH_RE = /mamba|rwkv|lfm2|jamba|falcon[-_]?h1?|plamo2|nemotron[-_]?h|hybrid|recurrent/;
+// Mirrors llm_arch_is_recurrent/llm_arch_is_hybrid (llama-arch.cpp): the gated-delta-net hybrids
+// (qwen3next, qwen35, qwen35moe, kimi-linear) and granitehybrid were missing, so Qwen3.5 was treated
+// as a plain transformer here.
+const RECURRENT_ARCH_RE = /mamba|rwkv|lfm2|jamba|falcon[-_]?h1?|plamo2|nemotron[-_]?h|granitehybrid|qwen3next|qwen35|kimi[-_]?linear|hybrid|recurrent/;
 export function isRecurrentArch(filePath) {
   const arch = getGgufArchitecture(filePath);
   return arch !== '' && RECURRENT_ARCH_RE.test(arch);

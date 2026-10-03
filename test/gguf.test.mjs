@@ -131,3 +131,46 @@ describe('split (sharded) GGUF grouping', () => {
     assert.ok(!loadable.includes('foo-00002-of-00002.gguf'));
   });
 });
+
+// ── .orkpack metadata (thinking toggle + recurrent gate for pack-served models) ─────────────────────
+describe('orkpack metadata resolution', () => {
+  const tmpl = '{% if enable_thinking %}<think>{% endif %}<|im_start|>';
+  const mkPackDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'orkllm-pack-'));
+
+  test('a pack reads its template/arch from the sparse <pack>.gguf companion', () => {
+    const dir = mkPackDir();
+    const pack = path.join(dir, 'Qwen3.5-4B-UD-Q4_K_XL.orkpack');
+    fs.writeFileSync(pack, Buffer.from('ORKPACK-not-a-gguf'));
+    fs.copyFileSync(writeGguf([kvString('general.architecture', 'qwen35'), kvString('tokenizer.chat_template', tmpl)]), pack + '.gguf');
+    assert.equal(supportsThinkingToggle(pack), true);
+    assert.equal(getGgufArchitecture(pack), 'qwen35');
+    assert.equal(isRecurrentArch(pack), true);
+  });
+
+  test('a pack falls back to its source <model>.gguf when there is no companion', () => {
+    const dir = mkPackDir();
+    const pack = path.join(dir, 'M.orkpack');
+    fs.writeFileSync(pack, Buffer.from('ORKPACK'));
+    fs.copyFileSync(writeGguf([kvString('tokenizer.chat_template', tmpl)]), path.join(dir, 'M.gguf'));
+    assert.equal(supportsThinkingToggle(pack), true);
+  });
+
+  test('a bare pack (no metadata source) still reads as unknown, not as a crash', () => {
+    const dir = mkPackDir();
+    const pack = path.join(dir, 'N.orkpack');
+    fs.writeFileSync(pack, Buffer.from('ORKPACK'));
+    assert.equal(supportsThinkingToggle(pack), false);
+    assert.equal(isRecurrentArch(pack), false);
+  });
+
+  test('gated-delta hybrids count as recurrent; plain qwen3 does not', () => {
+    for (const a of ['qwen35', 'qwen35moe', 'qwen3next', 'granitehybrid', 'kimi-linear']) {
+      const p = writeGguf([kvString('general.architecture', a)]);
+      assert.equal(isRecurrentArch(p), true, a);
+    }
+    for (const a of ['qwen3', 'qwen3moe', 'qwen3vl', 'llama']) {
+      const p = writeGguf([kvString('general.architecture', a)]);
+      assert.equal(isRecurrentArch(p), false, a);
+    }
+  });
+});

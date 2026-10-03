@@ -73,7 +73,9 @@ export default async function conversationRoutes(fastify) {
     session.clients.add(reply.raw);
 
     let connectionClosed = false;
-    request.raw.on('close', () => {
+    // reply.raw, not request.raw: the request's 'close' fires right after its (empty) body is consumed
+    // on Node >=16, which started the 15 s abort timer as soon as a client recovered the stream.
+    reply.raw.on('close', () => {
       if (connectionClosed) return;
       connectionClosed = true;
 

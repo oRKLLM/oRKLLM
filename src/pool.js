@@ -107,7 +107,7 @@ const DEFAULT_MAX_CONTEXT_LEN = 4096;
 // layer down: the gate was widened to let packs reach the option block, but the block then read an
 // empty object. Prefer the pack's own row (a user can still tune the pack specifically) and fall back
 // to the source gguf's.
-function modelSettingsFor(modelName) {
+export function modelSettingsFor(modelName) {
   const direct = dbGetModelSettings(modelName);
   if (direct && Object.keys(direct).length) return direct;
   if (isOrkpackPath(modelName)) return dbGetModelSettings(sourceGgufFor(modelName)) || {};
@@ -220,6 +220,7 @@ function createSlot(id) {
     activeModel:      null,   // { name, path, options, isMock, libPath }
     isLoaded:         false,
     loadingPromise:   null,
+    loadingModel:     null,   // model name while loadingPromise is set (NPU-exclusivity check)
     activeGeneration: null,
     idleTimer:        null,
   };
@@ -274,9 +275,36 @@ class EnginePool {
 
   // Find the best idle slot for a given model.
   // Priority: idle slot already loaded with model > idle unloaded slot > null.
+  //
+  // NPU EXCLUSIVITY for llama/ggml-ork models. Multi-slot pools were designed for rkllm, where each slot
+  // is pinned to its own NPU core via base_domain_id. The llama addon ignores base_domain_id: every
+  // ggml-ork worker drives ALL three cores and shares IOMMU domains 0..3 device-wide, and ggml-ork is
+  // explicitly single-stream ("no concurrent NPU procs"; a submit timeout in one process fires a
+  // whole-device RKNPU_ACT_RESET that kills the other's in-flight jobs). Previously, whenever the slot
+  // holding the model was still busy -- e.g. a generation the client had abandoned but which was never
+  // aborted -- the next request spilled onto an idle slot and forked a SECOND worker loading the same
+  // model onto the same NPU. So a llama-backed request may only use the slot that already holds (or is
+  // loading) a llama model, and waits in the FIFO queue while that slot is busy.
   _pickIdleSlot(modelName) {
-    return this._slots.find(s => !s.activeGeneration && s.isLoaded && s.activeModel?.name === modelName)
-        || this._slots.find(s => !s.activeGeneration && !s.loadingPromise);
+    // !loadingPromise: load() sets isLoaded before its inline MCP warm-up finishes, so a slot mid-load
+    // looked idle and a second request could be dispatched onto the same worker concurrently.
+    const same = this._slots.find(s => !s.activeGeneration && !s.loadingPromise && s.isLoaded && s.activeModel?.name === modelName);
+    if (same) return same;
+    if (isLlamaBackedModel(modelName)) {
+      const holder = this._slots.find(s =>
+        (s.isLoaded && s.activeModel?.backend === 'llama') ||
+        (s.loadingPromise && s.loadingModel && isLlamaBackedModel(s.loadingModel)));
+      if (holder) return (!holder.activeGeneration && !holder.loadingPromise) ? holder : null;
+    }
+    return this._slots.find(s => !s.activeGeneration && !s.loadingPromise);
+  }
+
+  // Clear a slot's idle timer once a generation owns it. load()'s reuse path calls resetIdleTimer()
+  // BEFORE the caller sets activeGeneration, which armed the idle-unload timer for the whole
+  // generation: a generation (or a stalled one) outliving idle_timeout_minutes had its worker
+  // SIGKILLed mid-decode and the model reloaded on the next request.
+  _disarmIdleTimer(slot) {
+    if (slot.idleTimer) { clearTimeout(slot.idleTimer); slot.idleTimer = null; }
   }
 
   // Number of slots in the pool
@@ -695,6 +723,7 @@ class EnginePool {
       );
     })();
 
+    s.loadingModel = modelName;
     this._loadStatus = { loading: { model: modelName }, error: null };
     try {
       const res = await s.loadingPromise;
@@ -710,6 +739,7 @@ class EnginePool {
       throw e;
     } finally {
       s.loadingPromise = null;
+      s.loadingModel   = null;
     }
   }
 
@@ -856,6 +886,25 @@ class EnginePool {
   // saved cache includes the first decode token (case B) or is clean (case A).
   async prefillAndCache(prompt, savePath, options = {}) {
     if (!this.isLoaded) throw new Error('No model loaded');
+    // Mark slot 0 busy for the duration. Without this a request could be dispatched to the same worker
+    // mid-prefill: two concurrent Run()s on one llama_context, and this listener would send 'abort' on
+    // the OTHER request's first token.
+    const slot = this._slots[0];
+    const owns = !slot.activeGeneration;
+    const p = this._prefillAndCache(prompt, savePath, options);
+    if (owns) {
+      slot.activeGeneration = p;
+      this._disarmIdleTimer(slot);
+      p.catch(() => {}).finally(() => {
+        if (slot.activeGeneration === p) slot.activeGeneration = null;
+        this.resetIdleTimer(slot);
+        this.processQueue();
+      });
+    }
+    return p;
+  }
+
+  _prefillAndCache(prompt, savePath, options = {}) {
     return new Promise((resolve, reject) => {
       let firstToken = null;
       let abortSent = false;
@@ -1169,6 +1218,7 @@ class EnginePool {
     });
 
     slot.activeGeneration = genPromise;
+    this._disarmIdleTimer(slot);
     try {
       const stats = await genPromise;
       if (stats === null) {
@@ -1245,6 +1295,7 @@ class EnginePool {
       slot.worker.on('exit', onExit);
       slot.worker.send({ type: 'run_dflash', prompt, draft_path: resolvedDraftPath, block_size, options });
     });
+    this._disarmIdleTimer(slot);
 
     try {
       const result = await slot.activeGeneration;
@@ -1259,9 +1310,25 @@ class EnginePool {
     }
   }
 
-  async generate(modelName, prompt, options, onToken, cachePaths = {}) {
+  // `signal` (optional AbortSignal) aborts THIS request only: removed from the queue if not yet
+  // dispatched, else an 'abort' is sent to the one worker running it. (pool.abort() aborts every slot.)
+  async generate(modelName, prompt, options, onToken, cachePaths = {}, { signal } = {}) {
     return new Promise((resolve, reject) => {
-      this.queue.push({ modelName, prompt, options, onToken, cachePaths, resolve, reject });
+      const req = { modelName, prompt, options, onToken, cachePaths, resolve, reject, slot: null, aborted: false };
+      if (signal) {
+        if (signal.aborted) { reject(new Error('Request aborted before dispatch')); return; }
+        signal.addEventListener('abort', () => {
+          req.aborted = true;
+          const qi = this.queue.indexOf(req);
+          if (qi >= 0) {
+            this.queue.splice(qi, 1);
+            reject(new Error('Request aborted while queued'));
+          } else if (req.slot?.worker && req.slot.activeGeneration) {
+            req.slot.worker.send({ type: 'abort' });
+          }
+        }, { once: true });
+      }
+      this.queue.push(req);
       this.processQueue();
     });
   }
@@ -1283,12 +1350,15 @@ class EnginePool {
   }
 
   // Run one request on a slot; calls processQueue again when done.
-  async _dispatchToSlot(slot, { modelName, prompt, options, onToken, cachePaths, resolve, reject }) {
+  async _dispatchToSlot(slot, req) {
+    const { modelName, prompt, options, onToken, cachePaths, resolve, reject } = req;
     // Cancel any pending idle-timeout on this slot
     if (slot.idleTimer) { clearTimeout(slot.idleTimer); slot.idleTimer = null; }
+    req.slot = slot;
 
     try {
       await this.load(modelName, options, slot);
+      if (req.aborted) throw new Error('Request aborted during model load');
 
       slot.activeGeneration = new Promise((genResolve, genReject) => {
         const tokenHandler = (msg) => {
@@ -1330,6 +1400,7 @@ class EnginePool {
           options,
         });
       });
+      this._disarmIdleTimer(slot);   // load()'s reuse path re-armed it before activeGeneration was set
 
       const result = await slot.activeGeneration;
       resolve(result);
@@ -1440,7 +1511,7 @@ class EnginePool {
       if (!isCacheEnabled()) return;
 
       const modelPath = path.join(MODELS_DIR, modelName);
-      if (modelName.toLowerCase().endsWith('.gguf') && isRecurrentArch(modelPath)) {
+      if (isLlamaBackedModel(modelName) && isRecurrentArch(modelPath)) {
         return; // Recurrent models excluded from prefix cache
       }
 
@@ -1465,7 +1536,7 @@ class EnginePool {
       }
 
       const saved = modelSettingsFor(modelName);
-      const isGguf = modelName.toLowerCase().endsWith('.gguf');
+      const isGguf = isLlamaBackedModel(modelName);   // a .orkpack is the same llama backend
       const canToggleThinking = isGguf && supportsThinkingToggle(modelPath);
       const seedNoThink = canToggleThinking && !saved.thinking_enabled;
 

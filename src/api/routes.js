@@ -3,7 +3,7 @@ import path from 'path';
 import { MODELS_DIR, parseRuntimeVersion } from '../config.js';
 import { supportsThinkingToggle, isRecurrentArch, isTrailingGgufShard, isOrkpackStub, ggufDisplayName } from '../gguf.js';
 import { isOrkpackPath, supersededByPack } from '../orkpack.js';
-import pool from '../pool.js';
+import pool, { modelSettingsFor } from '../pool.js';
 import { isOrkpackFresh, hasOrkpack } from '../conversion.js';
 import { recordRequest } from '../stats.js';
 import { dbGetModelSettings, dbSetModelSettings, dbGetSetting, dbListEnabledMcpServers } from '../db.js';
@@ -219,14 +219,16 @@ export default async function apiRoutes(fastify, options) {
     // Recurrent/hybrid gguf models (LFM2.5-MoE, Mamba, RWKV, …) are excluded: llama.cpp's
     // KV-state save/restore is unsupported/pathological for them — a cached multi-turn
     // request on LFM2.5 collapsed to ~17 s/token (≈200×). Plain prefill stays fast.
-    const isRecurrentModel = model.toLowerCase().endsWith('.gguf')
-      && isRecurrentArch(path.join(MODELS_DIR, model));
+    // A .orkpack is served by the same llama backend as its .gguf, so it is gated identically (it used
+    // to be excluded by the '.gguf' test, and its arch read as '' because a pack is not a GGUF).
+    const isLlamaModel = model.toLowerCase().endsWith('.gguf') || isOrkpackPath(model);
+    const isRecurrentModel = isLlamaModel && isRecurrentArch(path.join(MODELS_DIR, model));
     const cacheEnabled = isCacheEnabled() && !no_cache && !isRecurrentModel;
     let loadCachePath = null;
     let saveCachePath = null;
     let prefixMessages = trimmed;
     let segmentCacheHit = false;
-    const isGguf = model.toLowerCase().endsWith('.gguf');
+    const isGguf = isLlamaModel;   // "llama backend": .gguf or .orkpack
 
     if (cacheEnabled && Array.isArray(segments) && segments.length > 0) {
       try {
@@ -299,7 +301,10 @@ export default async function apiRoutes(fastify, options) {
     }
 
     // Per-model settings overrides from model_settings JSON
-    const saved = dbGetModelSettings(model) || {};
+    // Same resolution as the pool (pack row, else its source gguf's row): the route read only the pack's
+    // own row, so a setting saved against the gguf (thinking, speculative mode, sampling) was invisible
+    // here while the pool applied it at load.
+    const saved = modelSettingsFor(model) || {};
 
     // Thinking (reasoning) control. The rkllm addon honours `enable_thinking`
     // directly (set below). For the llama/gguf backend, reasoning is split by
@@ -556,8 +561,21 @@ export default async function apiRoutes(fastify, options) {
       // decoding against a dead socket until max_new_tokens (or a model unload). Only
       // act while generation is still running (`genFinished` guards the normal end,
       // which also fires 'close' when we reply.raw.end()).
+      //
+      // Listen on the RESPONSE socket, not request.raw. On Node >=16 an IncomingMessage emits 'close' as
+      // soon as its body has been consumed -- Fastify has already parsed it, so request.raw 'close' fired
+      // within milliseconds of the handler starting (measured, Node 24/26 + Fastify 5.8). That (a) set
+      // genFinished, so a REAL disconnect later aborted nothing, and (b) called pool.abort() at the start
+      // of every streaming request, aborting whatever OTHER request was generating on any slot.
+      // reply.raw 'close' fires on a client disconnect, or after our own end() (guarded by genFinished).
       let genFinished = false;
-      request.raw.on('close', () => {
+      const reqAbort = new AbortController();
+      const abortThisRequest = () => {
+        reqAbort.abort();                         // plain generate: this request only (queue or its slot)
+        if (specPathActive) pool.abort().catch(() => {});   // eagle/dflash/spec: slot 0, no per-request handle
+      };
+      let specPathActive = false;
+      reply.raw.on('close', () => {
         if (genFinished) return;
         stopHeartbeat();
 
@@ -571,14 +589,14 @@ export default async function apiRoutes(fastify, options) {
               if (genFinished) return;
               genFinished = true;
               console.log(`[Chat] abort timer expired for session ${conversation_id} — aborting generation`);
-              pool.abort().catch(() => {});
+              abortThisRequest();
               activeStreams.delete(conversation_id);
             }, 15000); // 15 seconds grace period
           }
         } else {
           genFinished = true;
           console.log('[Chat] client disconnected mid-stream (no session) — aborting generation');
-          pool.abort().catch(() => {});
+          abortThisRequest();
         }
       });
 
@@ -612,11 +630,15 @@ export default async function apiRoutes(fastify, options) {
         scheduleHeartbeat(); // cover the prefill gap before the first token
         try {
           const cachePaths = loadCachePath || saveCachePath ? { loadCachePath, saveCachePath } : {};
-          const specMode    = saved.speculative_mode;
+          // Eagle-3 drives the worker with RKLLM infer modes; on the llama addon every Run() clears the
+          // context (keep_history is ignored) and GET_HIDDEN never resolves without embeddings, so it is
+          // rkllm-only -- as 7a53ee1 intended, and as the non-streaming branch below still enforces.
+          const specMode    = (isLlamaModel && saved.speculative_mode === 'eagle3') ? null : saved.speculative_mode;
           const draftModel  = saved.draft_model;
           const specK       = saved.spec_draft_tokens || 8;
           const eagle3Weights = saved.eagle3_weights_path ?? null;
           let finalResult;
+          specPathActive = specMode === 'eagle3' || specMode === 'dflash' || (specMode === 'speculative' && !!draftModel);
           if (specMode === 'eagle3') {
             // Eagle-3: pipelined GET_HIDDEN_LAYER + GET_LOGITS + Mali Vulkan draft
             console.log(`[Eagle-3] target=${model} k=${specK} draft=${saved.eagle3_strategy || 'cpu'}`);
@@ -637,7 +659,7 @@ export default async function apiRoutes(fastify, options) {
             await pool.generateSpeculative(model, draftModel, prompt, modelOptions, onToken, specK);
             finalResult = { perf: {} };
           } else {
-            finalResult = await pool.generate(model, prompt, modelOptions, onToken, cachePaths);
+            finalResult = await pool.generate(model, prompt, modelOptions, onToken, cachePaths, { signal: reqAbort.signal });
           }
           genFinished = true; // generation done — the upcoming reply.raw.end() 'close' must not abort
           emit(trimmer.flush()); // release any text held while inspecting the leading think marker
@@ -734,6 +756,18 @@ export default async function apiRoutes(fastify, options) {
     } else {
       let accumulatedText = '';
       const onToken = (msg) => { if (msg.text) accumulatedText += msg.text; };
+      // Non-streaming requests were never aborted on disconnect: a client that timed out and retried
+      // (LiteLLM: request_timeout + num_retries) stacked generations on the NPU. reply.raw 'close'
+      // before we have replied = the client went away.
+      const reqAbort = new AbortController();
+      let replied = false;
+      let specActive = false;
+      reply.raw.on('close', () => {
+        if (replied) return;
+        console.log('[Chat] non-streaming client disconnected — aborting generation');
+        reqAbort.abort();
+        if (specActive) pool.abort().catch(() => {});
+      });
       const trimEmptyThink = (t) => {
         const tr = makeEmptyThinkTrimmer(isGguf);
         return tr.feed(t) + tr.flush();
@@ -744,8 +778,9 @@ export default async function apiRoutes(fastify, options) {
         const finalResult = await traceInference(traceParams, async (gen) => {
           const cachePaths  = loadCachePath || saveCachePath ? { loadCachePath, saveCachePath } : {};
           // DFlash targets ARE .gguf models (the llama backend), so don't null the mode for gguf when it's dflash.
-          const specMode2   = (model.endsWith('.gguf') && saved.speculative_mode !== 'dflash') ? null : saved.speculative_mode;
+          const specMode2   = (isLlamaModel && saved.speculative_mode !== 'dflash') ? null : saved.speculative_mode;
           let result;
+          specActive = specMode2 === 'eagle3' || specMode2 === 'dflash';
           if (specMode2 === 'eagle3') {
             result = await pool.generateEagle3(model, prompt, modelOptions, onToken, {
               k:             saved.spec_draft_tokens || 8,
@@ -758,7 +793,7 @@ export default async function apiRoutes(fastify, options) {
               draftWeightsPath: saved.dflash_weights_path ?? null,
             }) ?? { perf: {} };
           } else {
-            result = await pool.generate(model, prompt, modelOptions, onToken, cachePaths);
+            result = await pool.generate(model, prompt, modelOptions, onToken, cachePaths, { signal: reqAbort.signal });
           }
           recordRequest(result.perf);
           visibleText = trimEmptyThink(accumulatedText);
@@ -777,6 +812,7 @@ export default async function apiRoutes(fastify, options) {
           return result;
         });
 
+        replied = true;
         return {
           id: completionId, object: 'chat.completion', created, model,
           choices: [{ index: 0, message: { role: 'assistant', content: visibleText }, finish_reason: 'stop' }],
@@ -788,6 +824,7 @@ export default async function apiRoutes(fastify, options) {
           perf: finalResult.perf
         };
       } catch (err) {
+        replied = true;
         return reply.status(500).send({ error: err.message });
       }
     }
