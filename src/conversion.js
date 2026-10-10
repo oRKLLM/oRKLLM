@@ -22,13 +22,21 @@ import { orkpackPathFor, isOrkpackUsable, readOrkpackFooter, recordOrkFmt, llama
 
 export { orkpackPathFor };
 
-// Architectures the ggml-ork NPU MUL_MAT accelerator cannot pack into an .orkpack, detected up front
-// so we skip at enqueue time (never spawn a doomed conversion that just churns the NPU):
-//   • 'qwen35' (Qwen3.5/3.6) — SSM / Gated-Delta-Net hybrid: state-space + dynamic/batched matmuls,
-//     not the static MUL_MAT the accelerator packs.
+// Architectures that have no .orkpack of their own, detected up front so we skip at enqueue time
+// (never spawn a doomed conversion that just churns the NPU):
 //   • 'dflash' — a DFlash speculative-draft head, not a standalone servable model; it runs co-resident
-//     with its target via run_dflash and has no .orkpack of its own.
-const UNSUPPORTED_ARCHS = new Set(['qwen35', 'dflash']);
+//     with its target via run_dflash.
+//
+// 'qwen35' (Qwen3.5/3.6/3.8) was listed here on the reasoning that a Gated-Delta-Net hybrid is
+// state-space, not the static MUL_MAT the accelerator packs. That is wrong as a PACK gate: the
+// recurrent layers are only part of the graph — the attention and FFN projections are ordinary
+// MUL_MATs, and ggml-ork packs exactly those and leaves the rest to the CPU. Measured on RK3588
+// (b11552-ork / ork-driver 1.0.168): Qwen3.5-0.8B-UD-Q8_K_XL packs 150 weights into a 1449 MiB
+// .orkpack and exits 0. Two more qwen35 packs built by this scheduler are already on that board
+// (Qwen3.6-27B-Q4_K_M, 112 entries; Qwen3.5-4B-UD-Q4_K_XL, 121). The gate was refusing conversions
+// the runtime completes, so a user Quantize on any Qwen3.5+ model failed with
+// "arch 'qwen35' cannot be packed".
+const UNSUPPORTED_ARCHS = new Set(['dflash']);
 
 const RETRY_MS = 30_000;
 // How much of a failed conversion's stderr to keep, and how many lines of it to surface.
@@ -150,10 +158,7 @@ export class ConversionScheduler {
     if (this.queued.has(rel) || (this.current && this.current.rel === rel)) return;
     const _arch = getGgufArchitecture(path.join(MODELS_DIR, rel));
     if (UNSUPPORTED_ARCHS.has(_arch)) {
-      const why = _arch === 'dflash'
-        ? 'DFlash speculative-draft head — runs co-resident, no standalone .orkpack'
-        : 'SSM/GDN-hybrid, not static MUL_MAT';
-      console.warn(`[conversion] ${rel}: arch '${_arch}' unsupported by the NPU matmul accelerator (${why}); skipping (no .orkpack).`);
+      console.warn(`[conversion] ${rel}: arch '${_arch}' has no standalone .orkpack (DFlash speculative-draft head — runs co-resident with its target); skipping.`);
       return;
     }
     this.queued.add(rel);
@@ -342,7 +347,7 @@ export class ConversionScheduler {
 
     if (!fs.existsSync(abs)) return { ok: false, error: 'no such model: ' + rel };
     const arch = getGgufArchitecture(abs);
-    if (UNSUPPORTED_ARCHS.has(arch)) return { ok: false, error: "arch '" + arch + "' cannot be packed" };
+    if (UNSUPPORTED_ARCHS.has(arch)) return { ok: false, error: "arch '" + arch + "' has no standalone .orkpack" };
 
     // The NPU is single-stream: take it from the idle pump, as a user Load does.
     this.queued.delete(rel);
