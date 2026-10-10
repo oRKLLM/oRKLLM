@@ -33,8 +33,10 @@ export { orkpackPathFor };
 // MUL_MATs, and ggml-ork packs exactly those and leaves the rest to the CPU. Measured on RK3588
 // (b11552-ork / ork-driver 1.0.168): Qwen3.5-0.8B-UD-Q8_K_XL packs 150 weights into a 1449 MiB
 // .orkpack and exits 0. Two more qwen35 packs built by this scheduler are already on that board
-// (Qwen3.6-27B-Q4_K_M, 112 entries; Qwen3.5-4B-UD-Q4_K_XL, 121). The gate was refusing conversions
-// the runtime completes, so a user Quantize on any Qwen3.5+ model failed with
+// (Qwen3.6-27B-Q4_K_M, 112 entries; Qwen3.5-4B-UD-Q4_K_XL, 121) — and they are the proof the gate was
+// never consistent with itself: convertNow(), the pool's build-before-load path, does NOT consult this
+// set, so oRKLLM has been packing qwen35 models on every cold load while refusing the identical build
+// when a user asked for it. A user Quantize on any Qwen3.5+ model failed with
 // "arch 'qwen35' cannot be packed".
 const UNSUPPORTED_ARCHS = new Set(['dflash']);
 
