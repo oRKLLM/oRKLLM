@@ -11,16 +11,28 @@ import {
 import { ggufQuantBits } from '../src/gguf.js';
 
 // ── Minimal .orkpack writer (mirrors the reader's understanding of the footer) ────
-// struct orkpack_footer { u64 index_off; u32 n_entries; u32 version; u32 ork_fmt; u32 quant_sig; char magic[8]; }
-// Offsets 0/8/12/16/20/24, sizeof 32 — verified against the C struct on this platform.
-function footer({ indexOff = 64, nEntries = 12, version = ORKPACK_VERSION, orkFmt = 0, quantSig = 0, magic = MAGIC } = {}) {
-  const b = Buffer.alloc(FOOTER_SIZE);
+// struct orkpack_footer { u64 index_off; u32 n_entries; u32 version; u32 ork_fmt; u32 quant_sig;
+//                         /* v7 */ u64 calib_off; u32 calib_n; u32 calib_pad;
+//                                  u32 prov_flags; u32 prov_pad; u64 prov_imhash;
+//                         char magic[8]; }
+// The first five fields are at 0/8/12/16/20 in every version and magic is always the last 8 bytes;
+// what changes between versions is the distance between them. Verified against the C struct.
+const SIZES = { 6: 32, 7: 64 };
+function footer({ indexOff = 64, nEntries = 12, version = ORKPACK_VERSION, orkFmt = 0, quantSig = 0,
+                  magic = MAGIC, calibOff = 0, calibN = 0, provImhash = 0n } = {}) {
+  const size = SIZES[version] ?? FOOTER_SIZE;
+  const b = Buffer.alloc(size);
   b.writeBigUInt64LE(BigInt(indexOff), 0);
   b.writeUInt32LE(nEntries, 8);
   b.writeUInt32LE(version, 12);
   b.writeUInt32LE(orkFmt, 16);
   b.writeUInt32LE(quantSig, 20);
-  b.write(magic, 24, 'latin1');
+  if (size >= 64) {
+    b.writeBigUInt64LE(BigInt(calibOff), 24);
+    b.writeUInt32LE(calibN, 32);
+    b.writeBigUInt64LE(BigInt(provImhash), 48);
+  }
+  b.write(magic, size - 8, 'latin1');
   return b;
 }
 
@@ -50,6 +62,37 @@ describe('readOrkpackFooter', () => {
     assert.equal(f.orkFmt, 0);
     assert.equal(f.quantSig, 0x334);          // '4' | HY | HD
     assert.equal(f.size, 128 + FOOTER_SIZE);
+  });
+
+  test('reads the v7 calibration + provenance tail', () => {
+    const p = writePack(mktmp(), 'v7.orkpack', { version: 7, calibOff: 2048, calibN: 3, provImhash: 0xdeadbeefn });
+    const f = readOrkpackFooter(p);
+    assert.equal(f.version, 7);
+    assert.equal(f.calibOff, 2048);
+    assert.equal(f.calibN, 3);
+    assert.equal(f.provImhash, 'deadbeef');
+  });
+
+  // The regression this guards: a v7 footer read at the v6 offsets still finds `magic` (always the last
+  // 8 bytes) but takes its five fields 32 bytes too early — all zeros — so a healthy pack reports
+  // version 0 / 0 entries and is rebuilt on every scan. The layout must follow the version field.
+  test('picks the layout by version, not by a fixed offset', () => {
+    const d = mktmp();
+    const v6 = readOrkpackFooter(writePack(d, 'old.orkpack', { version: 6, nEntries: 112, indexOff: 1024 }));
+    assert.equal(v6.version, 6);
+    assert.equal(v6.nEntries, 112);
+    assert.equal(v6.indexOff, 1024);
+    assert.equal(v6.calibOff, undefined, 'v6 has no calibration block');
+    const v7 = readOrkpackFooter(writePack(d, 'new.orkpack', { version: 7, nEntries: 150, indexOff: 2048 }));
+    assert.equal(v7.version, 7);
+    assert.equal(v7.nEntries, 150);
+    assert.equal(v7.indexOff, 2048);
+  });
+
+  test('reports an unrecognised version as a pack, not as garbage', () => {
+    const f = readOrkpackFooter(writePack(mktmp(), 'future.orkpack', { version: 99 }));
+    assert.equal(f.magic, MAGIC);
+    assert.equal(f.version, 0, 'no layout matched → version 0, which is stale');
   });
 
   test('null for a missing file', () => {
@@ -155,10 +198,11 @@ describe('isOrkpackUsable', () => {
     assert.equal(isOrkpackUsable(writePack(mktmp(), 'bad.orkpack', { magic: 'NOTAPACK' })), false);
   });
 
-  // v7/v8 were collapsed back into v6 upstream, so those numbers now denote a different layout.
+  // The runtime adopts exactly one layout (ork_pack_version_ok is `v == ORKPACK_VERSION`) and
+  // regenerates everything else, so every other number — including the v6 we used to accept — is stale.
   test('rejects any version but the current one', () => {
     const d = mktmp();
-    for (const v of [1, 5, 7, 8]) {
+    for (const v of [1, 5, 6, 8]) {
       assert.equal(isOrkpackUsable(writePack(d, `v${v}.orkpack`, { version: v })), false, `v${v} must be refused`);
     }
   });

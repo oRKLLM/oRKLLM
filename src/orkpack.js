@@ -22,14 +22,30 @@ import os from 'os';
 import path from 'path';
 import { LLAMA_RUNTIME_DIR, getPlatform, getPlatformSource, getNpuCoreCount, getDeviceDrivers } from './config.js';
 
-// struct orkpack_footer { u64 index_off; u32 n_entries; u32 version; u32 ork_fmt; u32 quant_sig; char magic[8]; }
-// 8-byte aligned, no tail padding needed (24 + 8 = 32).
-const FOOTER_SIZE = 32;
+// The footer is the LAST bytes of the file and it has GROWN, so its fields are addressed backwards from
+// EOF, not forwards from a fixed offset. `magic` is the final 8 bytes in every version — that is the only
+// anchor that has ever been stable, and it is what tells us we are looking at a pack at all.
+//
+//   v6 (32 B): u64 index_off | u32 n_entries | u32 version | u32 ork_fmt | u32 quant_sig | char magic[8]
+//   v7 (64 B): …the same five, then u64 calib_off | u32 calib_n | u32 calib_pad
+//                                 | u32 prov_flags | u32 prov_pad | u64 prov_imhash | char magic[8]
+//
+// v7 is the M-threshold calibration block plus build provenance (ggml-ork's orkpack_footer, as written
+// by ork-driver >= 1.0.1xx / llama-runtime b11552-ork). Reading a v7 pack at the v6 offsets does not
+// fail loudly: `magic` still lands, so the file is recognised as a pack, and the five fields are then
+// read 32 bytes too early — every one of them zero in practice, so the pack reports version 0 with 0
+// entries and is condemned as stale on every scan. That is a rebuild loop over packs that are perfectly
+// good, which is why the layout is selected by the version field rather than assumed.
 const MAGIC = 'ORKPK01';
+const FOOTER_SIZES = { 6: 32, 7: 64 };
+const MAX_FOOTER_SIZE = 64;
 
-// EXACT match, not a range. v7/v8 existed briefly upstream and were collapsed back into v6, so a file
-// stamped 7 or 8 is a DIFFERENT layout wearing a number that has been reused — it must be rejected.
-const ORKPACK_VERSION = 6;
+// EXACT match, not a range — mirroring ork_pack_version_ok(), which is `v == ORKPACK_VERSION`. The
+// runtime adopts one layout and regenerates everything else ("predates the pack-compat token"), so a v6
+// pack on a v7 runtime is genuinely stale and has to be rebuilt, not read. Older numbers stay PARSEABLE
+// above so a stale pack is still reported accurately instead of as a zeroed unknown.
+const ORKPACK_VERSION = 7;
+const FOOTER_SIZE = FOOTER_SIZES[ORKPACK_VERSION];
 
 // Build-config precision signature bits (mirror of ggml-ork's ork_build_sig).
 const SIG_QB_MASK = 0x0ff;   // the forced-precision char: '4', '8', or 0 = source-driven default
@@ -94,24 +110,45 @@ export function supersededByPack(absGguf) {
   try { return fs.statSync(orkpackPathFor(absGguf)).size > 0; } catch { return false; }
 }
 
-// The 32 bytes at EOF, or null when the file is absent, too short, or unreadable.
+// The footer at EOF, or null when the file is absent, too short, unreadable, or not a pack.
+//
+// The layout is chosen by the version field, which is why each candidate is tried in turn: a footer is
+// accepted only when the version it claims matches the size of the layout we read it at. A pack whose
+// version is known to neither still returns a record (magic, size, version: 0) so callers can tell
+// "unrecognised pack" from "not a pack" — both are stale, but only one is a file we wrote.
 export function readOrkpackFooter(packPath) {
   let fd = null;
   try {
     const size = fs.statSync(packPath).size;
-    if (size <= FOOTER_SIZE) return null;
-    const buf = Buffer.allocUnsafe(FOOTER_SIZE);
+    if (size <= FOOTER_SIZES[6]) return null;
+    const want = Math.min(size, MAX_FOOTER_SIZE);
+    const buf = Buffer.allocUnsafe(want);
     fd = fs.openSync(packPath, 'r');
-    if (fs.readSync(fd, buf, 0, FOOTER_SIZE, size - FOOTER_SIZE) !== FOOTER_SIZE) return null;
-    return {
-      size,
-      indexOff: Number(buf.readBigUInt64LE(0)),
-      nEntries: buf.readUInt32LE(8),
-      version:  buf.readUInt32LE(12),
-      orkFmt:   buf.readUInt32LE(16),
-      quantSig: buf.readUInt32LE(20),
-      magic:    buf.toString('latin1', 24, 31),   // 8th byte is the NUL terminator
-    };
+    if (fs.readSync(fd, buf, 0, want, size - want) !== want) return null;
+    // magic is the final 8 bytes in every version (7 chars + NUL).
+    const magic = buf.toString('latin1', want - 8, want - 1);
+    if (magic !== MAGIC) return null;
+    for (const [v, fsz] of Object.entries(FOOTER_SIZES)) {
+      if (want < fsz) continue;
+      const at = want - fsz;                                 // where this layout's footer would start
+      if (buf.readUInt32LE(at + 12) !== Number(v)) continue; // version field — the layout's own witness
+      const f = {
+        size, magic,
+        indexOff: Number(buf.readBigUInt64LE(at)),
+        nEntries: buf.readUInt32LE(at + 8),
+        version:  buf.readUInt32LE(at + 12),
+        orkFmt:   buf.readUInt32LE(at + 16),
+        quantSig: buf.readUInt32LE(at + 20),
+      };
+      if (fsz >= 64) {                                       // v7: calibration block + build provenance
+        f.calibOff   = Number(buf.readBigUInt64LE(at + 24));
+        f.calibN     = buf.readUInt32LE(at + 32);
+        f.provFlags  = buf.readUInt32LE(at + 40);
+        f.provImhash = buf.readBigUInt64LE(at + 48).toString(16);
+      }
+      return f;
+    }
+    return { size, magic, indexOff: 0, nEntries: 0, version: 0, orkFmt: 0, quantSig: 0 };
   } catch { return null; }
   finally { if (fd !== null) { try { fs.closeSync(fd); } catch {} } }
 }
