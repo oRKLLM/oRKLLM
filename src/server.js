@@ -1,7 +1,7 @@
 // Langfuse OTel instrumentation — must be first before any other imports
 import './instrumentation.js';
 
-import Fastify from 'fastify';
+import Fastify, { LogController } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyCookie from '@fastify/cookie';
@@ -93,7 +93,10 @@ const fastify = Fastify({
   // several endpoints on short timers (version/health every 5s, metrics + cache-stats every ~4s,
   // /v1/models, conversion progress), which otherwise floods the log with responseTime~0 200s.
   // Real events are logged explicitly via console.log / fastify.log.error, so nothing useful is lost.
-  disableRequestLogging: true,
+  // Set on a LogController instance rather than the top-level `disableRequestLogging`, which fastify
+  // 5.12 deprecated (FSTDEP023) and removes in 6 — the top-level form warns on every boot, and because
+  // console.error is routed into Pino below that warning lands as an error-level line in the Logs page.
+  logController: new LogController({ disableRequestLogging: true }),
   trustProxy: trustProxyCfg,
 });
 
