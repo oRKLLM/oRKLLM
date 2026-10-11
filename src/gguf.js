@@ -202,7 +202,10 @@ export function ggufQuantBits(name) {
 // pack, so it is not a loadable model on its own (the runtime aborts on a stub without its pack) and
 // must be filtered out of every model enumeration. We set ORK_NO_STUB on our own builds, but a pack
 // built by another frontend — or by an older oRKLLM — may have left one in MODELS_DIR.
-export function isOrkpackStub(name) { return /\.orkpack\.gguf$/i.test(String(name)); }
+// The `-NNNNN-of-MMMMM` arm covers the stub of a pack built from a SPLIT gguf: llama.cpp needs that
+// suffix last, so the stub is `<base>.orkpack-00001-of-00002.gguf` (see stubPathFor). Its sibling
+// symlinks share the shape and are caught by the same test — they are trailing shards anyway.
+export function isOrkpackStub(name) { return /\.orkpack(-\d{5}-of-\d{5})?\.gguf$/i.test(String(name)); }
 
 // The shard suffix, matched for BOTH servable extensions. `orkpackPathFor` builds a pack's name by
 // swapping `.gguf` for `.orkpack` and nothing else, so a pack built from a split model carries the
