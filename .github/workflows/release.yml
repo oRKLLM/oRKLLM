@@ -113,8 +113,13 @@ jobs:
           SHA="${{ github.sha }}"
           echo "Waiting for CI to complete on $SHA..."
           for i in $(seq 1 30); do
+            # The Test job is a matrix, so its check-runs are named "Test (20)" / "(22)" / "(24)" —
+            # none of them equal "Test". Match by prefix, or this gate silently covers only
+            # Security Scan. (It did still catch a test failure, but only via the `scan: needs:
+            # test` edge, which turns a failed test into a SKIPPED scan; drop that edge and the
+            # gate would have stopped checking tests without anything here changing.)
             STATUS=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs" \
-              --jq '[.check_runs[] | select(.name == "Test" or .name == "Security Scan")] |
+              --jq '[.check_runs[] | select((.name | startswith("Test")) or .name == "Security Scan")] |
                     if length == 0 then "pending"
                     elif all(.[]; .status == "completed") then
                       if all(.[]; .conclusion == "success") then "success" else "failure" end
