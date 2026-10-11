@@ -11,7 +11,7 @@ import path from 'path';
 import { spawn, spawnSync } from 'child_process';
 import { getStats, clearSessionStats, clearAllTimeStats } from '../stats.js';
 import { getMetricsSnapshot } from '../monitor.js';
-import { supportsThinkingToggle, isTrailingGgufShard, isOrkpackStub, ggufDisplayName } from '../gguf.js';
+import { supportsThinkingToggle, isTrailingGgufShard, isOrkpackStub, ggufDisplayName, parseGgufShard } from '../gguf.js';
 import { isOrkpackPath, supersededByPack, stubPathFor, sourceGgufFor } from '../orkpack.js';
 import {
   dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings, dbDeleteModelSettings,
@@ -1499,10 +1499,26 @@ export default async function adminRoutes(fastify, options) {
         job.status = 'done';
         job.speedBps = 0;
         job.finishedAt = Date.now();
-        // Proactively pre-build the .orkpack for a freshly-downloaded GGUF during idle, so its first load
-        // doesn't wait out the build. (The pool's build-then-load guard still guarantees no cold serve
-        // regardless — this just moves the one-time pack build off the first request's critical path.)
-        try { if (/\.gguf$/i.test(destPath)) getConversionScheduler()?.enqueue(path.relative(MODELS_DIR, destPath)); } catch {}
+        // A freshly-downloaded GGUF goes to the scheduler, which CONSOLIDATES it first if it is one
+        // shard of a split model and then pre-builds the .orkpack during idle, so its first load does
+        // not wait out either step. (The pool's build-then-load guard still guarantees no cold serve
+        // regardless — this just moves the one-time work off the first request's critical path.)
+        //
+        // Every shard arrives as its own job and the server has no "this variant is complete" event, so
+        // each completing shard asks; `noteGguf` returns without doing anything until the last one makes
+        // the group whole on disk. The LAST shard to land is the one that triggers the merge, whichever
+        // order they finish in.
+        try {
+          if (/\.gguf$/i.test(destPath)) {
+            const relDone = path.relative(MODELS_DIR, destPath);
+            const sh = parseGgufShard(relDone);
+            const trigger = sh ? path.join(path.dirname(relDone), path.basename(relDone)
+                                   .replace(/-\d{5}-of-(\d{5})\.gguf$/i, '-00001-of-$1.gguf'))
+                               : relDone;
+            getConversionScheduler()?.noteGguf(trigger)
+              ?.catch(e2 => console.error(`[Download] post-download handling of ${relDone}: ${e2.message}`));
+          }
+        } catch {}
         // A DFlash draft downloads as a safetensors dir (config.json + model.safetensors); a re-scan
         // detects a newly-complete DFlashDraftModel dir and queues its safetensors→GGUF convert.
         try { if (/\.(safetensors|json)$/i.test(destPath)) getDFlashConversionScheduler()?.scanAndEnqueue(); } catch {}

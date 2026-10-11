@@ -176,10 +176,14 @@
                           <v-icon start size="12">mdi-refresh</v-icon>ORK pack stale — rebuilding
                         </v-chip>
                       </div>
-                      <!-- Live conversion progress (GGUF → NPU-native pack). Foregrounded if the user hits Load. -->
-                      <div v-if="model.orkConversion?.status === 'converting'" class="mt-2" style="max-width: 360px;">
+                      <!-- Live conversion progress (GGUF → NPU-native pack). Foregrounded if the user hits Load.
+                           'merging' is the step BEFORE it: a split (sharded) download is consolidated into one
+                           file first, so nothing downstream ever sees a shard suffix. Same sidecar, same bar. -->
+                      <div v-if="['converting', 'merging'].includes(model.orkConversion?.status)" class="mt-2" style="max-width: 360px;">
                         <div class="d-flex align-center justify-space-between mb-1">
-                          <span class="text-caption text-grey">Converting to ORK format…</span>
+                          <span class="text-caption text-grey">
+                            {{ model.orkConversion.status === 'merging' ? 'Consolidating split shards…' : 'Converting to ORK format…' }}
+                          </span>
                           <span class="text-caption text-grey">{{ model.orkConversion.progress }}%</span>
                         </div>
                         <v-progress-linear :model-value="model.orkConversion.progress" color="primary" height="6" rounded />
@@ -1630,7 +1634,7 @@ export default {
     // conversion progress bar animates; this stops re-fetching once nothing is converting.
     this.statusPoller = setInterval(() => {
       this.fetchStatus();
-      if (this.models.some(m => m.orkConversion && (m.orkConversion.status === 'converting' || m.orkConversion.status === 'queued'))) {
+      if (this.models.some(m => m.orkConversion && ['converting', 'queued', 'merging'].includes(m.orkConversion.status))) {
         this.fetchModels();
       }
     }, 5000);

@@ -14,7 +14,8 @@ import { buildToolSystemPrompt } from './mcp_inference.js';
 import { isOrkpackFresh, getConversionScheduler } from './conversion.js';
 import { orkEnvFrom, orkQuantForSource, isOrkpackPath, isOrkpackUsable, stubPathFor, orkpackPathFor, readOrkpackFooter, sigPrecision, sourceGgufFor,
          provenanceChipsetMismatch } from './orkpack.js';
-import { isRecurrentArch, supportsThinkingToggle, ggufQuantBits } from './gguf.js';
+import { isRecurrentArch, supportsThinkingToggle, ggufQuantBits, parseGgufShard } from './gguf.js';
+import { consolidateSplitGguf, splitGroupReady } from './gguf_merge.js';
 import { cacheKey, getCachePath, tmpCachePath, putCachePath, isCacheEnabled } from './cache.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -510,9 +511,35 @@ class EnginePool {
       await this._unloadSlot(s);
 
       console.log(`[EnginePool] Slot ${s.id}: spawning worker for model: ${modelName}`);
-      const modelPath = path.join(MODELS_DIR, modelName);
+      let modelPath = path.join(MODELS_DIR, modelName);
       if (!fs.existsSync(modelPath)) {
         throw new Error(`Model file not found: ${modelPath}`);
+      }
+
+      // LAZY CONSOLIDATION. A model downloaded before consolidation existed is still on disk as shards.
+      // Merge it here, before anything derives a name from it — the pack path is a bare extension swap,
+      // so packing shard 1 produces `…-00001-of-00002.orkpack` and a stub llama.cpp refuses to open.
+      // Must come before the cold-start guard below for exactly that reason. The merged file is a
+      // different id, so the per-model settings row is carried across with it.
+      if (parseGgufShard(modelName) && splitGroupReady(modelPath)) {
+        try {
+          const res = await consolidateSplitGguf(modelPath);
+          if (res.status === 'consolidated' || res.status === 'already-consolidated') {
+            const merged = path.relative(MODELS_DIR, res.path);
+            const saved = dbGetModelSettings(modelName);
+            if (saved && Object.keys(saved).length && !Object.keys(dbGetModelSettings(merged) || {}).length) {
+              dbSetModelSettings(merged, saved);
+            }
+            getConversionScheduler()?._discardSplitPack?.(modelPath);
+            console.log(`[EnginePool] consolidated ${modelName} → ${merged} before load`);
+            modelName = merged;
+            modelPath = res.path;
+          }
+        } catch (e) {
+          // Serve the shard rather than refusing the load: the split path still works for a plain
+          // .gguf (it is only PACKING one that breaks), so a failed merge must not take the model down.
+          console.warn(`[EnginePool] could not consolidate ${modelName} (${e.message}) — loading the shards as-is`);
+        }
       }
 
       // Determine backend from file extension. A .orkpack is served by the same llama/ggml-ork backend
