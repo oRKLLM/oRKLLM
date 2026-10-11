@@ -16,9 +16,10 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { MODELS_DIR, LLAMA_RUNTIME_DIR } from './config.js';
-import { isTrailingGgufShard, isOrkpackStub, getGgufArchitecture } from './gguf.js';
+import { isOrkpackStub, getGgufArchitecture, parseGgufShard } from './gguf.js';
 import { orkpackPathFor, isOrkpackUsable, readOrkpackFooter, recordOrkFmt, llamaRuntimeTag, orkEnvFrom,
          writeOrkpackProvenance, provPathFor } from './orkpack.js';
+import { consolidateSplitGguf, consolidatedPathFor, splitGroupReady } from './gguf_merge.js';
 
 export { orkpackPathFor };
 
@@ -136,8 +137,17 @@ export class ConversionScheduler {
       for (const e of ents) {
         const p = path.join(dir, e.name);
         if (e.isDirectory()) { walk(p); continue; }
-        if (!/\.gguf$/i.test(e.name) || isTrailingGgufShard(e.name) || isOrkpackStub(e.name)) continue;
+        if (!/\.gguf$/i.test(e.name) || isOrkpackStub(e.name)) continue;
         const rel = path.relative(MODELS_DIR, p);
+        // A split model left on disk by an older build — or by a download that finished while the
+        // service was down — is consolidated here. This walk is the ONLY restart-safe trigger: the
+        // download queue is in-memory and does not survive a restart, so nothing else would ever
+        // revisit those shards. Fire-and-forget: a 51 GiB merge must not block startup, and the
+        // consolidation enqueues the merged file itself when it lands.
+        if (parseGgufShard(rel)) {
+          this.noteGguf(rel).catch(e2 => console.error(`[conversion] consolidate ${rel}: ${e2.message}`));
+          continue;
+        }
         if (hasOrkpack(p) && !isOrkpackFresh(p, this._precisionFor(rel))) {
           console.log(`[conversion] unusable .orkpack for ${rel} — discarding + rebuilding`);
           removeOrkpack(p);
@@ -155,6 +165,65 @@ export class ConversionScheduler {
   // models against the newly-installed runtime. A runtime update on its own does NOT invalidate anything
   // — only a pack the new runtime would actually refuse is discarded and rebuilt.
   revalidateForRuntime() { return this.scanAndEnqueue(); }
+
+  // THE entry point for "a .gguf exists / has just finished downloading". A split model is consolidated
+  // into one file FIRST and the merged path is what gets packed — the split is an upstream distribution
+  // artifact (HuggingFace's per-file size cap), and carrying it past the download is what made a 27B
+  // unloadable: the pack inherits the shard suffix, the stub inherits it from the pack, and llama.cpp
+  // then refuses the stub outright. Consolidating here means nothing downstream ever sees a split model.
+  //
+  // Returns the rel id that was (or will be) packed, so a caller holding an id can follow the rename.
+  async noteGguf(rel) {
+    const abs = path.join(MODELS_DIR, rel);
+    const shard = parseGgufShard(rel);
+    if (!shard) { this.enqueue(rel); return rel; }
+    if (shard.index > 1) return null;                 // a trailing shard is not a model; shard 1 drives it
+
+    // Downloads are one job per FILE with no server-side notion of a variant being complete, and the
+    // queue does not survive a restart — so readiness is derived from the disk, which is also how every
+    // other state in this server is derived.
+    if (!splitGroupReady(abs)) return null;
+
+    const mergedAbs = consolidatedPathFor(abs);
+    const mergedRel = path.relative(MODELS_DIR, mergedAbs);
+    const sidecar = orkpackPathFor(abs) + '.json';    // the shard-1 entry the UI is already watching
+    const write = (progress) => { try {
+      fs.writeFileSync(sidecar, JSON.stringify({ status: 'merging', progress, label: 'consolidating shards' }));
+    } catch {} };
+    try {
+      write(0);
+      const res = await consolidateSplitGguf(abs, {
+        onProgress: ({ copied, total }) => write(total > 0 ? Math.min(99, Math.round(100 * copied / total)) : 0),
+      });
+      if (res.status === 'consolidated') this._discardSplitPack(abs);
+    } catch (e) {
+      console.error(`[conversion] consolidating ${rel} failed: ${e.message}`);
+      try { fs.writeFileSync(sidecar, JSON.stringify({ status: 'error', progress: 0, label: e.message })); } catch {}
+      return null;
+    } finally {
+      try { if (JSON.parse(fs.readFileSync(sidecar, 'utf8')).status === 'merging') fs.unlinkSync(sidecar); } catch {}
+    }
+    this.enqueue(mergedRel);
+    return mergedRel;
+  }
+
+  // A pack built from shard 1 BEFORE consolidation cannot be relinked onto the merged file, and this is
+  // measured rather than assumed: the stub ggml-ork extracts is rebuilt from metadata the pack embeds,
+  // and that metadata is shard 1's header verbatim — split.no=0, split.count=2, and only shard 1's 835
+  // tensor infos (the merged model has 866). A renamed pack would therefore still synthesize a SPLIT
+  // stub, and the shards it would then ask for no longer exist. So the pack is dead twice over; remove
+  // it and let the scheduler rebuild from the consolidated file.
+  _discardSplitPack(absFirstShard) {
+    const pack = orkpackPathFor(absFirstShard);
+    for (const f of [pack, pack + '.gguf', pack + '.json', provPathFor(pack)]) {
+      try {
+        const sz = fs.statSync(f).size;
+        fs.unlinkSync(f);
+        console.log(`[conversion] removed ${path.basename(f)} (${(sz / 1073741824).toFixed(2)} GiB): built from a ` +
+                    'single shard, so its stub is split and cannot load — rebuilding from the consolidated gguf');
+      } catch {}
+    }
+  }
 
   enqueue(rel) {
     if (this.queued.has(rel) || (this.current && this.current.rel === rel)) return;
