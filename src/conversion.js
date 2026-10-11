@@ -207,20 +207,42 @@ export class ConversionScheduler {
     return mergedRel;
   }
 
-  // A pack built from shard 1 BEFORE consolidation cannot be relinked onto the merged file, and this is
-  // measured rather than assumed: the stub ggml-ork extracts is rebuilt from metadata the pack embeds,
-  // and that metadata is shard 1's header verbatim — split.no=0, split.count=2, and only shard 1's 835
-  // tensor infos (the merged model has 866). A renamed pack would therefore still synthesize a SPLIT
-  // stub, and the shards it would then ask for no longer exist. So the pack is dead twice over; remove
-  // it and let the scheduler rebuild from the consolidated file.
+  // A pack built before consolidation is REBUILT, not salvaged. It is worth saying why, because the
+  // obvious shortcut looks available and is not, and the numbers below were measured on the 27B that
+  // prompted all this (400-entry pack, shards of 835 + 31 tensors).
+  //
+  // What such a pack DOES have: its index covers the whole model. It is keyed by tensor NAME and was
+  // written during a load of the complete split model, so all 64 layers' packable matmuls are in it —
+  // 390 of its 400 entries name tensors resident in shard 1, and 10 name tensors resident in shard 2.
+  // Nothing about the tiled weight bytes is shard-shaped.
+  //
+  // Why it still cannot be re-headed onto the consolidated file:
+  //   • The pack embeds ONE source gguf — the `-m` file it was built from, i.e. shard 1. Its metadata
+  //     section is that file's header verbatim (split.no=0, split.count=2, 835 tensor infos) followed
+  //     by the bytes of every tensor the pack did NOT take (n_kept=445, ~2.6 GB of them), each at its
+  //     offset in shard 1. ggml_backend_ork_extract_gguf replays exactly that: truncate to the recorded
+  //     total, write the header, write the kept bytes. It never consults the index.
+  //   • So the pack can supply 400 packed + 445 kept = 845 tensors. The merged model has 866. The 21
+  //     with no bytes anywhere in it are shard 2's non-packed tensors — the blk.62/63 norms, all of
+  //     `blk.64.nextn.*`, and `output.weight`. A swapped-in 866-tensor header would extract them as
+  //     FILE HOLES, i.e. zeros: a model that loads with a zeroed LM head and zeroed norms.
+  //   • Nothing would catch it. `ork_fmt` binds the tile layout and `quant_sig` the precision; neither
+  //     binds the header, and extraction does not cross-check the index. A wrong re-header is silent.
+  //   • It would also not be a "re-head" in any small sense: the merged header is longer, so all 445
+  //     kept offsets shift, the recorded total and data_off change, and the 21 missing tensors would
+  //     have to be read out of shard 2 and appended. That is rewriting the whole 2.6 GB metadata
+  //     section through pack-mutation code that does not exist today.
+  // A rebuild is ~23 minutes and is also the right answer for a pack whose provenance we cannot verify
+  // (these were produced by an older path, and this one carries no provenance record at all).
   _discardSplitPack(absFirstShard) {
     const pack = orkpackPathFor(absFirstShard);
     for (const f of [pack, pack + '.gguf', pack + '.json', provPathFor(pack)]) {
       try {
         const sz = fs.statSync(f).size;
         fs.unlinkSync(f);
-        console.log(`[conversion] removed ${path.basename(f)} (${(sz / 1073741824).toFixed(2)} GiB): built from a ` +
-                    'single shard, so its stub is split and cannot load — rebuilding from the consolidated gguf');
+        console.log(`[conversion] removed ${path.basename(f)} (${(sz / 1073741824).toFixed(2)} GiB): its embedded ` +
+                    'metadata is a single shard\'s header, so its stub would be split (and short of the ' +
+                    'tensors only the other shards carry) — rebuilding from the consolidated gguf');
       } catch {}
     }
   }
