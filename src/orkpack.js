@@ -73,9 +73,43 @@ export function orkpackPathFor(absGguf) { return absGguf.replace(/\.gguf$/i, '.o
 // self-heal loop that reads like a driver fault. The gguf is a build input; the pack is the model.
 export function isOrkpackPath(name) { return /\.orkpack$/i.test(String(name)); }
 
+const PACK_SHARD_RE = /-(\d{5})-of-(\d{5})\.orkpack$/i;
+
 // The sparse gguf extracted from a pack. Same name the runtime's own build-time stub uses, so the two
 // are interchangeable and only ever one file exists.
-export function stubPathFor(packPath) { return String(packPath) + '.gguf'; }
+//
+// EXCEPT for a pack built from a SPLIT gguf. `orkpackPathFor` only swaps the extension, so such a pack
+// carries the shard suffix — `<base>-00001-of-00002.orkpack` — and llama.cpp resolves a split model's
+// sibling shards by requiring the filename it is handed to END with `-NNNNN-of-MMMMM.gguf`
+// (`llama_split_prefix`, called from `llama_get_list_splits`). Plain `<pack>.gguf` buries the suffix
+// mid-name and the load dies with
+//     llama_model_load: error loading model: invalid split file name: …-00001-of-00002.orkpack.gguf
+// before a single tensor is read. So keep the suffix TERMINAL: `<base>.orkpack-00001-of-00002.gguf`.
+export function stubPathFor(packPath) {
+  const p = String(packPath);
+  const m = PACK_SHARD_RE.exec(p);
+  // m[0] is `-NNNNN-of-MMMMM.orkpack`; move `.orkpack` in front of the suffix.
+  return m ? `${p.slice(0, m.index)}.orkpack${m[0].replace(/\.orkpack$/i, '')}.gguf` : `${p}.gguf`;
+}
+
+// The sibling shards llama.cpp will go looking for once it has read `split.count` out of the stub, as
+// [{ link, target }] — empty for an unsplit pack. The stub reproduces only the shard the pack was built
+// FROM (shard 1); the rest of the model still lives in the source gguf's trailing shards, which are not
+// renamed, so each needs a name under the stub's prefix. Symlinks, not copies: these are multi-GB files
+// and the targets are exactly the shards already sitting next to the pack.
+export function stubSiblingShards(packPath) {
+  const p = String(packPath);
+  const m = PACK_SHARD_RE.exec(p);
+  if (!m) return [];
+  const base = p.slice(0, m.index);            // …/Qwen3.8-27B-BF16
+  const total = parseInt(m[2], 10);
+  const out = [];
+  for (let i = 2; i <= total; i++) {
+    const sfx = `-${String(i).padStart(5, '0')}-of-${m[2]}`;
+    out.push({ link: `${base}.orkpack${sfx}.gguf`, target: `${base}${sfx}.gguf` });
+  }
+  return out;
+}
 
 // The .gguf a pack was built FROM. It may well not exist any more — deleting it after packing is the
 // point of the exercise — so this is for provenance and settings carry-over, never for loading.

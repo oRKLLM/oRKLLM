@@ -2,6 +2,7 @@ import fs from 'fs';
 import { createRequire } from 'module';
 import { MockEngine } from './mock_engine.js';
 import { LIBRKLLMRT_PATH } from './config.js';
+import { stubSiblingShards } from './orkpack.js';
 
 const require = createRequire(import.meta.url);
 
@@ -87,6 +88,28 @@ process.on('message', async (msg) => {
                   'predates ggml_backend_ork_extract_gguf, or the pack has no embedded metadata ' +
                   '(pre-v6) — the server log carries an [ork] line saying which.' });
                 return;
+              }
+            }
+            // A pack built from a SPLIT gguf reproduces only the shard it was built from, and the stub's
+            // own metadata still says `split.count = N`. llama.cpp will therefore derive the other N-1
+            // paths from the stub's prefix and open them. They are not renamed, so point each expected
+            // name at the real trailing shard. Symlinks — these are multi-GB files already on disk.
+            // Unsplit packs produce an empty list and pay nothing.
+            for (const { link, target } of stubSiblingShards(options.orkpack)) {
+              try {
+                if (fs.existsSync(link)) continue;
+                if (!fs.existsSync(target)) {
+                  process.send({ type: 'loaded', status: -1, error:
+                    `${options.orkpack} was built from a split GGUF, but shard ${target} is missing. ` +
+                    'A pack carries only the shard it was built from; the trailing shards must stay ' +
+                    'next to it. Restore them, or rebuild the pack from a merged gguf ' +
+                    '(llama-gguf-split --merge).' });
+                  return;
+                }
+                fs.symlinkSync(target, link);
+                console.log(`[Worker:llama] split pack: linked ${link} -> ${target}`);
+              } catch (e) {
+                console.warn(`[Worker:llama] could not link sibling shard ${link}: ${e.message}`);
               }
             }
             loadPath = stub;
