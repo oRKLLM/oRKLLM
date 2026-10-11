@@ -204,9 +204,21 @@ export function ggufQuantBits(name) {
 // built by another frontend — or by an older oRKLLM — may have left one in MODELS_DIR.
 export function isOrkpackStub(name) { return /\.orkpack\.gguf$/i.test(String(name)); }
 
-// Display name for a model id: strips the `-NNNNN-of-MMMMM.gguf` shard suffix
-// (re-appending `.gguf`) for split models; returns the id unchanged otherwise.
+// The shard suffix, matched for BOTH servable extensions. `orkpackPathFor` builds a pack's name by
+// swapping `.gguf` for `.orkpack` and nothing else, so a pack built from a split model carries the
+// shard suffix of the shard it was built from. SHARD_RE above cannot see it, being anchored on
+// `.gguf` — which is right for the FILTERS (a pack is not a shard and must never be dropped as a
+// trailing one) but leaves the suffix in the LABEL.
+const SHARD_SUFFIX_RE = /-\d{5}-of-\d{5}(?=\.(?:gguf|orkpack)$)/i;
+
+// Display name for a model id: strips the `-NNNNN-of-MMMMM` shard suffix for split models, keeping
+// the extension; returns the id unchanged otherwise.
+//
+// It has to strip the suffix off a `.orkpack` too, or a split model RENAMES ITSELF the moment its
+// pack lands: `Qwen3.8-27B-BF16.gguf` becomes `Qwen3.8-27B-BF16-00001-of-00002.orkpack`, which sorts
+// elsewhere in the Models tree and reads as "the model is gone" — the source gguf really has dropped
+// out of every enumeration by then (supersededByPack), so nothing answers to the old name either.
+// One label, stable across the gguf -> pack transition, is the whole job of a display name.
 export function ggufDisplayName(name) {
-  const s = parseGgufShard(name);
-  return s ? `${s.base}.gguf` : name;
+  return String(name).replace(SHARD_SUFFIX_RE, '');
 }

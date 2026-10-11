@@ -22,4 +22,14 @@ describe('pack -> source-gguf settings key', () => {
     const g = 'x/y.gguf';
     assert.equal(sourceGgufFor(g), g);
   });
+
+  // The READ path (GET /api/admin/models/settings/*) needs the same fallback the LOAD path has, or
+  // the Settings dialog shows defaults for a model the pool is serving with the saved values. The
+  // route's logic is this predicate; asserted here against the key a split model actually produces.
+  test('the fallback key survives a split model\'s shard suffix', () => {
+    const pack = 'unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-BF16-00001-of-00002.orkpack';
+    assert.equal(isOrkpackPath(pack), true);
+    assert.equal(sourceGgufFor(pack),
+                 'unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-BF16-00001-of-00002.gguf');
+  });
 });
