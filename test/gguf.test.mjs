@@ -130,4 +130,26 @@ describe('split (sharded) GGUF grouping', () => {
     assert.equal(ggufDisplayName('adapter.rkllm'), 'adapter.rkllm'); // unchanged
     assert.ok(!loadable.includes('foo-00002-of-00002.gguf'));
   });
+
+  // The regression this guards: the model appears to VANISH from the Models page when its pack is
+  // built. `orkpackPathFor` only swaps the extension, so the pack inherits the shard suffix; the
+  // source gguf then drops out of both enumerations (supersededByPack) and the model reappears under
+  // a name nobody recognises, in a different place in the sorted tree.
+  test('a split model keeps ONE label across the gguf -> orkpack transition', () => {
+    const shard1 = 'unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-BF16-00001-of-00002.gguf';
+    const pack   = 'unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-BF16-00001-of-00002.orkpack';
+    assert.equal(ggufDisplayName(shard1), 'unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-BF16.gguf');
+    assert.equal(ggufDisplayName(pack),   'unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-BF16.orkpack');
+    // the only thing that changes is the extension
+    assert.equal(ggufDisplayName(shard1).replace(/\.gguf$/, ''),
+                 ggufDisplayName(pack).replace(/\.orkpack$/, ''));
+  });
+
+  test('an unsharded pack, and a stub, are left alone', () => {
+    assert.equal(ggufDisplayName('a/b/model.orkpack'), 'a/b/model.orkpack');
+    assert.equal(ggufDisplayName('a/b/model.orkpack.gguf'), 'a/b/model.orkpack.gguf');
+    // a pack is NOT a shard, so it must never be filtered as a trailing one
+    assert.equal(isTrailingGgufShard('foo-00002-of-00002.orkpack'), false);
+    assert.equal(parseGgufShard('foo-00001-of-00002.orkpack'), null);
+  });
 });

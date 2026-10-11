@@ -911,7 +911,10 @@ export default async function adminRoutes(fastify, options) {
             const tmpl = [stubPathFor(abs), sourceGgufFor(abs)].find(p => { try { return fs.statSync(p).size > 0; } catch { return false; } });
             available.push({
               id: rel,
-              displayName: rel.replace(/\.orkpack$/i, ''),
+              // Same helper /v1/models uses, so the two endpoints cannot disagree about what a model
+              // is CALLED the way they used to: this stripped the extension while /v1/models kept it,
+              // and neither stripped the shard suffix off a split model's pack.
+              displayName: ggufDisplayName(rel),
               sizeBytes: sizeOf(abs),
               runtime: 'llama',
               thinkingToggle: tmpl ? supportsThinkingToggle(tmpl) : true,
@@ -1116,7 +1119,15 @@ export default async function adminRoutes(fastify, options) {
     if (!modelId || modelId.includes('..')) {
       return reply.status(400).send({ error: 'Invalid model ID' });
     }
-    const settings = dbGetModelSettings(modelId);
+    // A pack INHERITS the row its source gguf was configured under. The servable id flips from
+    // `<m>.gguf` to `<m>.orkpack` the moment the pack lands, but the settings row keeps the old key —
+    // so without this fallback the dialog shows DEFAULTS for a model the server is in fact serving
+    // with the saved values, and a custom display_name silently disappears. pool.js already falls
+    // back exactly this way when it LOADS the model (`modelSettingsFor`); the read path was missed.
+    let settings = dbGetModelSettings(modelId);
+    if (isOrkpackPath(modelId) && !Object.keys(settings || {}).length) {
+      settings = dbGetModelSettings(sourceGgufFor(modelId)) || {};
+    }
     return { modelId, settings };
   });
 
