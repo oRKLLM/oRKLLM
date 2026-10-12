@@ -861,8 +861,11 @@ test.describe('Quantization tab', () => {
     await expect(value).toHaveText('4.00 bpw');
     await expect(thumb).toHaveAttribute('tabindex', '-1');
 
+    // Coming back from a pinned tier restores the rate the user chose, rather than inheriting int8's
+    // 8.0 — a legal value that quietly means "promote every weight", which is not what int4 asked for.
     await page.getByLabel('Mixed precision').check();
     await expect(thumb).toHaveAttribute('tabindex', '0');
+    await expect(value).toHaveText('4.50 bpw');
 
     // THE POINT OF THE CHANGE: moving bpw moves the size readout with it.
     const atBase = await size.textContent();
@@ -870,6 +873,14 @@ test.describe('Quantization tab', () => {
     await page.keyboard.press('End');
     await expect(value).toHaveText('8.00 bpw');
     expect(await size.textContent()).not.toBe(atBase);
+
+    // And that choice is what survives the round trip now.
+    await page.getByRole('button', { name: 'int8', exact: true }).click();
+    await page.getByRole('button', { name: 'int4', exact: true }).click();
+    await expect(value).toHaveText('8.00 bpw');
+    await page.getByLabel('Mixed precision').uncheck();
+    await page.getByLabel('Mixed precision').check();
+    await expect(value).toHaveText('8.00 bpw');
   });
 
   // The estimate is per-model and derived from the file, so the endpoint has to be too.
