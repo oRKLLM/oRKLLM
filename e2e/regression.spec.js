@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
+import { writeGguf, f16 } from '../test/fixtures/gguf.mjs';
 
 const ADMIN_USER = process.env.ORKLLM_TEST_ADMIN_USER;
 const ADMIN_PASS = process.env.ORKLLM_TEST_ADMIN_PASS;
@@ -757,8 +758,26 @@ test.describe('Quantization tab', () => {
   // F16 in the name so the "uncompressed, ideal source" classification is the one under test.
   const quantGgufName = 'quantsrc-F16.gguf';
   const quantGgufPath = path.join(modelsDir, quantGgufName);
-  test.beforeAll(() => fs.writeFileSync(quantGgufPath, 'fake-gguf-data', 'utf-8'));
-  test.afterAll(() => { try { fs.unlinkSync(quantGgufPath); } catch {} });
+  // A SECOND source that is a REAL GGUF, so the bits-per-weight control's size arithmetic runs
+  // against an actual tensor table rather than a placeholder. Shapes are small, the layout is real:
+  // two packable 2-D weights, a norm, an embedding table (a gather — never packed) and a head wide
+  // enough to fall outside the pack's N-cap.
+  const realGgufName = 'quantsrc-real-F16.gguf';
+  const realGgufPath = path.join(modelsDir, realGgufName);
+  const REAL_PACKED_PARAMS = 256 * 256 + 512 * 256;              // attn_q + ffn_down
+  test.beforeAll(() => {
+    fs.writeFileSync(quantGgufPath, 'fake-gguf-data', 'utf-8');
+    writeGguf(realGgufPath, [
+      { name: 'token_embd.weight',      ...f16([256, 1024]) },
+      { name: 'blk.0.attn_q.weight',    ...f16([256, 256]) },
+      { name: 'blk.0.ffn_down.weight',  ...f16([512, 256]) },
+      { name: 'blk.0.attn_norm.weight', ...f16([256]) },
+      { name: 'output.weight',          ...f16([256, 65536]) },  // N over the 32768 cap
+    ]);
+  });
+  test.afterAll(() => {
+    for (const p of [quantGgufPath, realGgufPath]) { try { fs.unlinkSync(p); } catch {} }
+  });
 
   test('Models page has a Quantization tab listing GGUF sources with a precision choice', async ({ page }) => {
     await login(page);
@@ -767,9 +786,12 @@ test.describe('Quantization tab', () => {
 
     // The tab is source-first: pick a .gguf, then a tier.
     // Scope to the source card: the Manager tab keeps its own copy of every model name in the DOM.
+    // Scope to this source's own row: the list holds every .gguf under MODELS_DIR, and more than
+    // one of them is an uncompressed source.
     const sourceCard = page.locator('.v-card').filter({ hasText: 'Source model' });
-    await expect(sourceCard.getByText('quantsrc-F16.gguf')).toBeVisible();
-    await expect(sourceCard.getByText(/uncompressed .* ideal source/i)).toBeVisible();
+    const row = sourceCard.locator('.v-list-item').filter({ hasText: quantGgufName });
+    await expect(row).toBeVisible();
+    await expect(row.getByText(/uncompressed .* ideal source/i)).toBeVisible();
     await expect(page.getByText(/The NPU computes at one width per matmul/i)).toBeVisible();
     await expect(page.getByRole('button', { name: 'int4', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'int8', exact: true })).toBeVisible();
@@ -794,6 +816,102 @@ test.describe('Quantization tab', () => {
     });
     expect(res.status()).toBe(400);
     expect((await res.json()).error).toMatch(/must be a \.gguf/i);
+  });
+
+  // The tab asks for BITS PER WEIGHT and shows the megabytes. The old control was the reverse — a
+  // 1..512 MiB "promotion budget" — which is a number nobody can read without knowing the model:
+  // 512 MiB is 4.18 bpw on a 27B and several copies of a 1.7B.
+  test('The precision control is a bits-per-weight slider with a derived size, not a MiB budget', async ({ page }) => {
+    await login(page);
+    await page.goto('/models');
+    await page.getByRole('tab', { name: /Quantization/i }).click();
+    await page.locator('.v-card').filter({ hasText: 'Source model' })
+      .getByText(realGgufName).click();
+
+    await expect(page.getByText('Bits per weight')).toBeVisible();
+    await expect(page.locator('[data-test="quant-bpw-slider"]')).toBeVisible();
+    // The megabytes are OUTPUT now: no entry control carries them.
+    await expect(page.getByText(/Promotion budget/i)).toHaveCount(0);
+    await expect(page.locator('[data-test="quant-size"]')).toContainText(/Estimated \.orkpack/i);
+    await expect(page.locator('[data-test="quant-size"]')).toContainText(/carried at the source's own precision/i);
+    await expect(page.locator('[data-test="quant-size"]')).toContainText(/estimate/i);
+  });
+
+  // "The slider extends over the base weight": its floor is the tier's own rate. int8 has no tier
+  // above it and plain int4 promotes nothing, so both READ their fixed rate rather than going blank.
+  test('bpw is pinned to the tier base unless a mixed int4 build can promote', async ({ page }) => {
+    await login(page);
+    await page.goto('/models');
+    await page.getByRole('tab', { name: /Quantization/i }).click();
+    await page.locator('.v-card').filter({ hasText: 'Source model' })
+      .getByText(realGgufName).click();
+
+    const value = page.locator('[data-test="quant-bpw-value"]');
+    // Vuetify renders the slider as a role=slider thumb, not a native range input; a disabled one
+    // drops out of the tab order.
+    const thumb = page.locator('[data-test="quant-bpw-slider"] [role="slider"]');
+    const size = page.locator('[data-test="quant-size"]');
+
+    await page.getByRole('button', { name: 'int8', exact: true }).click();
+    await expect(value).toHaveText('8.00 bpw');
+    await expect(thumb).toHaveAttribute('tabindex', '-1');
+
+    await page.getByRole('button', { name: 'int4', exact: true }).click();
+    await page.getByLabel('Mixed precision').uncheck();
+    await expect(value).toHaveText('4.00 bpw');
+    await expect(thumb).toHaveAttribute('tabindex', '-1');
+
+    await page.getByLabel('Mixed precision').check();
+    await expect(thumb).toHaveAttribute('tabindex', '0');
+
+    // THE POINT OF THE CHANGE: moving bpw moves the size readout with it.
+    const atBase = await size.textContent();
+    await thumb.focus();
+    await page.keyboard.press('End');
+    await expect(value).toHaveText('8.00 bpw');
+    expect(await size.textContent()).not.toBe(atBase);
+  });
+
+  // The estimate is per-model and derived from the file, so the endpoint has to be too.
+  test('GET /api/admin/quantize/plan derives the packed set from the GGUF', async ({ page }) => {
+    await login(page);
+    const res = await page.request.get(`/api/admin/quantize/plan?model=${encodeURIComponent(realGgufName)}`);
+    expect(res.status()).toBe(200);
+    const plan = await res.json();
+    expect(plan.known).toBe(true);
+    // token_embd (a gather), the norm, and the over-cap head are all carried, not packed.
+    expect(plan.nSlider).toBe(2);
+    expect(plan.sliderParams).toBe(REAL_PACKED_PARAMS);
+    expect(plan.carriedBytes).toBeGreaterThan(0);
+    // Doubling the rate doubles exactly the weight term and leaves the carried region alone.
+    expect(plan.bytesAt['8'] - plan.bytesAt['4']).toBe(REAL_PACKED_PARAMS / 2);
+
+    // A source we cannot parse is not an error — the bpw choice still means something; only the
+    // megabytes are withheld.
+    const stub = await page.request.get(`/api/admin/quantize/plan?model=${encodeURIComponent(quantGgufName)}`);
+    expect(stub.status()).toBe(200);
+    expect((await stub.json()).known).toBe(false);
+
+    expect((await page.request.get('/api/admin/quantize/plan?model=nope.rkllm')).status()).toBe(400);
+    expect((await page.request.get('/api/admin/quantize/plan?model=absent.gguf')).status()).toBe(404);
+  });
+
+  test('POST /api/admin/quantize takes bpw and echoes what it resolved', async ({ page }) => {
+    await login(page);
+    const ok = await page.request.post('/api/admin/quantize', {
+      data: { model: realGgufName, bits: 4, mixed: true, bpw: 4.75 },
+    });
+    // 202 when the scheduler is free, 409/503 when it is not — either way bpw must be accepted, and
+    // never rejected as an unknown field.
+    expect([202, 409, 503]).toContain(ok.status());
+    if (ok.status() === 202) expect((await ok.json()).bpw).toBe(4.75);
+
+    // Out of range is ignored rather than passed down as a nonsense budget.
+    const bad = await page.request.post('/api/admin/quantize', {
+      data: { model: realGgufName, bits: 4, mixed: true, bpw: 99 },
+    });
+    expect([202, 409, 503]).toContain(bad.status());
+    if (bad.status() === 202) expect((await bad.json()).bpw).toBe(null);
   });
 });
 

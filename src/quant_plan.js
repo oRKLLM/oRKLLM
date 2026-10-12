@@ -1,0 +1,280 @@
+// Pack-size arithmetic for the Quantization tab's bits-per-weight control.
+//
+// The tab used to ask for a PROMOTION BUDGET IN MEBIBYTES — ggml-ork's `--pack-budget`, passed
+// straight through. That number is unreadable without knowing the model: 512 MiB (the old slider's
+// maximum) buys 4.18 bpw on a 27B and the whole model several times over on a 1.7B. The unit people
+// reason about, and the one the measured quality ladder is indexed by, is BITS PER WEIGHT. So the
+// slider moves in bpw and the megabytes become a consequence, computed here.
+//
+// WHAT THIS FILE HAS TO GET RIGHT
+//
+//   1. WHICH TENSORS THE SLIDER ACTUALLY MOVES. Not all of them: a .orkpack holds the NPU-packed
+//      weights PLUS a verbatim copy of everything the pack does not own (the GGUF header/KV/
+//      tensor-info block, the norms, the embedding table, any weight the backend declined). That
+//      carried region is several GiB on a large model and the slider does not touch a byte of it.
+//      So membership is DERIVED, never hard-coded: from the pack's own index when a pack exists,
+//      and otherwise from the same predicate ggml-ork's `supports_op` applies at pack time. The
+//      thing that currently keeps `output.weight` out is an N-cap whose own comment in ggml-ork
+//      calls it "an IOVA-budget policy, NOT a matmul limit" — a policy that is expected to move.
+//      When it does, that tensor starts responding to the slider here with no edit to this file.
+//
+//   2. WHAT `--pack-budget` IS DENOMINATED IN. On-disk MiB, including the Bf sidecar an int8 entry
+//      carries inside the K%512==0 && K<=4096 envelope (ggml-ork `ork_promote_cost_mb`). A promoted
+//      weight can therefore cost 3x its blob delta, so "bpw delta converted to bytes" is NOT a valid
+//      budget — it under-delivers by up to 3x. `budgetMbForBpw` reproduces the packer's own greedy
+//      loop over the measured-qerr pack instead, which makes the conversion exact rather than close.
+//
+// Nothing here runs the model or maps a blob: a pack's index is a few hundred KiB at the tail of the
+// file and a GGUF's tensor table is in its header.
+
+import fs from 'fs';
+import { readGgufTensors } from './gguf.js';
+import { readOrkpackFooter } from './orkpack.js';
+
+const MiB = 1048576;
+
+export const INT4_BPW = 4.0;
+export const INT8_BPW = 8.0;
+
+// ── The packer's own eligibility predicate ───────────────────────────────────
+
+// ggml-ork `supports_op`: `static const int max_n = getenv("ORK_MAXN") ? atoi(...) : 32768;`
+// Read from the environment the build will actually run under, so a deployment that raises the cap
+// (or a future default that raises it) changes the projection without changing this code.
+export function packMaxN() {
+  const n = Number(process.env.ORK_MAXN);
+  return Number.isFinite(n) && n > 0 ? n : 32768;
+}
+
+// ggml-ork declines a sub-5-bit source outright ("q4/low-bit GGUF sources are UNSUPPORTED territory
+// for the NPU path"), which also stops the pack from ever packing one.
+const MIN_SOURCE_BITS = 5.0;
+
+// The ONE exclusion that is not a policy: the embedding table is read by GGML_OP_GET_ROWS, a gather,
+// not a matmul. There is no NPU op for it, so no bpw the pack could express applies to it. (Its size
+// is still not fixed — that is a property of the source GGUF, changeable with
+// `llama-quantize --tensor-type token_embd=…` — it is just not what the PACK's bpw governs.)
+//
+// TIED EMBEDDINGS. That is only true while a SEPARATE head tensor carries the vocabulary projection.
+// In a tied model there is no `output.weight` and `token_embd` is both the gather AND the LM-head
+// matmul, so excluding it by name would hide a genuinely packable weight. llama.cpp decides tying the
+// same way — the head is `output.weight` if the file has one, else `token_embd.weight` — so the
+// predicate is derived from the tensor list, not assumed from the name.
+const EMBD = /(^|\.)token_embd\./;
+const HEAD = /(^|\.)output\.weight$/;
+
+// Classify one GGUF tensor against the pack-time predicate.
+//   'slider' — a 2-D weight the backend accepts: int4/int8 tier, moved by the bpw control
+//   'moe'    — an expert stack (3-D, MUL_MAT_ID): packed, but at the automatic MoE profile's own
+//              NF4 tier, which is fixed by model type and not something the slider chooses
+//   'carried'— everything else: copied into the pack verbatim at its source precision
+function classify(t, maxN, tiedEmbeddings) {
+  const nd = t.dims.length;
+  if (!/\.weight$/.test(t.name)) return 'carried';
+  if (EMBD.test(t.name) && !tiedEmbeddings) return 'carried';
+  if (t.bits > 0 && t.bits < MIN_SOURCE_BITS) return 'carried';
+  const N = Number(t.dims[1] || 0);
+  if (N > maxN) return 'carried';
+  if (nd === 3) return 'moe';
+  if (nd !== 2) return 'carried';
+  return 'slider';
+}
+
+// ── Projection from a GGUF, for a pack that does not exist yet ───────────────
+
+// { sliderParams, moeParams, carriedBytes, headerBytes, nSlider, nMoe, nTensors, moe }
+export function projectFromGguf(ggufPath) {
+  const g = readGgufTensors(ggufPath);
+  if (!g) return null;
+  const maxN = packMaxN();
+  const tied = !g.tensors.some(t => HEAD.test(t.name));
+  let sliderParams = 0, moeParams = 0, carriedBytes = 0, nSlider = 0, nMoe = 0;
+  for (const t of g.tensors) {
+    switch (classify(t, maxN, tied)) {
+      case 'slider': sliderParams += t.elements; nSlider++; break;
+      case 'moe':    moeParams    += t.elements; nMoe++;    break;
+      default:       carriedBytes += t.bytes;                break;
+    }
+  }
+  return {
+    source: 'gguf',
+    sliderParams, moeParams, carriedBytes,
+    headerBytes: g.dataStart,          // header + KV + tensor-info, copied into the pack verbatim
+    nSlider, nMoe, nTensors: g.tensors.length,
+    moe: nMoe > 0,
+    tied,
+    sourceBytes: g.fileSize,
+  };
+}
+
+// ── The .orkpack index, for a pack that already exists ───────────────────────
+
+// struct orkpack_entry {u32 K,N,dtype,bscale_n; u64 blob_off,blob_size,bscale_off,bf_size; f32 qerr; u32 smooth_n;}
+// 56 bytes at natural alignment. `smooth_n` was the struct's `_pad`, so the size is unchanged across
+// every pack version that has shipped — which is why the ENTRY layout needs no version switch even
+// though the FOOTER does (orkpack.js readOrkpackFooter owns that part).
+const ENTRY_BYTES = 56;
+
+// Read a pack's index — the layout the ggml-ork load path reads: two u64 of metadata offsets, then
+// n_entries of {u32 name_len, name bytes, orkpack_entry}. No blob is mapped; this is a tail read.
+// Returns null if the file is not an .orkpack we can parse.
+export function readOrkpackIndex(packPath) {
+  let fd;
+  try {
+    const f = readOrkpackFooter(packPath);
+    if (!f || !f.indexOff || !f.nEntries) return null;
+    const fileSize = f.size;
+    if (!(f.indexOff > 0 && f.indexOff < fileSize)) return null;
+
+    // Read to EOF and parse exactly nEntries — the trailing footer is simply never reached, which
+    // keeps this independent of how long the footer is in this pack's version.
+    const idxLen = fileSize - f.indexOff;
+    if (idxLen < 16) return null;
+    fd = fs.openSync(packPath, 'r');
+    const buf = Buffer.alloc(idxLen);
+    if (fs.readSync(fd, buf, 0, idxLen, f.indexOff) !== idxLen) return null;
+    const metaOff  = Number(buf.readBigUInt64LE(0));
+    const metaSize = Number(buf.readBigUInt64LE(8));
+
+    const entries = [];
+    let p = 16;
+    for (let i = 0; i < f.nEntries; i++) {
+      if (p + 4 > idxLen) break;
+      const nl = buf.readUInt32LE(p); p += 4;
+      if (nl > idxLen - p) break;
+      const name = buf.toString('utf8', p, p + nl); p += nl;
+      if (p + ENTRY_BYTES > idxLen) break;
+      entries.push({
+        name,
+        K:        buf.readUInt32LE(p),
+        N:        buf.readUInt32LE(p + 4),
+        dtype:    buf.readUInt32LE(p + 8),
+        bscaleN:  buf.readUInt32LE(p + 12),
+        blobSize: Number(buf.readBigUInt64LE(p + 24)),
+        bfSize:   Number(buf.readBigUInt64LE(p + 40)),
+        qerr:     buf.readFloatLE(p + 48),
+      });
+      p += ENTRY_BYTES;
+    }
+    return { entries, fileSize, metaOff, metaSize, version: f.version };
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch {}
+  }
+}
+
+// The same shape projectFromGguf returns, but measured off a real pack rather than projected.
+// THE ARTIFACT DECIDES: membership, tier and the carried-region size all come from the file.
+export function measureFromPack(packPath) {
+  const ix = readOrkpackIndex(packPath);
+  if (!ix || !ix.entries.length) return null;
+  let sliderParams = 0, blobBytes = 0, sidecarBytes = 0;
+  for (const e of ix.entries) {
+    sliderParams += e.K * e.N;
+    blobBytes    += e.blobSize;
+    sidecarBytes += e.bfSize + e.bscaleN * 4;
+  }
+  // Everything in the file that is not a weight blob: the embedded GGUF header/KV/tensor-info, the
+  // tensors the pack does not own, the index and the footer.
+  const carriedBytes = Math.max(0, ix.fileSize - blobBytes - sidecarBytes);
+  return {
+    source: 'pack',
+    sliderParams, moeParams: 0, carriedBytes, headerBytes: 0,
+    nSlider: ix.entries.length, nMoe: 0, nTensors: ix.entries.length,
+    moe: false,
+    packBytes: ix.fileSize,
+    // What the pack on disk ACTUALLY is, which is where the slider should start.
+    currentBpw: sliderParams > 0 ? (blobBytes * 8) / sliderParams : 0,
+  };
+}
+
+// ── bpw -> bytes ─────────────────────────────────────────────────────────────
+
+// Estimated .orkpack size at a given bits-per-weight. `plan` is a projectFromGguf/measureFromPack
+// result. MoE expert stacks are counted at the auto profile's fixed NF4 tier (4 bpw), which the
+// slider does not choose. Per-channel scale sidecars (a few floats per entry) are under 0.1% and
+// are not counted; the Bf sidecar a promoted int8 weight may carry is not counted either, because
+// WHICH weights get promoted is decided by measured qerr that does not exist until pass 1 has run.
+export function bytesAtBpw(plan, bpw) {
+  if (!plan) return null;
+  const weightBytes = (plan.sliderParams * bpw) / 8;
+  const moeBytes    = (plan.moeParams * INT4_BPW) / 8;
+  return {
+    weightBytes,
+    moeBytes,
+    carriedBytes: plan.carriedBytes + (plan.headerBytes || 0),
+    totalBytes: weightBytes + moeBytes + plan.carriedBytes + (plan.headerBytes || 0),
+  };
+}
+
+// ── bpw -> --pack-budget, exactly ────────────────────────────────────────────
+
+// ggml-ork `ork_promote_cost_mb`: promoting one int4 weight to int8 costs the blob delta (K*N/2)
+// plus, inside the Bf envelope, a full K*N sidecar the int4 form never had.
+function promoteCostMb(K, N) {
+  const blobDelta = (K * N) / 2;
+  const bf = (K % 512 === 0 && K <= 4096) ? K * N : 0;
+  return (blobDelta + bf) / MiB;
+}
+
+// Turn a target bits-per-weight into the `--pack-budget` MiB that delivers it.
+//
+// This has to be computed against the measured pack, not estimated: the budget is spent in on-disk
+// bytes (Bf included) while bpw is a property of the blobs, and the promotion set is whatever the
+// qerr ranking picks — so the mapping is model- AND measurement-dependent. Replaying the packer's
+// own greedy loop over pass 1's index is what makes it exact.
+//
+// Returns the budget in MiB, or null if the pack cannot be read / carries no qerr.
+export function budgetMbForBpw(qerrPackPath, bpw, qerrMin = 0.05) {
+  const ix = readOrkpackIndex(qerrPackPath);
+  if (!ix || !ix.entries.length) return null;
+  const total = ix.entries.reduce((a, e) => a + e.K * e.N, 0);
+  if (!total) return null;
+  if (bpw <= INT4_BPW) return 0;
+
+  // bpw = (4*(P - Pp) + 8*Pp)/P  =>  Pp = P*(bpw - 4)/4
+  const wantPromoted = Math.min(total, (total * (bpw - INT4_BPW)) / 4);
+
+  const ranked = ix.entries.filter(e => e.qerr >= qerrMin).sort((a, b) => b.qerr - a.qerr);
+  if (!ranked.length) return null;
+
+  let promoted = 0, spent = 0;
+  for (const e of ranked) {
+    if (promoted >= wantPromoted) break;
+    spent += promoteCostMb(e.K, e.N);
+    promoted += e.K * e.N;
+  }
+  // A hair of slack so the packer's own `spent + mb > budget` comparison admits the last entry
+  // despite float accumulation order, and no more (zero headroom admits nothing extra).
+  return spent > 0 ? spent * (1 + 1e-9) + 1e-6 : 0;
+}
+
+// ── The endpoint payload ─────────────────────────────────────────────────────
+
+// Everything the Quantization tab needs to render the bpw control for one source model.
+// `known: false` means the size estimate cannot be shown (unreadable/placeholder GGUF) — the slider
+// still works, because bpw is meaningful without it; only the megabytes are withheld.
+export function quantPlan(ggufAbs, packAbs) {
+  const fromPack = packAbs && fs.existsSync(packAbs) ? measureFromPack(packAbs) : null;
+  const plan = fromPack || projectFromGguf(ggufAbs);
+  if (!plan) return { known: false, maxN: packMaxN() };
+  return {
+    known: plan.sliderParams > 0,
+    source: plan.source,
+    maxN: packMaxN(),
+    sliderParams: plan.sliderParams,
+    moeParams: plan.moeParams,
+    moe: plan.moe,
+    tied: plan.tied ?? null,
+    nSlider: plan.nSlider,
+    nMoe: plan.nMoe,
+    nTensors: plan.nTensors,
+    carriedBytes: plan.carriedBytes + (plan.headerBytes || 0),
+    sourceBytes: plan.sourceBytes ?? null,
+    packBytes: plan.packBytes ?? null,
+    currentBpw: plan.currentBpw ?? null,
+    // Precomputed so the client does the same arithmetic the server would.
+    bytesAt: { 4: bytesAtBpw(plan, 4).totalBytes, 8: bytesAtBpw(plan, 8).totalBytes },
+  };
+}

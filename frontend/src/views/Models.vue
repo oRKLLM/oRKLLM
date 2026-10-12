@@ -1287,13 +1287,71 @@
                   </template>
                 </div>
 
-                <template v-if="quantMixed && quantBits === 4">
-                  <div class="text-caption font-weight-medium mb-1">
-                    Promotion budget &mdash; {{ quantBudget }} MiB
-                  </div>
-                  <div class="text-caption text-grey mb-2">How much extra pack size promotion may spend.</div>
-                  <v-slider v-model="quantBudget" :min="1" :max="512" :step="1" density="compact" hide-details class="mb-4" />
-                </template>
+                <!-- Bits per weight. The slider's unit is the one the quality ladder is indexed by and the
+                     one that means the same thing on a 1.7B and a 27B; the megabytes are a consequence of
+                     it and of the model, so they are SHOWN below rather than entered here. -->
+                <div class="d-flex align-center justify-space-between mb-1">
+                  <span class="text-caption font-weight-medium">Bits per weight</span>
+                  <span class="text-caption font-weight-bold" data-test="quant-bpw-value">{{ quantBpw.toFixed(2) }} bpw</span>
+                </div>
+                <v-slider
+                  v-model="quantBpw"
+                  :min="quantBpwMin" :max="8" :step="0.05"
+                  :disabled="!quantBpwAdjustable"
+                  density="compact" hide-details class="mb-1"
+                  data-test="quant-bpw-slider"
+                  aria-label="Bits per weight"
+                >
+                  <template #prepend><span class="text-caption text-grey">{{ quantBpwMin.toFixed(1) }}</span></template>
+                  <template #append><span class="text-caption text-grey">8.0</span></template>
+                </v-slider>
+                <div class="text-caption text-grey mb-3">
+                  <template v-if="quantBpwAdjustable">
+                    4.0 is every weight at int4. Above it the worst-quantized weights are promoted to int8
+                    until the pack averages the rate you choose &mdash; 4.0 to about 4.9 bpw is the span the
+                    quality ladder was measured over.
+                  </template>
+                  <template v-else-if="quantBits === 8">
+                    Fixed: an int8 pack is 8 bits per weight throughout.
+                  </template>
+                  <template v-else>
+                    Fixed at 4.0 without mixed precision &mdash; nothing is promoted above the base tier.
+                  </template>
+                </div>
+
+                <!-- The megabytes, derived. Honest about what the slider does NOT move: a .orkpack also
+                     carries the GGUF header and every tensor the pack does not own, at the source's own
+                     precision, and that term is several GiB on a large model. -->
+                <v-sheet rounded="lg" class="pa-3 mb-4 bg-transparent border" data-test="quant-size">
+                  <template v-if="quantPlanLoading">
+                    <div class="text-caption text-grey">Reading the source's tensor table&hellip;</div>
+                  </template>
+                  <template v-else-if="quantEstimate">
+                    <div class="d-flex align-center justify-space-between">
+                      <span class="text-caption text-grey">Estimated .orkpack</span>
+                      <span class="text-body-2 font-weight-bold">&asymp; {{ formatBytes(quantEstimate.totalBytes) }}</span>
+                    </div>
+                    <div class="text-caption text-grey mt-1">
+                      {{ formatBytes(quantEstimate.weightBytes) }} of packed weights
+                      ({{ formatCount(quantPlan.sliderParams) }} across {{ quantPlan.nSlider }} tensors)
+                      &middot; {{ formatBytes(quantEstimate.carriedBytes) }} carried at the source's own precision,
+                      which the slider does not move.
+                      <template v-if="quantPlan.moe">
+                        Expert weights ({{ formatCount(quantPlan.moeParams) }}) are packed at the automatic MoE
+                        profile's NF4 tier, not at this rate.
+                      </template>
+                    </div>
+                    <div class="text-caption text-grey mt-1 font-italic">
+                      An estimate: a promoted weight can carry an extra int8 sidecar, so the file may land above this.
+                    </div>
+                  </template>
+                  <template v-else>
+                    <div class="text-caption text-grey">
+                      Size estimate unavailable &mdash; this source's tensor table could not be read. The
+                      bits-per-weight choice still applies; only the megabytes are unknown.
+                    </div>
+                  </template>
+                </v-sheet>
 
                 <v-alert
                   v-if="quantBits === 4 && quantSelected && !quantSelected.uncompressed"
@@ -1392,7 +1450,13 @@ export default {
     quantModel: null,
     quantBits: 4,
     quantMixed: true,
-    quantBudget: 8,
+    // BITS PER WEIGHT, not a byte budget. A megabyte figure is unreadable without the model — the old
+    // slider's 512 MiB maximum bought 4.18 bpw on a 27B and several copies of a 1.7B — whereas bpw is
+    // the unit the measured quality ladder is indexed by and means the same thing on any model. The
+    // size falls out of it (quantEstimate), per model, from /quantize/plan.
+    quantBpw: 4.5,
+    quantPlan: null,        // { known, sliderParams, carriedBytes, moeParams, currentBpw, … } or null
+    quantPlanLoading: false,
     quantBusy: false,
     quantJob: null,      // { name, status, progress, label } polled from /library
     quantTimer: null,
@@ -1529,6 +1593,26 @@ export default {
     quantSelected() {
       return this.quantSources.find(m => m.id === this.quantModel) || null;
     },
+    // The slider "extends over the base weight": its floor is the tier's own rate and it only goes up
+    // from there. int8 has no tier above it, so there is nothing to extend over.
+    quantBpwMin() { return this.quantBits === 8 ? 8 : 4; },
+    // Only a mixed int4 build has anything to choose: promotion is what moves the rate, and it is
+    // ranked by a per-weight error only a completed pass measures.
+    quantBpwAdjustable() { return this.quantBits === 4 && this.quantMixed; },
+    // Estimated .orkpack size at the chosen rate — the same arithmetic as src/quant_plan.js
+    // bytesAtBpw, whose `bytesAt` endpoints in the response are the cross-check that the two agree.
+    // The slider moves ONE of these three terms.
+    quantEstimate() {
+      const p = this.quantPlan;
+      if (!p || !p.known) return null;
+      const weightBytes = (p.sliderParams * this.quantBpw) / 8;
+      const moeBytes = (p.moeParams * 4) / 8;      // the auto MoE profile's NF4 tier — fixed by model type
+      return {
+        weightBytes,
+        carriedBytes: p.carriedBytes,
+        totalBytes: weightBytes + moeBytes + p.carriedBytes,
+      };
+    },
     isDark() {
       return this.themeName === 'customDarkTheme';
     },
@@ -1650,6 +1734,13 @@ export default {
       if (val === 'downloader') this.refreshDownloadQueue();
       if (val === 'quantize') this.fetchLibrary();
     },
+    // The size estimate is a property of the MODEL (its packable weights and its carried region), so
+    // it is refetched whenever the source changes and cleared while it is in flight.
+    quantModel() { this.fetchQuantPlan(); },
+    // The slider's floor is the tier's base rate; keep the value inside the range the current tier
+    // and mixed setting actually express, so a disabled slider still READS as the truth (int8 = 8.0).
+    quantBits() { this.clampQuantBpw(); },
+    quantMixed() { this.clampQuantBpw(); },
     searchOpen(open) {
       // Lazy-load files for each newly-expanded repo accordion.
       for (const repoId of open) this.loadRepoFiles(repoId);
@@ -1667,6 +1758,50 @@ export default {
       if (!m.uncompressed && this.quantBits === 4) this.quantBits = 8;
     },
 
+    // Keep the bpw value expressible by the current tier. int8 is 8.0 and plain int4 is 4.0 — neither
+    // is adjustable, but both are shown, because "8.0 bpw" is the answer to the question the slider
+    // asks and blanking it would just raise it again.
+    clampQuantBpw() {
+      if (this.quantBits === 8) { this.quantBpw = 8; return; }
+      if (!this.quantMixed) { this.quantBpw = 4; return; }
+      if (this.quantBpw <= 4) this.quantBpw = 4.5;
+      if (this.quantBpw > 8) this.quantBpw = 8;
+    },
+
+    // The per-model numbers behind the size readout: how many weights the pack will own and how many
+    // bytes travel with them whatever the rate. A source we cannot parse is not an error — the bpw
+    // choice is still meaningful — so it clears the estimate rather than raising anything.
+    async fetchQuantPlan() {
+      this.quantPlan = null;
+      if (!this.quantModel) return;
+      const want = this.quantModel;
+      this.quantPlanLoading = true;
+      try {
+        const res = await fetch(`/api/admin/quantize/plan?model=${encodeURIComponent(want)}`);
+        const data = await this._readJson(res);
+        if (this.quantModel !== want) return;          // the user moved on while this was in flight
+        this.quantPlan = res.ok ? data : null;
+        // A pack already on disk is the authority on what it is — start the slider where it sits so
+        // "rebuild at a higher rate" starts from the current one rather than from a default.
+        if (res.ok && data.currentBpw > 0 && this.quantBpwAdjustable) {
+          this.quantBpw = Math.min(8, Math.max(4, Math.round(data.currentBpw * 20) / 20));
+        }
+      } catch {
+        if (this.quantModel === want) this.quantPlan = null;
+      } finally {
+        if (this.quantModel === want) this.quantPlanLoading = false;
+      }
+    },
+
+    // Parameter counts, which run to billions — "24.4 B" reads; 24400000000 does not.
+    formatCount(n) {
+      if (!(n > 0)) return '0';
+      if (n >= 1e9) return `${(n / 1e9).toFixed(2)} B`;
+      if (n >= 1e6) return `${(n / 1e6).toFixed(1)} M`;
+      if (n >= 1e3) return `${(n / 1e3).toFixed(1)} K`;
+      return String(n);
+    },
+
     async startQuantize() {
       if (!this.quantModel) return;
       this.quantBusy = true;
@@ -1678,7 +1813,9 @@ export default {
             model: this.quantModel,
             bits: this.quantBits,
             mixed: this.quantBits === 4 && this.quantMixed,
-            budgetMB: this.quantBudget,
+            // bpw, not megabytes: converting it to ggml-ork's --pack-budget needs pass 1's measured
+            // per-weight error, so the server does it between the passes (src/conversion.js).
+            bpw: this.quantBpw,
           }),
         });
         const data = await this._readJson(res);
