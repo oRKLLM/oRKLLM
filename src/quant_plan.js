@@ -250,6 +250,67 @@ export function budgetMbForBpw(qerrPackPath, bpw, qerrMin = 0.05) {
   return spent > 0 ? spent * (1 + 1e-9) + 1e-6 : 0;
 }
 
+// ── Did the pack come out at the rate that was asked for? ────────────────────
+
+// Compare a requested bits-per-weight against what the finished pack actually IS, and say how to
+// read the difference. `delivered` comes from measureFromPack — blob bits over packed params — so
+// this knows nothing about ordering, tiers, or how promotion was selected. That is the whole point:
+// it stays true however the packer's selection changes.
+//
+// WHY IT EXISTS. Between the slider and the pack sits a translation that this repo does not own:
+// today a bpw target becomes `--pack-budget` MiB by replaying the packer's promotion loop, and the
+// plan of record is for ggml-ork to take bpw directly (`--pack-bpw`) and own the stopping rule
+// itself. Either way the question is the same one, and it is deliberately asked of the ARTIFACT
+// rather than of the mechanism, so it keeps meaning the same thing across that change:
+//
+//   DRIFTED  promotion happened, but not the amount that was asked for. A wrong number.
+//   IGNORED  nothing was promoted at all. Whatever governs the rate did not read the request, so the
+//            pack sits at the base tier while the UI reports what the user chose — a CONFIDENT wrong
+//            number, the worse of the two, and otherwise completely silent.
+//
+// The base-tier case is named separately because it is the one a reader needs a diagnosis for rather
+// than just two numbers. The diagnosis names a likely cause without asserting it: as of writing, the
+// way this happens is ggml-ork's `ork_i4_force_i8` answering from its EXCLUSIVE explicit-list clause
+// (`--pack-promote` / ORK_I4_INT8_LAYERS), which returns before `ork_qerr_promote_set()` and leaves
+// `--pack-budget` read by nothing. Once the packer takes bpw directly, the same symptom will mean
+// the flag did not take effect. The symptom is the stable part; the cause is a hint, not a claim.
+//
+// NEVER AN ERROR. A divergence can be perfectly legitimate (a selection policy whose natural stopping
+// point is simply a different rate), and failing a conversion that produced a good pack, over a
+// reporting mismatch, would be a worse bug than the one this detects. Report and continue.
+//
+// `tol` is 0.1 bpw by default: promotion is granular (whole weights), and one weight is ~0.01 bpw on
+// a 400-tensor model and ~0.08 on a very small one, so a tighter threshold would cry wolf over
+// arithmetic that is working correctly.
+export function bpwDelivery(requested, delivered, tol = 0.1) {
+  if (!(delivered > 0)) return { status: 'unknown', gap: null };
+  if (!(requested > 0)) return { status: 'unrequested', gap: null, delivered };
+  const gap = delivered - requested;
+  if (Math.abs(gap) <= tol) return { status: 'ok', gap, requested, delivered };
+  // Nothing was promoted at all, though more than the base tier was asked for.
+  if (Math.abs(delivered - INT4_BPW) < 0.01) return { status: 'ignored', gap, requested, delivered };
+  return { status: 'drifted', gap, requested, delivered };
+}
+
+// The one-line human reading of the above. Returned rather than logged so the decision stays pure
+// and testable, and the caller owns where it goes.
+export function bpwDeliveryMessage(model, d) {
+  switch (d.status) {
+    case 'unrequested': return `[quantize] ${model}: pack is ${d.delivered.toFixed(2)} bpw`;
+    case 'ok':          return `[quantize] ${model}: asked ${d.requested.toFixed(2)} bpw, got ${d.delivered.toFixed(2)}`;
+    case 'ignored':     return `[quantize] ${model}: asked ${d.requested.toFixed(2)} bpw, got ${d.delivered.toFixed(2)} — `
+                             + 'nothing was promoted, so the rate the UI shows is not the rate on disk. The pack itself is '
+                             + 'fine; the bits-per-weight control is not steering it. Likely cause: the request reached '
+                             + 'nothing that reads it — e.g. a promotion set fixed by the exclusive explicit-list clause '
+                             + '(pack-promote / ORK_I4_INT8_LAYERS), which leaves the budget unread.';
+    case 'drifted':     return `[quantize] ${model}: asked ${d.requested.toFixed(2)} bpw, got ${d.delivered.toFixed(2)} `
+                             + `(${d.gap > 0 ? '+' : ''}${d.gap.toFixed(2)}) — promotion ran but stopped somewhere else. `
+                             + 'Either the selection cannot land on this rate for this model, or the rule that converts '
+                             + 'the request into a stopping point no longer matches the one the packer applies.';
+    default:            return `[quantize] ${model}: could not measure the finished pack's bits per weight`;
+  }
+}
+
 // ── The endpoint payload ─────────────────────────────────────────────────────
 
 // Everything the Quantization tab needs to render the bpw control for one source model.
