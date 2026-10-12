@@ -20,7 +20,7 @@ import { isOrkpackStub, getGgufArchitecture, parseGgufShard } from './gguf.js';
 import { orkpackPathFor, isOrkpackUsable, readOrkpackFooter, recordOrkFmt, llamaRuntimeTag, orkEnvFrom,
          writeOrkpackProvenance, provPathFor } from './orkpack.js';
 import { consolidateSplitGguf, consolidatedPathFor, splitGroupReady } from './gguf_merge.js';
-import { budgetMbForBpw } from './quant_plan.js';
+import { budgetMbForBpw, measureFromPack, bpwDelivery, bpwDeliveryMessage } from './quant_plan.js';
 
 export { orkpackPathFor };
 
@@ -47,6 +47,34 @@ function promoteBudgetMb(qerrPack, cfg) {
     console.warn(`[conversion] pass 1 recorded no rankable qerr — cannot resolve ${cfg.bpw} bpw to a budget`);
   }
   return 8;
+}
+
+// Did the finished pack come out at the rate that was asked for?
+//
+// The translation above is the weak joint in this chain: it replays the packer's CURRENT promotion
+// loop, and the packer is free to change that loop. One way it can change is not merely wrong but
+// SILENT — if the promotion set comes from ggml-ork's exclusive explicit-list clause, `--pack-budget`
+// is read by nothing and the pack lands wherever that list puts it while the UI reports the rate the
+// user chose. Nothing else in this repo would notice.
+//
+// So measure the artifact. `measureFromPack` reads blob bits over packed params straight off the
+// finished file and knows nothing about ordering, tiers or selection policy, which is exactly why it
+// stays true as those change — and it is the only check that would catch promoteBudgetMb's cost
+// mirror drifting from ggml-ork's own `ork_promote_cost_mb`.
+//
+// REPORTS, NEVER FAILS. A divergence can be legitimate, and turning a conversion that produced a
+// good pack into an error over a reporting mismatch would be the worse bug. Everything here is
+// best-effort and swallowed: a pack that cannot be re-read is worth one line, not a lost build.
+function reportBpwDelivered(rel, pack, cfg) {
+  try {
+    const m = measureFromPack(pack);
+    const d = bpwDelivery(Number(cfg.bpw), m ? m.currentBpw : 0);
+    const line = bpwDeliveryMessage(rel, d);
+    if (d.status === 'ok' || d.status === 'unrequested') console.log(line);
+    else console.warn(line);
+  } catch (e) {
+    console.warn(`[quantize] ${rel}: could not verify the pack's bits per weight — ${e.message}`);
+  }
 }
 
 // Architectures that have no .orkpack of their own, detected up front so we skip at enqueue time
@@ -497,6 +525,7 @@ export class ConversionScheduler {
         try { fs.renameSync(qerrAt, pack); } catch {}   // keep the uniform pack; never leave nothing servable
         return { ok: false, error: 'pass 2 failed; kept the uniform pack' };
       }
+      reportBpwDelivered(rel, pack, cfg);   // measure the artifact, never fail on it
       return { ok: true, bits, mixed };
     } finally {
       clean();

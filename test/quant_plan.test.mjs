@@ -14,6 +14,7 @@ import { writeGguf, f16 } from './fixtures/gguf.mjs';
 import { readGgufTensors } from '../src/gguf.js';
 import {
   projectFromGguf, bytesAtBpw, readOrkpackIndex, measureFromPack, budgetMbForBpw, packMaxN,
+  bpwDelivery, bpwDeliveryMessage,
 } from '../src/quant_plan.js';
 
 const GiB = 1073741824;
@@ -235,4 +236,62 @@ test('budgetMbForBpw replays the packer greedy loop, Bf included', () => {
   // ranking does rather than inventing headroom.
   assert.ok(Math.abs(budgetMbForBpw(f, 8.0) - b2) < 1e-4);
   assert.equal(budgetMbForBpw(path.join(tmp, 'nope.orkpack'), 6), null);
+});
+
+// The insurance check. The bpw -> --pack-budget translation replays the packer's CURRENT promotion
+// loop, and the packer may change it. One way it can change is silent, so the finished pack is
+// measured and compared against what was asked for.
+test('bpwDelivery separates a wrong number from a CONFIDENT wrong number', () => {
+  // Granularity: promotion moves whole weights, so a small gap is the arithmetic working.
+  assert.equal(bpwDelivery(4.75, 4.75).status, 'ok');
+  assert.equal(bpwDelivery(4.75, 4.70).status, 'ok');
+  assert.equal(bpwDelivery(4.75, 4.82).status, 'ok');
+
+  // IGNORED — the pack sits exactly at the base tier though more was asked for. That is the
+  // signature of the budget being read by nothing (ggml-ork's exclusive explicit-list clause), and
+  // it is the case that is otherwise silent, so it gets its own status and its own diagnosis.
+  const ignored = bpwDelivery(4.75, 4.0);
+  assert.equal(ignored.status, 'ignored');
+  assert.match(bpwDeliveryMessage('m.gguf', ignored), /nothing was promoted/);
+  assert.match(bpwDeliveryMessage('m.gguf', ignored), /pack-promote/);
+
+  // DRIFTED — promotion happened, just not the amount the budget was computed to buy.
+  const drifted = bpwDelivery(4.75, 5.60);
+  assert.equal(drifted.status, 'drifted');
+  assert.match(bpwDeliveryMessage('m.gguf', drifted), /promotion ran but stopped somewhere else/);
+  // Overshoot reads as plainly as undershoot — the error is not one-directional.
+  assert.match(bpwDeliveryMessage('m.gguf', drifted), /\+0\.85/);
+
+  // Both numbers and the model name are always in the line, so a conversion log reads as-is.
+  for (const d of [bpwDelivery(4.75, 4.75), ignored, drifted]) {
+    const line = bpwDeliveryMessage('qwen3-1.7b.gguf', d);
+    assert.match(line, /qwen3-1\.7b\.gguf/);
+    assert.match(line, /4\.75/);
+  }
+
+  // Degrades quietly: an unmeasurable pack and a build with no bpw asked for are both non-events.
+  assert.equal(bpwDelivery(4.75, 0).status, 'unknown');
+  assert.equal(bpwDelivery(NaN, 4.0).status, 'unrequested');
+  assert.match(bpwDeliveryMessage('m.gguf', bpwDelivery(NaN, 4.0)), /pack is 4\.00 bpw/);
+});
+
+test('bpwDelivery reads the rate off a real pack, whatever selected it', () => {
+  // measureFromPack is blob bits over packed params — it knows nothing about ordering or tiers,
+  // which is the property that makes it survive a change of promotion scheme.
+  const f = path.join(tmp, 'delivered.orkpack');
+  orkpack(f, [
+    { name: 'a', K: 1024, N: 512, bpw: 8 },
+    { name: 'b', K: 1024, N: 512, bpw: 4 },
+    { name: 'c', K: 1024, N: 512, bpw: 4 },
+    { name: 'd', K: 1024, N: 512, bpw: 4 },
+  ]);
+  const delivered = measureFromPack(f).currentBpw;
+  assert.equal(delivered, 5);
+  assert.equal(bpwDelivery(5.0, delivered).status, 'ok');
+  assert.equal(bpwDelivery(4.0, delivered).status, 'drifted');   // asked for none, got a promotion
+
+  // A uniform pack against a raised request is the IGNORED signature, end to end from a real file.
+  const uniform = path.join(tmp, 'delivered-uniform.orkpack');
+  orkpack(uniform, [{ name: 'a', K: 1024, N: 512, bpw: 4 }, { name: 'b', K: 1024, N: 512, bpw: 4 }]);
+  assert.equal(bpwDelivery(4.75, measureFromPack(uniform).currentBpw).status, 'ignored');
 });
