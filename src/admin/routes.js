@@ -12,7 +12,8 @@ import { spawn, spawnSync } from 'child_process';
 import { getStats, clearSessionStats, clearAllTimeStats } from '../stats.js';
 import { getMetricsSnapshot } from '../monitor.js';
 import { supportsThinkingToggle, isTrailingGgufShard, isOrkpackStub, ggufDisplayName, parseGgufShard } from '../gguf.js';
-import { isOrkpackPath, supersededByPack, stubPathFor, sourceGgufFor } from '../orkpack.js';
+import { isOrkpackPath, supersededByPack, stubPathFor, sourceGgufFor, orkpackPathFor } from '../orkpack.js';
+import { quantPlan, INT4_BPW, INT8_BPW } from '../quant_plan.js';
 import {
   dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings, dbDeleteModelSettings,
   dbCreateUser, dbGetUserById, dbGetUserByUsername, dbGetUserBySubject, dbListUsers, dbUpdateUser, dbUsersEmpty,
@@ -1552,12 +1553,41 @@ export default async function adminRoutes(fastify, options) {
   // stamped into its footer and a serving run whose ORK_QUANT disagrees has the pack refused as stale
   // (rebuild, or abort() over ORK_ORKPACK_MAX_REGEN_MB). Writing npu_quant here is what makes the idle
   // scheduler and the load path agree with what the user just built, instead of quietly rebuilding it.
+  // GET /api/admin/quantize/plan?model=<rel .gguf> — the size arithmetic behind the tab's
+  // bits-per-weight control: which of the model's tensors the pack actually owns, how many weights
+  // that is, and how many bytes travel with them regardless of bpw.
+  //
+  // It exists because a megabyte budget is unreadable without the model. The old slider's 512 MiB
+  // maximum buys 4.18 bpw on a 27B and several copies of a 1.7B — the same number meaning opposite
+  // things. bpw is model-independent; the megabytes are what has to be computed per model, so the
+  // control is per-model and this is where it gets its numbers.
+  //
+  // Cheap: a GGUF's tensor table is in its header, a pack's index is at its tail. Neither maps a blob.
+  fastify.get('/quantize/plan', async (request, reply) => {
+    const model = String(request.query?.model || '');
+    if (!model) return reply.status(400).send({ error: 'model required' });
+    if (model.includes('..')) return reply.status(400).send({ error: 'invalid path' });
+    if (!/\.gguf$/i.test(model)) return reply.status(400).send({ error: 'quantization source must be a .gguf' });
+    const abs = path.join(MODELS_DIR, model);
+    if (!fs.existsSync(abs)) return reply.status(404).send({ error: 'no such model' });
+    // When a pack is already there it is the authority — membership, tier and the carried region all
+    // come from the file rather than from a projection of what the packer would do.
+    return { model, ...quantPlan(abs, orkpackPathFor(abs)) };
+  });
+
   fastify.post('/quantize', async (request, reply) => {
-    const { model, bits, mixed, budgetMB, qerrMin } = request.body || {};
+    const { model, bits, mixed, bpw, budgetMB, qerrMin } = request.body || {};
     if (!model || typeof model !== 'string') return reply.status(400).send({ error: 'model required' });
     if (model.includes('..')) return reply.status(400).send({ error: 'invalid path' });
     if (!/\.gguf$/i.test(model)) return reply.status(400).send({ error: 'quantization source must be a .gguf' });
     const nbits = Number(bits) === 8 ? 8 : 4;
+    // The UI asks in BITS PER WEIGHT and the packer is told MEBIBYTES, and the conversion between
+    // them is not arithmetic the client can do: --pack-budget is spent in on-disk bytes (a promoted
+    // int8 weight inside the Bf envelope costs 3x its blob delta) over a promotion set that measured
+    // qerr picks, and that measurement does not exist until pass 1 has run. So bpw travels down to
+    // the scheduler intact and is resolved there, against pass 1's own index.
+    const nbpw = Number(bpw);
+    const wantBpw = Number.isFinite(nbpw) && nbpw >= INT4_BPW && nbpw <= INT8_BPW ? nbpw : null;
 
     const sched = getConversionScheduler();
     if (!sched) return reply.status(503).send({ error: 'conversion scheduler unavailable' });
@@ -1566,10 +1596,10 @@ export default async function adminRoutes(fastify, options) {
     dbSetModelSettings(model, { ...(dbGetModelSettings(model) || {}),
       npu_quant: nbits === 8 ? 'int8' : 'int4', pack_mixed: !!mixed });
 
-    sched.quantize(model, { bits: nbits, mixed: !!mixed, budgetMB, qerrMin })
+    sched.quantize(model, { bits: nbits, mixed: !!mixed, bpw: wantBpw, budgetMB, qerrMin })
       .then(r => { if (!r.ok) console.warn(`[quantize] ${model}: ${r.error}`); })
       .catch(e => console.warn(`[quantize] ${model}: ${e.message}`));
-    return reply.status(202).send({ started: true, model, bits: nbits, mixed: !!mixed });
+    return reply.status(202).send({ started: true, model, bits: nbits, mixed: !!mixed, bpw: wantBpw });
   });
 
   fastify.post('/eagle3/embeddings', async (request, reply) => {

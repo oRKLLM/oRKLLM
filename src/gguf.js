@@ -81,6 +81,9 @@ class Reader {
     }
     this.skip(SCALAR_BYTES[type] ?? 0);
   }
+  // Absolute file offset of the cursor — the tensor-info section's end, which is where
+  // the (aligned) tensor data starts.
+  absPos() { return this.filePos - (this.len - this.pos); }
 }
 
 // Read a single string metadata value by key. Returns the string, or null if the
@@ -224,4 +227,69 @@ const SHARD_SUFFIX_RE = /-\d{5}-of-\d{5}(?=\.(?:gguf|orkpack)$)/i;
 // One label, stable across the gguf -> pack transition, is the whole job of a display name.
 export function ggufDisplayName(name) {
   return String(name).replace(SHARD_SUFFIX_RE, '');
+}
+
+// ── Tensor table ─────────────────────────────────────────────────────────────
+// Walk a GGUF's tensor-info section and return every tensor with its shape, its
+// byte span in the file, and the bit-width that span implies.
+//
+// SIZES COME FROM THE OFFSETS, NOT FROM A TYPE TABLE. A GGUF stores each tensor's
+// start offset into one contiguous data blob, written in ascending order and padded
+// to `general.alignment`. So tensor i occupies `offset[i+1] - offset[i]` bytes (the
+// last one runs to EOF). That is exact — including the padding, which a type table
+// would miss — and, more to the point, it needs no table at all: every new ggml
+// block type (TURBO*, NVFP4, MXFP4 …) would otherwise have to be transcribed here
+// and would silently mis-size the day one was added upstream.
+//
+// `bits` falls out of the same arithmetic (bytes * 8 / elements), which is the
+// quantity ggml-ork's own `ork_src_type_bits()` returns — it is what decides whether
+// a tensor is packable at all (a sub-5-bit source is refused).
+//
+// Returns null if the file is not a GGUF or cannot be parsed.
+export function readGgufTensors(filePath) {
+  let fd;
+  try {
+    const fileSize = fs.statSync(filePath).size;
+    fd = fs.openSync(filePath, 'r');
+    const r = new Reader(fd);
+    if (r.u32() !== GGUF_MAGIC) return null;
+    r.u32();                       // version
+    const nTensors = r.u64();
+    const kvCount  = r.u64();
+    let alignment = 32;            // GGUF default when general.alignment is absent
+    for (let i = 0; i < kvCount; i++) {
+      const k = r.str();
+      const type = r.u32();
+      if (k === 'general.alignment' && (type === T.UINT32 || type === T.INT32)) alignment = r.u32() || 32;
+      else r.skipValue(type);
+    }
+    const tensors = [];
+    for (let i = 0; i < nTensors; i++) {
+      const name = r.str();
+      const nd = r.u32();
+      const dims = [];
+      for (let d = 0; d < nd; d++) dims.push(r.u64());
+      r.u32();                     // ggml_type — deliberately unused; see the note above
+      const offset = r.u64();
+      let elements = 1;
+      for (const d of dims) elements *= d;
+      tensors.push({ name, dims, offset, elements });
+    }
+    const infoEnd = r.absPos();
+    const dataStart = Math.ceil(infoEnd / alignment) * alignment;
+    const dataBytes = Math.max(0, fileSize - dataStart);
+
+    // Byte span per tensor, from the gaps between consecutive offsets.
+    const byOffset = [...tensors].sort((a, b) => a.offset - b.offset);
+    for (let i = 0; i < byOffset.length; i++) {
+      const end = i + 1 < byOffset.length ? byOffset[i + 1].offset : dataBytes;
+      byOffset[i].bytes = Math.max(0, end - byOffset[i].offset);
+      byOffset[i].bits = byOffset[i].elements > 0 ? (byOffset[i].bytes * 8) / byOffset[i].elements : 0;
+    }
+    return { tensors, dataStart, dataBytes, fileSize, alignment };
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch {}
+  }
 }

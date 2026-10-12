@@ -20,8 +20,34 @@ import { isOrkpackStub, getGgufArchitecture, parseGgufShard } from './gguf.js';
 import { orkpackPathFor, isOrkpackUsable, readOrkpackFooter, recordOrkFmt, llamaRuntimeTag, orkEnvFrom,
          writeOrkpackProvenance, provPathFor } from './orkpack.js';
 import { consolidateSplitGguf, consolidatedPathFor, splitGroupReady } from './gguf_merge.js';
+import { budgetMbForBpw } from './quant_plan.js';
 
 export { orkpackPathFor };
+
+// The pass-2 promotion budget in MiB, i.e. ggml-ork's `--pack-budget`.
+//
+// The UI asks for BITS PER WEIGHT, which is the unit the measured quality ladder is indexed by and
+// the only one that means the same thing on a 1.7B and a 27B. Converting it to a byte budget is not
+// client-side arithmetic: the budget is spent in ON-DISK bytes (a promoted int8 weight inside the
+// K%512==0 && K<=4096 envelope also gains a Bf sidecar, so it costs up to 3x its blob delta) and it
+// is spent on whichever weights the qerr ranking picks — a measurement that only exists once pass 1
+// has written its pack. Here, between the passes, it does exist, so the conversion is exact:
+// budgetMbForBpw replays the packer's own greedy loop over that index.
+//
+// Precedence: an explicit budgetMB (the API's older shape, and any non-UI caller) > a bpw target >
+// the historical 8 MiB default.
+function promoteBudgetMb(qerrPack, cfg) {
+  if (cfg.budgetMB != null) return cfg.budgetMB;
+  if (cfg.bpw != null) {
+    const mb = budgetMbForBpw(qerrPack, Number(cfg.bpw), cfg.qerrMin ?? 0.05);
+    if (mb != null) {
+      console.log(`[conversion] ${cfg.bpw} bpw -> --pack-budget ${mb.toFixed(2)} MiB (ranked on pass 1's qerr)`);
+      return mb;
+    }
+    console.warn(`[conversion] pass 1 recorded no rankable qerr — cannot resolve ${cfg.bpw} bpw to a budget`);
+  }
+  return 8;
+}
 
 // Architectures that have no .orkpack of their own, detected up front so we skip at enqueue time
 // (never spawn a doomed conversion that just churns the NPU):
@@ -464,7 +490,7 @@ export class ConversionScheduler {
       try { fs.renameSync(pack + '.gguf', qerrAt + '.gguf'); } catch {}
       const p2 = ['--pack-bits', String(bits), '--pack-mixed',
                   '--pack-qerr-source', qerrAt,
-                  '--pack-budget',   String(cfg.budgetMB ?? 8),
+                  '--pack-budget',   String(promoteBudgetMb(qerrAt, cfg)),
                   '--pack-qerr-min', String(cfg.qerrMin ?? 0.05)];
       if (cfg.promote) p2.push('--pack-promote', String(cfg.promote));
       if (!await this._spawnBuild(rel, env, p2, 'pass 2 of 2 - promoting')) {
