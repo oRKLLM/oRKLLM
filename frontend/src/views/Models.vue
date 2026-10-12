@@ -1455,6 +1455,11 @@ export default {
     // the unit the measured quality ladder is indexed by and means the same thing on any model. The
     // size falls out of it (quantEstimate), per model, from /quantize/plan.
     quantBpw: 4.5,
+    // The last rate the user actually chose, so switching away to a tier that PINS the slider (int8
+    // at 8.0, plain int4 at 4.0) and back restores their choice. Without it, int8 → int4-mixed
+    // inherits 8.0 — a legal value that quietly means "promote every weight", which is not what
+    // picking int4 asked for.
+    quantBpwMixed: 4.5,
     quantPlan: null,        // { known, sliderParams, carriedBytes, moeParams, currentBpw, … } or null
     quantPlanLoading: false,
     quantBusy: false,
@@ -1741,6 +1746,7 @@ export default {
     // and mixed setting actually express, so a disabled slider still READS as the truth (int8 = 8.0).
     quantBits() { this.clampQuantBpw(); },
     quantMixed() { this.clampQuantBpw(); },
+    quantBpw(v) { if (this.quantBpwAdjustable) this.quantBpwMixed = v; },
     searchOpen(open) {
       // Lazy-load files for each newly-expanded repo accordion.
       for (const repoId of open) this.loadRepoFiles(repoId);
@@ -1764,8 +1770,7 @@ export default {
     clampQuantBpw() {
       if (this.quantBits === 8) { this.quantBpw = 8; return; }
       if (!this.quantMixed) { this.quantBpw = 4; return; }
-      if (this.quantBpw <= 4) this.quantBpw = 4.5;
-      if (this.quantBpw > 8) this.quantBpw = 8;
+      this.quantBpw = Math.min(8, Math.max(4, this.quantBpwMixed || 4.5));
     },
 
     // The per-model numbers behind the size readout: how many weights the pack will own and how many
@@ -1783,8 +1788,9 @@ export default {
         this.quantPlan = res.ok ? data : null;
         // A pack already on disk is the authority on what it is — start the slider where it sits so
         // "rebuild at a higher rate" starts from the current one rather than from a default.
-        if (res.ok && data.currentBpw > 0 && this.quantBpwAdjustable) {
-          this.quantBpw = Math.min(8, Math.max(4, Math.round(data.currentBpw * 20) / 20));
+        if (res.ok && data.currentBpw > 0) {
+          this.quantBpwMixed = Math.min(8, Math.max(4, Math.round(data.currentBpw * 20) / 20));
+          if (this.quantBpwAdjustable) this.quantBpw = this.quantBpwMixed;
         }
       } catch {
         if (this.quantModel === want) this.quantPlan = null;
