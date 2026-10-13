@@ -557,7 +557,11 @@ export default async function apiRoutes(fastify, options) {
       // act while generation is still running (`genFinished` guards the normal end,
       // which also fires 'close' when we reply.raw.end()).
       let genFinished = false;
-      request.raw.on('close', () => {
+      // reply.raw, NOT request.raw: fastify has already consumed the JSON body by the time this
+      // handler runs, so the IncomingMessage has ended and request.raw fires 'close' ~1ms in, on
+      // EVERY streaming request, while the client is still connected. That read as a disconnect and
+      // armed the abort timer below, killing any generation slower than the grace period.
+      reply.raw.on('close', () => {
         if (genFinished) return;
         stopHeartbeat();
 

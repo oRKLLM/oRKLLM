@@ -73,7 +73,9 @@ export default async function conversationRoutes(fastify) {
     session.clients.add(reply.raw);
 
     let connectionClosed = false;
-    request.raw.on('close', () => {
+    // reply.raw, NOT request.raw — see the note in api/routes.js: request.raw has already ended by
+    // handler time, so it signals "body parsed", not "client went away".
+    reply.raw.on('close', () => {
       if (connectionClosed) return;
       connectionClosed = true;
 
