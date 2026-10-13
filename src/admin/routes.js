@@ -11,9 +11,9 @@ import path from 'path';
 import { spawn, spawnSync } from 'child_process';
 import { getStats, clearSessionStats, clearAllTimeStats } from '../stats.js';
 import { getMetricsSnapshot } from '../monitor.js';
-import { supportsThinkingToggle, isTrailingGgufShard, isOrkpackStub, ggufDisplayName, parseGgufShard } from '../gguf.js';
+import { supportsThinkingToggle, isTrailingGgufShard, isOrkpackStub, parseGgufShard } from '../gguf.js';
 import { isOrkpackPath, supersededByPack, stubPathFor, sourceGgufFor, orkpackPathFor } from '../orkpack.js';
-import { quantPlan, INT4_BPW, INT8_BPW } from '../quant_plan.js';
+import { quantPlan, modelDisplayName, INT4_BPW, INT8_BPW } from '../quant_plan.js';
 import {
   dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings, dbDeleteModelSettings,
   dbCreateUser, dbGetUserById, dbGetUserByUsername, dbGetUserBySubject, dbListUsers, dbUpdateUser, dbUsersEmpty,
@@ -914,15 +914,17 @@ export default async function adminRoutes(fastify, options) {
               id: rel,
               // Same helper /v1/models uses, so the two endpoints cannot disagree about what a model
               // is CALLED the way they used to: this stripped the extension while /v1/models kept it,
-              // and neither stripped the shard suffix off a split model's pack.
-              displayName: ggufDisplayName(rel),
+              // and neither stripped the shard suffix off a split model's pack. It also relabels the
+              // pack for the quantization it IS (`…-BF16.orkpack` -> `…-4.9bpw`) — the id, which is
+              // the load target and the settings key, is untouched.
+              displayName: modelDisplayName(rel, abs),
               sizeBytes: sizeOf(abs),
               runtime: 'llama',
               thinkingToggle: tmpl ? supportsThinkingToggle(tmpl) : true,
               orkConversion: { status: 'done', packedBytes: sizeOf(abs) },
             });
           } else {
-            available.push({ id: rel, displayName: ggufDisplayName(rel), sizeBytes: sizeOf(abs), runtime: 'llama', thinkingToggle: supportsThinkingToggle(abs), orkConversion: orkConversionState(abs) });
+            available.push({ id: rel, displayName: modelDisplayName(rel, abs), sizeBytes: sizeOf(abs), runtime: 'llama', thinkingToggle: supportsThinkingToggle(abs), orkConversion: orkConversionState(abs) });
           }
         }
       }

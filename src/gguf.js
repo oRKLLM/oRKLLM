@@ -229,6 +229,47 @@ export function ggufDisplayName(name) {
   return String(name).replace(SHARD_SUFFIX_RE, '');
 }
 
+// The SOURCE precision token a model file is named after — the `-BF16` in `Qwen3.8-27B-BF16.gguf`.
+// Anchored at the END of the stem, because that is the only position in which the token is reliably
+// a precision rather than part of the model's own name: `Qwen2.5-Coder-7B`, `Mistral-7B-v0.1` and
+// `phi-4` all end in something digit-ish and none of them match. `UD-` is unsloth's dynamic-quant
+// prefix (`-UD-Q4_K_XL`), which belongs to the token rather than to the name.
+//
+// Deliberately NOT a general "find a quant tag anywhere" matcher. A name this does not recognise is
+// left alone — it keeps its source token and merely gains the pack's label, which is redundant at
+// worst, whereas a mis-strip would silently amputate part of a model's identity.
+const SOURCE_PRECISION_RE = /[-_.](?:UD-)?(?:BF16|FP16|F16|F32|I?Q\d[0-9A-Z_]*)$/i;
+
+// Re-label a model id for the quantization it IS, rather than the one it was built FROM.
+//
+// A `.orkpack` is named by `orkpackPathFor`, a pure extension swap, so it inherits the source GGUF's
+// filename whole: a pack built from `Qwen3.8-27B-BF16.gguf` is called `…-BF16.orkpack` even though
+// nothing inside it is bf16 any more. The FILE keeps that name — it is a lookup key, not just a
+// label (the model_settings rows, the settings carry-over, and ggml-ork's own
+// `<model-dir>/<basename>.orkpack` derivation all depend on it) — so this is a DISPLAY-only
+// correction, applied where the name is shown and nowhere else.
+//
+// `label` is what the pack measures as (packQuantLabel in quant_plan.js). Null/empty returns the
+// name untouched, which is the path every absent, mid-write or unreadable pack takes.
+//
+// The shard suffix is already gone by the time this runs (ggufDisplayName above), so a split model
+// still gets ONE label across the gguf -> pack transition: the base identity `Qwen3.8-27B` survives
+// both steps and only the precision component moves.
+export function withQuantLabel(name, label) {
+  const s = String(name);
+  if (!label) return s;
+  const m = /\.(?:gguf|orkpack)$/i.exec(s);
+  const ext = m ? m[0] : '';
+  const stem = ext ? s.slice(0, s.length - ext.length) : s;
+  const tok = SOURCE_PRECISION_RE.exec(stem);
+  const base = tok ? stem.slice(0, tok.index) : stem;
+  if (!base) return s;                     // the "token" was the whole name — not a precision token
+  const sep = tok ? tok[0][0] : '-';       // keep the name's own separator (`Qwen3_BF16` stays `_`)
+  const tail = `${sep}${label}`;
+  if (base.toLowerCase().endsWith(tail.toLowerCase())) return `${base}${ext}`;   // already labelled
+  return `${base}${tail}${ext}`;
+}
+
 // ── Tensor table ─────────────────────────────────────────────────────────────
 // Walk a GGUF's tensor-info section and return every tensor with its shape, its
 // byte span in the file, and the bit-width that span implies.

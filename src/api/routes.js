@@ -1,8 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import { MODELS_DIR, parseRuntimeVersion } from '../config.js';
-import { supportsThinkingToggle, isRecurrentArch, isTrailingGgufShard, isOrkpackStub, ggufDisplayName } from '../gguf.js';
+import { supportsThinkingToggle, isRecurrentArch, isTrailingGgufShard, isOrkpackStub } from '../gguf.js';
 import { isOrkpackPath, supersededByPack } from '../orkpack.js';
+import { modelDisplayName } from '../quant_plan.js';
 import pool from '../pool.js';
 import { isOrkpackFresh, hasOrkpack } from '../conversion.js';
 import { recordRequest } from '../stats.js';
@@ -158,8 +159,10 @@ export default async function apiRoutes(fastify, options) {
           id: file,
           // For a split GGUF the load target (id) is the first shard; the UI
           // shows the model under its base name (suffix stripped). Identical to
-          // `id` for non-split models.
-          displayName: ggufDisplayName(file),
+          // `id` for non-split models. A .orkpack is additionally labelled for the
+          // quantization it IS rather than the source precision its filename
+          // inherited — the id, which is what everything keys on, never moves.
+          displayName: modelDisplayName(file, path.join(MODELS_DIR, file)),
           object: 'model',
           created: Math.floor(stats.birthtimeMs / 1000),
           owned_by: 'orkllm',
