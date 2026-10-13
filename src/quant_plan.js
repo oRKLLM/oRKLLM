@@ -28,8 +28,8 @@
 // file and a GGUF's tensor table is in its header.
 
 import fs from 'fs';
-import { readGgufTensors } from './gguf.js';
-import { readOrkpackFooter } from './orkpack.js';
+import { readGgufTensors, ggufDisplayName, withQuantLabel } from './gguf.js';
+import { readOrkpackFooter, isOrkpackPath, sigQbits } from './orkpack.js';
 
 const MiB = 1048576;
 
@@ -187,6 +187,91 @@ export function measureFromPack(packPath) {
     // What the pack on disk ACTUALLY is, which is where the slider should start.
     currentBpw: sliderParams > 0 ? (blobBytes * 8) / sliderParams : 0,
   };
+}
+
+// ── what a pack is CALLED ────────────────────────────────────────────────────
+//
+// A pack inherits the source GGUF's filename (orkpackPathFor is a pure extension swap), so it is
+// named after the material rather than the product: `Qwen3.8-27B-BF16.orkpack` holds no bf16 at all.
+// The name on disk cannot move — it is a lookup key (model_settings rows, settings carry-over,
+// ggml-ork's own `<model-dir>/<basename>.orkpack` derivation) — so the correction is made in the
+// LABEL, here, and the file is left exactly where it is.
+//
+// The number is MEASURED, never assumed: `measureFromPack().currentBpw` is packed-blob bits over
+// packed params, read straight off the pack's own index. That is the same quantity the Quantization
+// tab's slider reports and the same one `bpwDelivery` checks a build against, so the label cannot
+// disagree with either. Nothing is estimated and nothing is derived from the filename.
+
+// A pack's index is a tail read of a few hundred KiB, and this is called once per model per
+// enumeration of the Models tree — so it is memoised on (mtime, size), the same pair that decides
+// whether any other cached fact about a file is still true. A rebuilt pack changes both.
+const LABEL_CACHE = new Map();
+const LABEL_CACHE_MAX = 512;
+
+function cachedPackLabel(packPath, compute) {
+  let st;
+  try { st = fs.statSync(packPath); } catch { LABEL_CACHE.delete(packPath); return null; }
+  const hit = LABEL_CACHE.get(packPath);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.label;
+  const label = compute();
+  if (LABEL_CACHE.size >= LABEL_CACHE_MAX) LABEL_CACHE.delete(LABEL_CACHE.keys().next().value);
+  LABEL_CACHE.set(packPath, { mtimeMs: st.mtimeMs, size: st.size, label });
+  return label;
+}
+
+/** Drop the memoised labels. For tests, and for any caller that rewrites a pack in place. */
+export function clearPackLabelCache() { LABEL_CACHE.clear(); }
+
+// 4.89 -> "4.9bpw", 8.0 -> "8bpw". One decimal is all the precision the measurement earns at this
+// size: promotion is granular (whole weights) and one weight moves a 27B by ~0.01 bpw, so a second
+// decimal would churn in the UI without telling anyone anything.
+function formatBpw(bpw) {
+  if (!Number.isFinite(bpw) || bpw < 1 || bpw > 32) return null;   // not a rate we can have measured
+  return `${Math.round(bpw * 10) / 10}bpw`;
+}
+
+/**
+ * What to CALL this pack's quantization, or null when the file cannot tell us.
+ *
+ *   '4.9bpw'  — measured off the index: the honest answer, and the one the owner asked for.
+ *   'int4'/'int8' — the tier from the footer's build signature, used ONLY when the index is
+ *                   unreadable (truncated, mid-checkpoint, an entry layout we cannot walk). A tier
+ *                   name is vague where a bpw is exact, but it is TRUE, and a fabricated number in
+ *                   something that reads like a filename is worse than a vague one.
+ *   null      — not a pack, absent, or no footer: the caller leaves the name alone entirely.
+ *
+ * Never throws: every reader underneath returns null on a bad file, and a model list must not fail
+ * because one pack happens to be mid-write.
+ */
+export function packQuantLabel(packPath) {
+  if (!packPath || !isOrkpackPath(packPath)) return null;
+  return cachedPackLabel(packPath, () => {
+    const m = measureFromPack(packPath);
+    const bpw = m ? formatBpw(m.currentBpw) : null;
+    if (bpw) return bpw;
+    // Fallback, and a NARROW one. The footer's signature states a tier only when the build FORCED
+    // a precision: the low byte is the ORK_QUANT character, and 0 means "source-driven default",
+    // which is not a tier anyone can read off the file. sigQbits() answers 8 for that case because
+    // its caller (the adopt gate) needs a decision; a label does not, and would be asserting int8
+    // over what may well be an NF4 int4 pack. So an unforced or unrecognised footer gets no label.
+    const f = readOrkpackFooter(packPath);
+    if (!f || !f.version) return null;
+    const forced = f.quantSig & 0xff;                       // '4' | '8' | 0
+    return forced === 0x34 || forced === 0x38 ? `int${sigQbits(f.quantSig)}` : null;
+  });
+}
+
+/**
+ * The ONE display name for a model id, for every endpoint that shows one.
+ *
+ * `absPath` is the file the id resolves to; without it (or for anything that is not a pack) this is
+ * exactly `ggufDisplayName` — shard suffix stripped, nothing else touched. The id itself is never
+ * rewritten: it stays the load target and the settings key.
+ */
+export function modelDisplayName(id, absPath = null) {
+  const name = ggufDisplayName(id);
+  if (!isOrkpackPath(id)) return name;
+  return withQuantLabel(name, packQuantLabel(absPath ?? id));
 }
 
 // ── bpw -> bytes ─────────────────────────────────────────────────────────────

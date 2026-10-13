@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { readGgufString, getGgufChatTemplate, supportsThinkingToggle, getGgufArchitecture, isRecurrentArch, parseGgufShard, isTrailingGgufShard, ggufDisplayName } from '../src/gguf.js';
+import { readGgufString, getGgufChatTemplate, supportsThinkingToggle, getGgufArchitecture, isRecurrentArch, parseGgufShard, isTrailingGgufShard, ggufDisplayName, withQuantLabel } from '../src/gguf.js';
 
 // ── Minimal GGUF writer (mirrors the reader's understanding of the format) ────
 const T = { UINT32: 4, STRING: 8, ARRAY: 9 };
@@ -151,5 +151,45 @@ describe('split (sharded) GGUF grouping', () => {
     // a pack is NOT a shard, so it must never be filtered as a trailing one
     assert.equal(isTrailingGgufShard('foo-00002-of-00002.orkpack'), false);
     assert.equal(parseGgufShard('foo-00001-of-00002.orkpack'), null);
+  });
+});
+
+// ── the TARGET quantization, not the source's ────────────────────────────────
+// A pack is named after the gguf it was built from, so it advertises a precision it no longer
+// holds. withQuantLabel is the string half of the correction (the measurement half is
+// quant_plan.packQuantLabel); the file on disk keeps its name either way.
+describe('withQuantLabel', () => {
+  test('the source precision token is replaced, not appended to', () => {
+    assert.equal(withQuantLabel('unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-BF16.orkpack', '4.9bpw'),
+                 'unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-4.9bpw.orkpack');
+    assert.equal(withQuantLabel('Qwen3-1.7B-F16.orkpack', '8bpw'), 'Qwen3-1.7B-8bpw.orkpack');
+    assert.equal(withQuantLabel('Qwen3-1.7B-Q8_0.orkpack', '4bpw'), 'Qwen3-1.7B-4bpw.orkpack');
+    assert.equal(withQuantLabel('Qwen3-1.7B-UD-Q4_K_XL.orkpack', 'int4'), 'Qwen3-1.7B-int4.orkpack');
+    assert.equal(withQuantLabel('Llama-3.2-1B-IQ4_XS.orkpack', '4.2bpw'), 'Llama-3.2-1B-4.2bpw.orkpack');
+  });
+
+  test('a name with no recognisable precision token keeps every character it had', () => {
+    // Appending is additive; stripping is not. Anything we are not sure about is only ADDED to.
+    assert.equal(withQuantLabel('mystery.orkpack', '4.9bpw'), 'mystery-4.9bpw.orkpack');
+    assert.equal(withQuantLabel('Qwen2.5-Coder-7B.orkpack', '8bpw'), 'Qwen2.5-Coder-7B-8bpw.orkpack');
+    assert.equal(withQuantLabel('Mistral-7B-v0.1.orkpack', '4bpw'), 'Mistral-7B-v0.1-4bpw.orkpack');
+    assert.equal(withQuantLabel('phi-4.orkpack', '4bpw'), 'phi-4-4bpw.orkpack');
+    // A quant tag that is not the LAST component is part of the name as far as we know.
+    assert.equal(withQuantLabel('Qwen3-8B-Q8_0-abliterated.orkpack', '8bpw'),
+                 'Qwen3-8B-Q8_0-abliterated-8bpw.orkpack');
+  });
+
+  test('no label means no change at all', () => {
+    assert.equal(withQuantLabel('Qwen3.8-27B-BF16.orkpack', null), 'Qwen3.8-27B-BF16.orkpack');
+    assert.equal(withQuantLabel('Qwen3.8-27B-BF16.orkpack', ''), 'Qwen3.8-27B-BF16.orkpack');
+  });
+
+  test('relabelling is idempotent, and never eats the whole name', () => {
+    const once = withQuantLabel('Qwen3.8-27B-BF16.orkpack', '4.9bpw');
+    assert.equal(withQuantLabel(once, '4.9bpw'), once);
+    // A bare precision token is the whole stem. There is no separator in front of it, so it does
+    // not match as a token at all — which is the right answer twice over: stripping it would leave
+    // nothing to call the model.
+    assert.equal(withQuantLabel('BF16.orkpack', '4.9bpw'), 'BF16-4.9bpw.orkpack');
   });
 });

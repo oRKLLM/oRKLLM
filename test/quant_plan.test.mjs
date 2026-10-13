@@ -14,7 +14,7 @@ import { writeGguf, f16 } from './fixtures/gguf.mjs';
 import { readGgufTensors } from '../src/gguf.js';
 import {
   projectFromGguf, bytesAtBpw, readOrkpackIndex, measureFromPack, budgetMbForBpw, packMaxN,
-  bpwDelivery, bpwDeliveryMessage,
+  bpwDelivery, bpwDeliveryMessage, packQuantLabel, modelDisplayName, clearPackLabelCache,
 } from '../src/quant_plan.js';
 
 const GiB = 1073741824;
@@ -294,4 +294,118 @@ test('bpwDelivery reads the rate off a real pack, whatever selected it', () => {
   const uniform = path.join(tmp, 'delivered-uniform.orkpack');
   orkpack(uniform, [{ name: 'a', K: 1024, N: 512, bpw: 4 }, { name: 'b', K: 1024, N: 512, bpw: 4 }]);
   assert.equal(bpwDelivery(4.75, measureFromPack(uniform).currentBpw).status, 'ignored');
+});
+
+// ── the label a pack wears in the UI ─────────────────────────────────────────
+// The complaint these answer: a pack built from a bf16 source is called `…-BF16.orkpack` and the
+// Models page echoed that, naming the artifact after the material. The file keeps its name (it is a
+// lookup key); the LABEL is measured off the pack itself.
+
+// 40 equal weights, 9 of them promoted to int8: 4 + 4*(9/40) = 4.9 bpw — the owner's example.
+function pack49(file) {
+  const entries = [];
+  for (let i = 0; i < 40; i++) {
+    entries.push({ name: `blk.${i}.ffn_down.weight`, K: 1024, N: 512, bpw: i < 9 ? 8 : 4 });
+  }
+  orkpack(file, entries);
+  return file;
+}
+
+test('a pack is labelled for the quantization it IS, not the source it came from', () => {
+  const dir = path.join(tmp, 'unsloth', 'Qwen3.8-27B-GGUF');
+  fs.mkdirSync(dir, { recursive: true });
+  const f = pack49(path.join(dir, 'Qwen3.8-27B-BF16.orkpack'));
+
+  assert.ok(Math.abs(measureFromPack(f).currentBpw - 4.9) < 1e-9);
+  assert.equal(packQuantLabel(f), '4.9bpw');
+  assert.equal(modelDisplayName('unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-BF16.orkpack', f),
+               'unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-4.9bpw.orkpack');
+});
+
+test('a uniform pack reads as a round rate, with no spurious decimal', () => {
+  const f4 = path.join(tmp, 'u4.orkpack');
+  orkpack(f4, [{ name: 'a', K: 1024, N: 512, bpw: 4 }, { name: 'b', K: 1024, N: 512, bpw: 4 }]);
+  assert.equal(packQuantLabel(f4), '4bpw');
+  const f8 = path.join(tmp, 'u8.orkpack');
+  orkpack(f8, [{ name: 'a', K: 1024, N: 512, bpw: 8 }]);
+  assert.equal(packQuantLabel(f8), '8bpw');
+});
+
+test('a split model still keeps ONE label once its pack lands', () => {
+  // The shard suffix goes first (ggufDisplayName), so the base identity survives BOTH the shard
+  // strip and the relabel — the regression 411b416 fixed must not come back through this door.
+  const dir = path.join(tmp, 'split');
+  fs.mkdirSync(dir, { recursive: true });
+  const f = pack49(path.join(dir, 'Qwen3.8-27B-BF16-00001-of-00002.orkpack'));
+  assert.equal(modelDisplayName('split/Qwen3.8-27B-BF16-00001-of-00002.orkpack', f),
+               'split/Qwen3.8-27B-4.9bpw.orkpack');
+});
+
+test('a name we cannot parse is added to, never cut', () => {
+  const f = pack49(path.join(tmp, 'mystery-model.orkpack'));
+  assert.equal(modelDisplayName('mystery-model.orkpack', f), 'mystery-model-4.9bpw.orkpack');
+});
+
+test('an absent, empty or unreadable pack leaves the name exactly as it was', () => {
+  // Enumeration runs while packs are being built and deleted; none of these may throw.
+  assert.equal(modelDisplayName('a/Qwen3-1.7B-BF16.orkpack', path.join(tmp, 'nope.orkpack')),
+               'a/Qwen3-1.7B-BF16.orkpack');
+  const empty = path.join(tmp, 'empty.orkpack');
+  fs.writeFileSync(empty, '');
+  assert.equal(modelDisplayName('a/Qwen3-1.7B-BF16.orkpack', empty), 'a/Qwen3-1.7B-BF16.orkpack');
+  const junk = path.join(tmp, 'junk.orkpack');
+  fs.writeFileSync(junk, Buffer.alloc(4096, 0x5a));         // not a pack: no magic at EOF
+  assert.equal(packQuantLabel(junk), null);
+  assert.equal(modelDisplayName('a/Qwen3-1.7B-BF16.orkpack', junk), 'a/Qwen3-1.7B-BF16.orkpack');
+});
+
+test('a .gguf is never relabelled — it IS its source precision', () => {
+  const g = path.join(tmp, 'Qwen3-1.7B-BF16.gguf');
+  gguf(g, [{ name: 'blk.0.attn_q.weight', ...f16([512, 512]) }]);
+  assert.equal(modelDisplayName('Qwen3-1.7B-BF16.gguf', g), 'Qwen3-1.7B-BF16.gguf');
+  // …including a split one, where the shard strip is still the whole job.
+  assert.equal(modelDisplayName('Qwen3-1.7B-BF16-00001-of-00002.gguf', g), 'Qwen3-1.7B-BF16.gguf');
+});
+
+test('an unwalkable index falls back to the TIER, never to a guessed number', () => {
+  // A footer that parses with an index we cannot walk (index_off=0 here; in the field a truncated
+  // or mid-checkpoint tail). The tier is still known — it is in the footer's build signature — and
+  // a vague truth beats a fabricated 4.9.
+  const f = path.join(tmp, 'opaque.orkpack');
+  const footer = Buffer.alloc(64);
+  footer.writeBigUInt64LE(0n, 0);        // index_off: nothing to walk
+  footer.writeUInt32LE(1, 8);            // n_entries
+  footer.writeUInt32LE(7, 12);           // version — readOrkpackFooter keys on this
+  footer.writeUInt32LE(0x34, 20);        // quant_sig: '4' => the int4 tier
+  footer.write('ORKPK01\0', 56, 'latin1');
+  fs.writeFileSync(f, Buffer.concat([Buffer.alloc(4096), footer]));
+  assert.equal(packQuantLabel(f), 'int4');
+  assert.equal(modelDisplayName('x/Qwen3-1.7B-BF16.orkpack', f), 'x/Qwen3-1.7B-int4.orkpack');
+
+  footer.writeUInt32LE(0x38, 20);        // '8' => the int8 tier
+  fs.writeFileSync(f, Buffer.concat([Buffer.alloc(4096), footer]));
+  clearPackLabelCache();
+  assert.equal(packQuantLabel(f), 'int8');
+
+  // quant_sig 0 is "no precision was forced", NOT int8. The adopt gate has to pick one and picks
+  // 8; a LABEL does not have to, so it says nothing rather than asserting a tier over what may be
+  // an NF4 int4 pack.
+  footer.writeUInt32LE(0, 20);
+  fs.writeFileSync(f, Buffer.concat([Buffer.alloc(4096), footer]));
+  clearPackLabelCache();
+  assert.equal(packQuantLabel(f), null);
+  assert.equal(modelDisplayName('x/Qwen3-1.7B-BF16.orkpack', f), 'x/Qwen3-1.7B-BF16.orkpack');
+});
+
+test('the label is memoised per file, and a rebuild moves it', () => {
+  const f = path.join(tmp, 'rebuilt.orkpack');
+  orkpack(f, [{ name: 'a', K: 1024, N: 512, bpw: 4 }, { name: 'b', K: 1024, N: 512, bpw: 4 }]);
+  assert.equal(packQuantLabel(f), '4bpw');
+  // Unlink the file under the cache: a second call must go back to the filesystem, not answer from
+  // a stale entry. (This is also what guarantees enumeration cannot keep a deleted pack alive.)
+  fs.unlinkSync(f);
+  assert.equal(packQuantLabel(f), null);
+  // Rebuilt at a different rate — the (mtime, size) key changes, so the label follows.
+  orkpack(f, [{ name: 'a', K: 1024, N: 512, bpw: 8 }, { name: 'b', K: 1024, N: 512, bpw: 8 }]);
+  assert.equal(packQuantLabel(f), '8bpw');
 });
