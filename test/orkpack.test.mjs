@@ -200,11 +200,16 @@ describe('isOrkpackUsable', () => {
 
   // The runtime adopts exactly one layout (ork_pack_version_ok is `v == ORKPACK_VERSION`) and
   // regenerates everything else, so every other number — including the v6 we used to accept — is stale.
+  // Derived from ORKPACK_VERSION rather than hardcoded: this test previously listed 8 as a version
+  // that must be refused, which silently became wrong the moment the format bumped to v8. The intent
+  // is "only the current number is accepted", so express that and let the neighbours move with it.
   test('rejects any version but the current one', () => {
     const d = mktmp();
-    for (const v of [1, 5, 6, 8]) {
+    for (const v of [1, 5, ORKPACK_VERSION - 1, ORKPACK_VERSION + 1]) {
       assert.equal(isOrkpackUsable(writePack(d, `v${v}.orkpack`, { version: v })), false, `v${v} must be refused`);
     }
+    assert.equal(isOrkpackUsable(writePack(d, 'vcur.orkpack', { version: ORKPACK_VERSION })), true,
+                 `v${ORKPACK_VERSION} (current) must be accepted`);
   });
 
   test('rejects an index offset past EOF (truncated pack)', () => {
