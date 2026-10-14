@@ -12,7 +12,8 @@ import { spawn, spawnSync } from 'child_process';
 import { getStats, clearSessionStats, clearAllTimeStats } from '../stats.js';
 import { getMetricsSnapshot } from '../monitor.js';
 import { supportsThinkingToggle, isTrailingGgufShard, isOrkpackStub, parseGgufShard } from '../gguf.js';
-import { isOrkpackPath, supersededByPack, stubPathFor, sourceGgufFor, orkpackPathFor } from '../orkpack.js';
+import { isOrkpackPath, stubPathFor, sourceGgufFor, orkpackPathFor, isPackDir } from '../orkpack.js';
+import { supersededByPack, resolveOrkpack, listOrkpackVariants } from '../orkpack_dir.js';
 import { quantPlan, modelDisplayName, INT4_BPW, INT8_BPW } from '../quant_plan.js';
 import {
   dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings, dbDeleteModelSettings,
@@ -855,20 +856,67 @@ export default async function adminRoutes(fastify, options) {
     // the scheduler owns the actual conversion. `<model>.orkpack` present → done; a sidecar
     // `<model>.orkpack.json` ({status,progress}) → queued/converting/error; neither → none.
     const orkConversionState = (ggufPath) => {
-      const packPath = ggufPath.replace(/\.gguf$/i, '.orkpack');
-      try { const st = fs.statSync(packPath); if (st.size > 0) return { status: 'done', packedBytes: st.size }; } catch {}
-      const s = readJson(packPath + '.json');
+      // Both layouts. The progress sidecar stays on the HANDLE (`<base>.orkpack.json`) whichever
+      // layout the pack lands in — progress belongs to the model, not to a variant — so a build is
+      // discoverable here without this knowing anything about directories.
+      const r = resolveOrkpack(ggufPath);
+      if (r) { try { return { status: 'done', packedBytes: fs.statSync(r.path).size }; } catch {} }
+      const s = readJson(orkpackPathFor(ggufPath) + '.json');
       if (s && s.status) return { status: s.status, progress: Math.max(0, Math.min(100, Math.round(s.progress || 0))), ...(s.label ? { label: s.label } : {}) };
-      return { status: 'none' };
+      // Packs on disk but none the runtime would adopt: 'stale', not 'none' — the difference is
+      // whether there is anything to discard before rebuilding.
+      return { status: listOrkpackVariants(ggufPath).variants.length ? 'stale' : 'none' };
     };
 
     // Servable models: every .rkllm or .gguf anywhere under MODELS_DIR.
     // .rkllm → rkllm runtime; .gguf → llama runtime (open NPU stack).
+    // ONE place that turns a pack HANDLE into an Available entry, used by both the directory arm
+    // (a pack directory is one model) and the legacy arm (a loose `<base>.orkpack` file). `abs` is the
+    // RESOLVED variant — the file that would actually serve — while `rel` stays the handle, which is
+    // the load target and the settings key and must never move with the variant.
+    const packEntry = (rel, abs, usable = true) => {
+      // The chat template lives in the gguf header, which the extracted stub reproduces verbatim —
+      // read it from the stub, else the source if it is still around, else leave the toggle available
+      // rather than hiding a setting we merely failed to determine.
+      const tmpl = [stubPathFor(abs), sourceGgufFor(abs)].find(p => { try { return fs.statSync(p).size > 0; } catch { return false; } });
+      available.push({
+        id: rel,
+        // Same helper /v1/models uses, so the two endpoints cannot disagree about what a model is
+        // CALLED. It relabels the pack for the quantization it IS (`…-BF16.orkpack` -> `…-4.9bpw`),
+        // measured off the variant that resolved — the id is untouched.
+        displayName: modelDisplayName(rel, abs),
+        sizeBytes: sizeOf(abs),
+        runtime: 'llama',
+        thinkingToggle: tmpl ? supportsThinkingToggle(tmpl) : true,
+        // A pack IS the converted artifact, so 'done' — unless nothing in its directory is usable,
+        // which is 'stale': the UI must never claim a usable cache exists when there is none.
+        orkConversion: usable ? { status: 'done', packedBytes: sizeOf(abs) } : { status: 'stale' },
+      });
+    };
+
     (function scanModels(dir, prefix = '') {
       for (const e of listFiles(dir)) {
         if (!prefix && e.name === '.embeddings') continue;   // the content-addressed store, not a model dir
         const rel = prefix ? `${prefix}/${e.name}` : e.name;
-        if (e.isDirectory()) scanModels(path.join(dir, e.name), rel);
+        if (e.isDirectory()) {
+          // A PACK DIRECTORY is ONE model, not a folder of them: it emits the handle `<base>.orkpack`
+          // and is not descended into. Descending would list each variant under an id like
+          // `X/4bpw.orkpack`, whose sourceGgufFor is `X/4bpw.gguf` — a file that does not exist — and
+          // the settings row would be orphaned, which is the bug the handle design exists to prevent.
+          //
+          // A directory whose variants are all unusable must not make the model VANISH. If the source
+          // .gguf survives it is the actionable entry and lists normally below (supersededByPack is
+          // false); if the source is gone, the handle is listed as 'stale' so the pack is visible.
+          const dabs = path.join(dir, e.name);
+          if (isPackDir(dabs)) {
+            const src = `${dabs}.gguf`;
+            const r = resolveOrkpack(src);
+            if (r) packEntry(`${rel}.orkpack`, r.path, true);
+            else if (!fs.existsSync(src)) packEntry(`${rel}.orkpack`, dabs, false);
+            continue;
+          }
+          scanModels(dabs, rel);
+        }
         // thinkingToggle: can the model's reasoning be turned off? rkllm honours
         // enable_thinking natively; for gguf it depends on the chat template
         // (Qwen3+ yes, LFM2.5-MoE no). The UI hides the Enable-Thinking setting
@@ -905,24 +953,7 @@ export default async function adminRoutes(fastify, options) {
           } else if (isRk) {
             available.push({ id: rel, sizeBytes: sizeOf(abs), runtime: 'rkllm', thinkingToggle: true });
           } else if (isPack) {
-            // The pack IS the converted artifact, so its conversion state is always done. The chat
-            // template lives in the gguf header, which the extracted stub reproduces verbatim — read it
-            // from the stub, else the source if it is still around, else leave the toggle available
-            // rather than hiding a setting we merely failed to determine.
-            const tmpl = [stubPathFor(abs), sourceGgufFor(abs)].find(p => { try { return fs.statSync(p).size > 0; } catch { return false; } });
-            available.push({
-              id: rel,
-              // Same helper /v1/models uses, so the two endpoints cannot disagree about what a model
-              // is CALLED the way they used to: this stripped the extension while /v1/models kept it,
-              // and neither stripped the shard suffix off a split model's pack. It also relabels the
-              // pack for the quantization it IS (`…-BF16.orkpack` -> `…-4.9bpw`) — the id, which is
-              // the load target and the settings key, is untouched.
-              displayName: modelDisplayName(rel, abs),
-              sizeBytes: sizeOf(abs),
-              runtime: 'llama',
-              thinkingToggle: tmpl ? supportsThinkingToggle(tmpl) : true,
-              orkConversion: { status: 'done', packedBytes: sizeOf(abs) },
-            });
+            packEntry(rel, abs, true);
           } else {
             available.push({ id: rel, displayName: modelDisplayName(rel, abs), sizeBytes: sizeOf(abs), runtime: 'llama', thinkingToggle: supportsThinkingToggle(abs), orkConversion: orkConversionState(abs) });
           }
@@ -1574,7 +1605,9 @@ export default async function adminRoutes(fastify, options) {
     if (!fs.existsSync(abs)) return reply.status(404).send({ error: 'no such model' });
     // When a pack is already there it is the authority — membership, tier and the carried region all
     // come from the file rather than from a projection of what the packer would do.
-    return { model, ...quantPlan(abs, orkpackPathFor(abs)) };
+    // The RESOLVED variant, not the handle: under the directory layout `<base>.orkpack` names no
+    // file, and the plan must describe the pack that would actually serve.
+    return { model, ...quantPlan(abs, resolveOrkpack(abs)?.path ?? orkpackPathFor(abs)) };
   });
 
   fastify.post('/quantize', async (request, reply) => {

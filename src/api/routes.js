@@ -2,10 +2,11 @@ import fs from 'fs';
 import path from 'path';
 import { MODELS_DIR, parseRuntimeVersion } from '../config.js';
 import { supportsThinkingToggle, isRecurrentArch, isTrailingGgufShard, isOrkpackStub } from '../gguf.js';
-import { isOrkpackPath, supersededByPack } from '../orkpack.js';
+import { isOrkpackPath, orkpackPathFor, isPackDir, sourceGgufFor } from '../orkpack.js';
+import { supersededByPack, resolveOrkpack } from '../orkpack_dir.js';
 import { modelDisplayName } from '../quant_plan.js';
-import pool from '../pool.js';
-import { isOrkpackFresh, hasOrkpack } from '../conversion.js';
+import pool, { resolveWcacheBudgetMB } from '../pool.js';
+import { hasOrkpack } from '../conversion.js';
 import { recordRequest } from '../stats.js';
 import { dbGetModelSettings, dbSetModelSettings, dbGetSetting, dbListEnabledMcpServers } from '../db.js';
 import { cacheKey, getCachePath, putCachePath, tmpCachePath, isCacheEnabled, getMaxContextTokens, resolveSegmentsCache } from '../cache.js';
@@ -97,6 +98,22 @@ export default async function apiRoutes(fastify, options) {
         const results = [];
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
           if (entry.isDirectory()) {
+            // A PACK DIRECTORY is one model, not a folder of them. It emits exactly one id — the
+            // HANDLE `<base>.orkpack` — and is not descended into. Descending would list each variant
+            // as its own model with an id like `X/4bpw.orkpack`, whose `sourceGgufFor` is `X/4bpw.gguf`
+            // — a file that does not exist — and the settings row would be lost. That is the orphaned
+            // -settings bug (1153606) all over again, which is why the id stays the handle.
+            //
+            // A directory whose variants are ALL unusable must not make the model vanish. If the
+            // source .gguf is still there it is the actionable entry (it lists normally below, because
+            // supersededByPack is false, and can be rebuilt); if the source is gone, the handle is
+            // listed anyway so the broken pack is visible and fails loudly on load.
+            if (isPackDir(path.join(dir, entry.name))) {
+              const base = prefix ? `${prefix}/${entry.name}` : entry.name;
+              const src = path.join(dir, `${entry.name}.gguf`);
+              if (supersededByPack(src) || !fs.existsSync(src)) results.push(`${base}.orkpack`);
+              continue;
+            }
             results.push(...scanDir(path.join(dir, entry.name), prefix ? `${prefix}/${entry.name}` : entry.name));
           } else if (entry.name.endsWith('.rkllm') || entry.name.endsWith('.gguf') || isOrkpackPath(entry.name)) {
             // Split (sharded) GGUF: llama.cpp loads the whole model from the FIRST
@@ -116,7 +133,16 @@ export default async function apiRoutes(fastify, options) {
       const modelFiles = scanDir(MODELS_DIR);
 
       const data = modelFiles.map(file => {
-        const stats = fs.statSync(path.join(MODELS_DIR, file));
+        // A pack id is a HANDLE: under the directory layout it names no file, so it must be resolved
+        // to the variant that would serve before anything is stat'd off it. (And because the handle
+        // and the directory are different strings — `X.orkpack` vs `X/` — a site that forgot this
+        // gets ENOENT rather than a directory's size silently reported as a pack's.)
+        const resolved = isOrkpackPath(file)
+          ? resolveOrkpack(path.join(MODELS_DIR, sourceGgufFor(file)),
+                           { settings: dbGetModelSettings(file) || undefined, budgetMB: resolveWcacheBudgetMB() })
+          : null;
+        const absModel = resolved?.path ?? path.join(MODELS_DIR, file);
+        let stats; try { stats = fs.statSync(absModel); } catch { stats = { size: 0, mtime: new Date(0) }; }
         const basename = path.basename(file);
         const isPack = isOrkpackPath(basename);
         const isGguf = basename.endsWith('.gguf');
@@ -137,10 +163,16 @@ export default async function apiRoutes(fastify, options) {
         // `<model>.orkpack` present → done; sidecar `<model>.orkpack.json` → queued/converting/error.
         let orkConversion;
         // A pack needs no conversion — it IS the converted artifact.
-        if (isPack) orkConversion = { status: 'done', packedBytes: stats.size };
+        // A pack needs no conversion — it IS the converted artifact. A handle that resolves to
+        // nothing (a pack directory whose every variant is stale, and no source left to rebuild from)
+        // is reported 'stale' rather than 'done', so the UI never claims a usable cache exists.
+        if (isPack) orkConversion = resolved ? { status: 'done', packedBytes: stats.size } : { status: 'stale' };
         else if (isGguf) {
           const absGguf = path.join(MODELS_DIR, file);
-          const packPath = absGguf.replace(/\.gguf$/i, '.orkpack');
+          // The progress sidecar stays on the HANDLE (`<base>.orkpack.json`) in both layouts —
+          // progress belongs to the model, not to whichever variant is being built — so this polling
+          // is unchanged by the directory layout. The DONE size comes from the resolved variant.
+          const packPath = orkpackPathFor(absGguf);
           // A rebuild in progress (sidecar) takes priority; then a pack that's DONE only if the
           // runtime would actually adopt it for this model (footer schema + on-disk format token +
           // the precision signature we'd serve at). A pack present but unusable reports 'stale'
@@ -149,7 +181,8 @@ export default async function apiRoutes(fastify, options) {
           try { const s = JSON.parse(fs.readFileSync(packPath + '.json', 'utf8'));
             if (s && s.status) orkConversion = { status: s.status, progress: Math.max(0, Math.min(100, Math.round(s.progress || 0))) }; } catch {}
           if (!orkConversion && hasOrkpack(absGguf)) {
-            if (isOrkpackFresh(absGguf, pool.orkPrecision?.(file))) { try { orkConversion = { status: 'done', packedBytes: fs.statSync(packPath).size }; } catch {} }
+            const r = resolveOrkpack(absGguf, { precision: pool.orkPrecision?.(file), budgetMB: resolveWcacheBudgetMB() });
+            if (r) { try { orkConversion = { status: 'done', packedBytes: fs.statSync(r.path).size }; } catch {} }
             else orkConversion = { status: 'stale' };
           }
           if (!orkConversion) orkConversion = { status: 'none' };
@@ -162,9 +195,9 @@ export default async function apiRoutes(fastify, options) {
           // `id` for non-split models. A .orkpack is additionally labelled for the
           // quantization it IS rather than the source precision its filename
           // inherited — the id, which is what everything keys on, never moves.
-          displayName: modelDisplayName(file, path.join(MODELS_DIR, file)),
+          displayName: modelDisplayName(file, absModel),
           object: 'model',
-          created: Math.floor(stats.birthtimeMs / 1000),
+          created: Math.floor((stats.birthtimeMs ?? 0) / 1000),
           owned_by: 'orkllm',
           size: stats.size,
           runtime,

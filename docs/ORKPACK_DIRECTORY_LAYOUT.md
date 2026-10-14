@@ -1,7 +1,10 @@
 # Directory-based `.orkpack` layout — SPEC
 
-Status: **proposed, not implemented.** Cross-repo: oRKLLM (`src/orkpack.js`, `src/conversion.js`,
-`src/pool.js`, the two enumerations) and the llama.cpp fork (`ggml/src/ggml-ork/ggml-ork.cpp`).
+Status: **implemented.** oRKLLM branch `feat/orkpack-dir-layout` (off `alpha`); llama.cpp fork branch
+`feat/orkpack-dir-layout` (off `diverged-history`). Code: `src/orkpack.js` (handle, directory marker),
+`src/orkpack_dir.js` (lister, resolver, build/finalize, removal, migration), `src/conversion.js`,
+`src/pool.js`, the two enumerations, `scripts/orkpack-migrate.mjs`, `test/orkpack_dir.test.mjs`, and
+`ggml/src/ggml-ork/ggml-ork.cpp`.
 
 Everything below marked **(read)** was established by reading the code named; **(measured)** by running
 it; **(inferred)** is a judgement that no observation supports yet, and is flagged as such on purpose.
@@ -129,21 +132,24 @@ measurement (§5) and may be stale if someone renamed a file by hand; the measur
 it costs an index tail-read, already memoised on `(mtime, size)` by `cachedPackLabel`
 (`quant_plan.js:210`, **read**) — the same memo is reused.
 
-### 3.1 `isPackDir`
+### 3.1 `isPackDir` — the marker, and only the marker
 
 ```
-marker:    <dir>/.orkpack-dir exists and parses        -> true     (authoritative)
-fallback:  <dir> contains >=1 *.orkpack
-           AND contains no *.gguf that is not an orkpack stub   -> true
-otherwise                                                        -> false
+<dir>/.orkpack-dir exists and parses at a schema we know  -> true
+otherwise                                                 -> false
 ```
 
-The fallback exists so a directory copied from another board, or made by hand, is still recognised.
-Its second clause is what keeps it from misfiring on a legacy repo directory: `Qwen3-1.7B-GGUF/`
-contains `…UD-Q4_K_XL.orkpack` **and** its source `…UD-Q4_K_XL.gguf`, so it is correctly *not* a pack
-directory (**read** — this is the real shape on disk today, per `test/model_settings_fallback.test.mjs:10`).
-The fallback is never written back to disk. **(inferred)** — the clause is reasoned from the layout,
-not observed failing or passing on a real copied directory.
+An earlier draft added a content fallback ("holds `*.orkpack` and no non-stub `*.gguf`"). It was
+**dropped**, and the reason is the direction of its failure: misclassify an ordinary model directory
+as a pack directory and `supersededByPack` hides the source GGUF — **the model disappears from the
+UI**. The heuristic was inferred rather than observed (no real `MODELS_DIR` was ever inspected), and
+this codebase has been bitten repeatedly by silent misclassification and not once by an explicit
+contract. It also matches the project's own rule that a self-describing artifact removes the mismatch
+class outright.
+
+A hand-copied directory of packs is therefore **not** a pack directory. That is made legible rather
+than silent: `listOrkpackVariants` logs **once** per directory naming what it found, that the packs
+are being ignored, and that `orkpackMigrateToDir` (`scripts/orkpack-migrate.mjs`) writes the marker.
 
 ### 3.2 `resolveOrkpack(absGguf, { settings, precision })` — the resolution order
 
@@ -168,12 +174,12 @@ for tests.
       If that leaves >=1, go to 4 over that subset, reason 'tier'.
       If it leaves 0, go to 4 over ALL usable variants, reason 'tier-unmet' (warn once).
    3. SOLE. Exactly one usable variant -> it, reason 'sole'.
-   4. TIEBREAK, deterministic, in this order:
-        a. highest measured bpw
-        b. then highest footer.nEntries   (a more complete pack)
-        c. then lexicographically smallest filename
-      reason 'tiebreak'.
+   4. BUDGET: the highest bpw whose footprint FITS the measured budget; if none fits, the LOWEST
+      bpw. Exact ties fall through to highest footer.nEntries, then the lexicographically smallest
+      filename. reason 'budget'.
       NOTHING here reads mtime: a copy or a touch must not change which variant resolves.
+      When more than one variant was eligible, warn ONCE naming the eligible set with sizes, the one
+      chosen, why, and `pack_variant`.
    5. No usable variant at all -> null (the handle resolves to nothing; the model is "needs a build").
 
    Legacy:
@@ -181,12 +187,22 @@ for tests.
    2. else null.
 ```
 
-**Tiebreak rationale.** Step 2 already picked the compute tier, so step 4 only ever breaks ties *within*
-a tier. Within a tier, higher bpw is the promoted/mixed build — strictly better quality on the same
-compute path. Highest-bpw-wins is therefore quality-maximising and, unlike mtime, is a pure function of
-the set. It deliberately does **not** encode "smaller is faster": that trade is the tier rule's job
-(`orkQuantForSource`, `orkpack.js:132`, **read**), and `pack_variant` is there for anyone who disagrees
-with the automatic answer.
+**Tiebreak rationale.** An earlier draft said simply "highest bpw wins", which is arbitrary in the
+one case it fires and picks the largest variant for someone who may have built a small one
+deliberately. Refusing to choose is worse — a model that will not load is a bigger failure than a
+defensible default. So the rule is the one already in the codebase, applied a second time: **highest
+bpw that fits the measured budget, else the lowest**. That is the same measured-RAM logic the tier
+rule uses, so it is one idea used twice rather than two rules to reconcile.
+
+The budget is `resolveWcacheBudgetMB()` (exported from `src/pool.js`), and the footprint is the pack's
+**file size** — an upper bound on its resident weight bytes, since the file also carries the model's
+non-packed tensors, so the rule errs toward the smaller variant, which is the safe direction.
+`src/orkpack_dir.js` keeps a pure `defaultPackBudgetMB()` for callers that pass none, identical to
+`resolveWcacheBudgetMB`'s own default; it deliberately does not import `db.js`, which opens a SQLite
+file at module load.
+
+Ambiguity resolved silently is how this class of bug got here, so an eligible set of more than one is
+always announced once.
 
 ### 3.3 `supersededByPack(absGguf)`
 
@@ -218,6 +234,20 @@ Size, display name and template for a handle come from the **resolved** variant.
 abs)` is called with the resolved concrete path, so the Models page shows the bpw of the variant that
 would actually load — the filename and the label come from the same measurement (§5) and cannot
 disagree.
+
+### When resolution FAILS, the model never vanishes
+
+A pack directory holding nothing usable is not allowed to make a model disappear:
+
+| state | what is listed |
+|---|---|
+| directory has a usable variant | the **handle**; the source `.gguf` is suppressed (superseded) |
+| directory has none usable, source `.gguf` still present | the **source**, with `orkConversion: 'stale'` — the actionable entry, because it is the only thing a rebuild can start from. The handle is not listed, so the model appears exactly once |
+| directory has none usable, source deleted | the **handle**, marked `'stale'` — the broken pack stays visible and the load fails loudly through `ORKPACK_UNUSABLE` |
+| directory empty but marked | same as the two rows above |
+
+So there is always exactly one entry and never zero. `/api/admin/library` and `/v1/models` implement
+the identical rule.
 
 ---
 
@@ -292,10 +322,15 @@ must land together or a multi-GB pack is silently rebuilt at the legacy path.
    tiebreak among already-footer-validated candidates — never an adoption decision. Adoption stays the
    footer's job, unchanged. (oRKLLM guarantees the filename comes from the measurement, §5; a
    hand-renamed file can only mis-order a tie, not be wrongly adopted.)
-3. **oRKLLM's conversion subprocess must pass `ORK_ORKPACK_PATH` explicitly.** `_spawnBuild`
-   (`src/conversion.js:365`, **read**) spawns `llama-completion -m <abs>` and relies on the derivation
-   to place the pack; under the new layout it must name the `.building-…` target itself. This is the
-   real coupling, and it is on the oRKLLM side.
+
+   **Deliberate asymmetry with the JS resolver:** the C side has no notion of a memory budget and no
+   settings row, so with no `ORK_QUANT` set it takes the highest bpw rather than applying §3.2 step 4.
+   It is the CLI fallback only — every oRKLLM-driven load and build passes `ORK_ORKPACK_PATH`, so the
+   JS resolver is the one that decides in production.
+3. **oRKLLM's conversion subprocess passes `ORK_ORKPACK_PATH` explicitly.** `_spawnBuild`
+   (`src/conversion.js`) used to spawn `llama-completion -m <abs>` and rely on the derivation to place
+   the pack; it now names the `.building-…` target itself. This was the real coupling, and it was on
+   the oRKLLM side.
 
 **Not fixed, flagged:** ggml-ork's own stub naming is `persist_final + ".gguf"` (`:3983`), a plain
 append, so it does **not** keep a split shard suffix terminal the way `stubPathFor` does
@@ -374,8 +409,10 @@ Today `removeOrkpack` sweeps a hardcoded sidecar list (`conversion.js:154`, **re
 including a 13.28 GiB 27B pack installed today. There is **no write-on-read and no automatic
 migration**: a crash between a move and a key rewrite is exactly how the orphaned-settings bug was made.
 
-Offered as an explicit, idempotent action (`orkpackMigrateToDir(absGguf, { dryRun })`), not run by any
-scan, load or enumeration:
+Offered as an explicit, idempotent action (`orkpackMigrateToDir(absGguf, { dryRun })`) behind
+`scripts/orkpack-migrate.mjs` — **script-only, and deliberately NOT in the admin UI**: it moves
+multi-GB artifacts and a stray click is a poor way to discover that. Revisit only if it turns out to
+be needed often. Nothing in the server calls it; no scan, load or enumeration does:
 
 ```
 1. mkdir <dir>;  write .orkpack-dir
@@ -398,9 +435,10 @@ did not just write.
 
 ## 11. What this does NOT do
 
-- **No automatic migration, no write-on-read.** §10.
+- **No automatic migration, no write-on-read, and no migration button in the UI.** §10.
 - **No bpw in the handle.** §0 — the whole reason the directory scheme exists.
-- **No `current` symlink / no pointer file.** §1 — resolution stays stateful-free.
+- **No `current` symlink / no pointer file.** §1 — resolution stays free of mutable state.
+- **No content heuristic for `isPackDir`.** §3.1 — dropped on review; the marker is the contract.
 - **No `ORKPACK_VERSION` change.** This spec does not touch the footer, the version predicate or
   `isOrkpackUsable`'s gates. `fix/orkpack-v8` is held back deliberately and nothing here depends on or
   conflicts with it; the only shared file is `src/orkpack.js`, and these edits are additions outside the
@@ -414,40 +452,60 @@ did not just write.
 
 ---
 
-## 12. Test plan (`test/orkpack_dir.test.mjs`, node:test, no NPU)
+## 12. Tests — `test/orkpack_dir.test.mjs`, node:test, no NPU
 
-Baseline: **212/212 unit tests green on `alpha`** (**measured**, `npm run test:unit`, 2026-10-14).
+**Measured:** baseline `alpha` **212/212**; with this change **254/254, 0 fail** (`npm run test:unit`,
+2026-10-14). 42 new tests in 9 suites.
 
-1. legacy file layout — resolves, `layout:'legacy'`, `supersededByPack` true, byte-identical to today
-2. directory, one variant — resolves it, `reason:'sole'`
-3. directory, three variants, no settings — tier rule picks, tiebreak deterministic, **independent of
-   mtime** (touch a loser, re-resolve, same answer)
-4. directory, `pack_variant` pinned — explicit wins, even over a better tier match
-5. directory, `pack_variant` pinned to a label that no longer exists — `explicit-missing`, falls through,
-   resolves, warns once
-6. directory, none usable — `null`; `supersededByPack` false; the source `.gguf` reappears in enumeration
-7. both layouts present — directory wins, legacy file untouched on disk afterwards
-8. `isPackDir` says **false** for a legacy repo directory holding `X.orkpack` + `X.gguf`
-9. removal — directory: whole tree gone; legacy: the hardcoded set **plus** a split-stub sibling
-10. enumeration — a 3-variant directory yields exactly ONE id, equal to the handle, and the walk does not
-    descend
-11. **the re-quantize test** (§7): same settings row before and after a bpw change; and the negative
-    control that a bpw-in-the-filename handle would have orphaned it
-12. migration round-trip — migrate, verify inodes, unmigrate, byte-identical; and a simulated crash
-    after step 3 resolves to the directory with the legacy file still present
+| suite | pins |
+|---|---|
+| the handle and the directory are different paths | ★ `<base>.orkpack` ENOENTs while `<base>/` is a directory — a forgotten resolve fails loudly and can never report a directory's size as a pack's; also for a shard-suffixed source |
+| `isPackDir` — the marker, and only the marker | a marked dir is one; a real `Qwen3-1.7B-GGUF/` holding `.gguf` + `.orkpack` is **not**; an unmarked dir of packs is ignored and warns exactly once naming the fix; a malformed or future-schema marker is not a marker |
+| legacy layout keeps working | resolves, `layout:'legacy'`; no pack → null; `supersededByPack` is still size-only on this arm |
+| directory layout | sole; variants measured off the index not the filename; `.building-` never a variant; tier rule; explicit pin beats it; a pin to an **unusable** variant is still returned (so the load fails loudly); a pin to a **missing** label falls through once, loudly; stale variants skipped and an all-stale dir resolves to null without hiding the source; the directory wins and the legacy file survives untouched |
+| the tiebreak | highest bpw that fits; none fits → lowest, never a refusal; **independent of mtime** (touch a loser, same answer); the ambiguity warning names the set, the winner, the reason and `pack_variant`; a single eligible variant is never announced |
+| build target and finalize | the target is inside the directory and creates the marker; finalize names the pack for its measurement; a same-label rebuild replaces; an unmeasurable pack gets `unlabelled-<ms>`, never a fabricated number; discard takes sidecars and refuses a finished variant |
+| removal | directory: whole tree, stub siblings included; a single variant; the last variant takes the empty directory; legacy: the old list **plus** the split-stub sibling it used to miss; and a shared-prefix model is not touched |
+| migration | hardlink/verify/unlink with the **inode preserved**; `--dry-run` touches nothing; byte-identical round-trip; unmigrate refuses several variants; a simulated crash between link and unlink resolves to the directory with the legacy file intact; idempotent; nothing-to-do is reported, not invented |
+| ★ identity survives a re-quantize | the file moves `4bpw` → `5bpw`, the handle and the settings row do not; and the negative control that a bpw-in-the-handle scheme **would** have orphaned that row |
 
-E2E: the pre-commit hook gates on `npm run test:e2e`; it is run before any commit that touches `src/`.
+**ggml-ork**, verified by extracting the new functions into a standalone harness
+(`ork_is_pack_dir` / `ork_variant_bpw` / `ork_pick_variant` / `ork_default_orkpack_path`), compiling
+them with `c++ -std=c++17 -Wall -Wextra` (clean, no warnings) and running them against a fixture
+directory of five packs:
 
----
+| input | resolves to |
+|---|---|
+| no `ORK_QUANT` | `8bpw.orkpack` (highest bpw) |
+| `ORK_QUANT=8` | `8bpw.orkpack` |
+| `ORK_QUANT=4` | `4.9bpw.orkpack` (highest bpw **within the tier**) |
+| a v6 pack in the directory | never selected (version gate) |
+| `.building-1-2.orkpack` | never selected |
+| source with no pack directory | `<base>.orkpack` — legacy, unchanged |
+
+The fork was **not** built end to end (that needs the board), so this is a unit-level verification of
+the new code, not an integration test.
+
+E2E: `npm run test:e2e` via the pre-commit hook, run before the implementation commit.
 
 ## 13. Things I could not verify
 
-- No board was touched and nothing was deployed, per the brief. Nothing here is measured on hardware.
-- The `isPackDir` fallback clause (§3.1) is **inferred** from the on-disk shapes in the repo's tests and
-  comments; I did not inspect a real `MODELS_DIR` to confirm no directory in the wild holds `.orkpack`
-  files and no non-stub `.gguf`.
-- ggml-ork §6.2 is a reading of `ork_default_orkpack_path` and `ork_persist_init`; I did not build or
-  run the fork, so "sidecars follow `persist_final` for free" is **read, not measured**.
-- Whether `fix/orkpack-v8`'s reader bump collides textually with these additions: I read neither branch,
-  only `alpha` and `feat/orkpack-4bit-footprint`'s HEAD subject. The claim of no conflict is about
-  *semantics* (nothing here touches the version predicate), not about a git merge.
+- **No board was touched and nothing was deployed.** Nothing here is measured on hardware: no pack
+  was built, loaded or served by a real runtime. The whole change is exercised against synthetic
+  packs whose footers and indices are written by the test fixture.
+- **The fork was not compiled as a whole.** `ggml-ork.cpp` needs the board's toolchain and headers;
+  the new functions were extracted and compiled standalone (§12). A whole-file compile could still
+  find something the extraction's stubs hid — most plausibly an include or a name collision.
+- **No real `MODELS_DIR` was inspected.** The `isPackDir` decision no longer depends on one (the
+  content heuristic that did was dropped), but the claim that no directory in the wild would have
+  been misclassified by it is now moot rather than confirmed.
+- **The budget footprint is the pack's FILE size**, which is an upper bound on resident weight bytes
+  rather than a measurement of them. It is the right direction (it prefers the smaller variant
+  slightly sooner than strictly necessary) but it is not calibrated against real residency.
+- **The two resolvers are deliberately not identical** (§6.2): the C derivation has no budget and no
+  settings, so a CLI run with no `ORK_QUANT` can pick a different variant than the server would. In
+  production every load and build passes `ORK_ORKPACK_PATH`, so the JS resolver decides — but that is
+  an argument, not a measurement.
+- **Nothing here touches `ORKPACK_VERSION`, the footer, or `isOrkpackUsable`'s gates**, so it does not
+  conflict with the held-back `fix/orkpack-v8` *semantically*. Whether it conflicts as a git merge is
+  not something I checked: I read neither that branch nor `feat/orkpack-4bit-footprint`'s diff.

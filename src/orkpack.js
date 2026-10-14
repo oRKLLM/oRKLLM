@@ -59,7 +59,71 @@ const SIG_HY_BIT  = 0x100;   // ORK_HYBRID
 // on our side; the runtime is free to keep ignoring it.
 const SIG_HD_BIT  = 0x200;   // hadamard rotation (implied by native W4A4)
 
+// THE HANDLE for a source GGUF's pack: `<base>.orkpack`.
+//
+// In the LEGACY layout this string is a file. In the DIRECTORY layout (src/orkpack_dir.js) it is a
+// NAME that resolves to one of several variant files inside `<base>/` — and it is never renamed,
+// whatever variant is selected. That is the whole point of the directory scheme: one source GGUF can
+// carry a 4bpw native W4A4, a 4.9bpw promoted mixed and an 8bpw int8 pack, and bpw is a MEASURED
+// property that changes on every re-quantize, so it must be an attribute and never part of the key.
+// Putting it in the filename would move the identity whenever the artifact is rebuilt and would break
+// `sourceGgufFor` below — the reverse swap that is how a pack inherits its source's settings row.
+//
+// So every identity derivation in the server (sourceGgufFor, modelSettingsFor, modelAliasesFor,
+// canonicalModelId) keeps working on this string unchanged, and only the few sites that touch the
+// FILESYSTEM go through `resolveOrkpack`.
 export function orkpackPathFor(absGguf) { return absGguf.replace(/\.gguf$/i, '.orkpack'); }
+
+// The pack DIRECTORY for a source GGUF: the source path with `.gguf` stripped. Note this is a
+// different string from the handle above (`/m/X` vs `/m/X.orkpack`), which is load-bearing: a caller
+// that forgets to resolve a handle stats a path that does not exist and gets ENOENT, rather than
+// succeeding on the directory and silently reporting a directory's 4096 bytes as a pack's size.
+// Pinned by a test — see test/orkpack_dir.test.mjs, "a handle never stats as the directory".
+export function orkpackDirFor(absGguf) { return String(absGguf).replace(/\.gguf$/i, ''); }
+
+// ---- the pack-directory marker -------------------------------------------------------------------
+//
+// A directory is a pack directory IFF it carries this marker. Nothing is inferred from its contents.
+//
+// The obvious cheaper predicate — "is `<dir>.gguf` a sibling?" — cannot work: deleting the source
+// after packing is the POINT of packing, so the sibling is routinely gone. And a content heuristic
+// ("holds *.orkpack and no loose .gguf") was considered and REJECTED: its failure direction is the
+// expensive one. Misclassify an ordinary model directory as a pack directory and `supersededByPack`
+// hides the source GGUF — the model disappears from the UI. This codebase has been bitten repeatedly
+// by silent misclassification and not once by an explicit contract, so the contract is explicit.
+//
+// A directory holding packs but no marker (hand-copied, restored from a backup) is therefore NOT a
+// pack directory. That is recoverable and legible rather than silent: `listOrkpackVariants` logs once
+// saying what it found and which function writes the marker.
+export const PACK_DIR_MARKER = '.orkpack-dir';
+const PACK_DIR_SCHEMA = 1;
+export const packDirMarkerPath = (absDir) => path.join(String(absDir), PACK_DIR_MARKER);
+
+/** The parsed `.orkpack-dir`, or null when absent/unreadable/a schema we don't know. */
+export function readPackDirMarker(absDir) {
+  try {
+    const rec = JSON.parse(fs.readFileSync(packDirMarkerPath(absDir), 'utf8'));
+    return rec && rec.schema === PACK_DIR_SCHEMA ? rec : null;
+  } catch { return null; }
+}
+
+/** Create the marker. Idempotent; the only thing that makes a directory a pack directory. */
+export function writePackDirMarker(absDir, { source = null } = {}) {
+  const rec = { schema: PACK_DIR_SCHEMA, source, createdAt: new Date().toISOString(), producer: 'oRKLLM' };
+  fs.mkdirSync(absDir, { recursive: true });
+  fs.writeFileSync(packDirMarkerPath(absDir), JSON.stringify(rec, null, 2));
+  return rec;
+}
+
+/** Is this directory a pack directory? Marker only — see the note above. */
+export function isPackDir(absDir) { return readPackDirMarker(absDir) !== null; }
+
+// A build in flight. bpw is only knowable AFTER a build, so a pack is built to a temp name inside the
+// directory and renamed to its measured label on success — cheap (same filesystem), atomic, and the
+// directory key does not move. The prefix is what keeps an interrupted build from ever resolving as a
+// variant, and it is a PREFIX rather than a suffix so one test catches the pack and all its sidecars.
+export const BUILDING_PREFIX = '.building-';
+export function isBuildingPack(name) { return path.basename(String(name)).startsWith(BUILDING_PREFIX); }
 
 // ---- .orkpack as the servable artifact -------------------------------------------------------------
 // A v6 pack embeds the source GGUF's metadata, so it is self-contained: ggml_backend_ork_extract_gguf
@@ -136,13 +200,9 @@ export function orkQuantForSource(bits, npuQuant = 'auto') {
   return null;
 }
 
-// Has this .gguf been superseded by its pack? Once the pack exists the gguf is a build input, not a
-// servable model, and listing both would offer the same weights twice — once the cheap way and once the
-// way that double-carries them. THE single enumeration rule, shared by /v1/models and
-// /api/admin/library so the two cannot drift.
-export function supersededByPack(absGguf) {
-  try { return fs.statSync(orkpackPathFor(absGguf)).size > 0; } catch { return false; }
-}
+// `supersededByPack` lives in src/orkpack_dir.js — it has to ask the DIRECTORY layout as well as the
+// legacy file, and that answer needs the measured variant list, which would make this module import
+// quant_plan.js, which already imports this one. Same single enumeration rule, one module along.
 
 // The footer at EOF, or null when the file is absent, too short, unreadable, or not a pack.
 //

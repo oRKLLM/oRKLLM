@@ -7,18 +7,25 @@
 //   • idle-driven — converts only when no model is loaded (anyLoaded === false).
 //   • preemptible — a user Load kills the in-flight conversion and re-queues it (the user wins the NPU).
 //
-// The conversion runs a separate `llama-completion` process: ggml-ork DERIVES the pack path from the
-// -m model (<model-dir>/<basename>.orkpack — exactly orkpackPathFor) and builds an absent pack itself.
-// It packs every weight once (pack→dump→free keeps ≤1 weight resident, so it fits any model size) and
-// finalizes the .orkpack on its clean exit. We deliberately spawn the CLI rather than the serving worker
-// — the worker is hard-killed on unload (no clean ggml-ork teardown → no finalize), a CLI exit finalizes.
+// The conversion runs a separate `llama-completion` process. It packs every weight once (pack→dump→free
+// keeps ≤1 weight resident, so it fits any model size) and finalizes the .orkpack on its clean exit. We
+// deliberately spawn the CLI rather than the serving worker — the worker is hard-killed on unload (no
+// clean ggml-ork teardown → no finalize), a CLI exit finalizes.
+//
+// WHERE the pack lands is now OURS to say, not the runtime's. ggml-ork would derive
+// `<model-dir>/<basename>.orkpack` from -m, which is the legacy layout; we pass ORK_ORKPACK_PATH
+// naming a `.building-…` target inside the model's pack DIRECTORY and rename it to its measured bpw
+// on success (src/orkpack_dir.js). bpw is only knowable after the build, which is exactly why the
+// build writes to a temp name and the directory — the thing that is the identity — never moves.
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { MODELS_DIR, LLAMA_RUNTIME_DIR } from './config.js';
 import { isOrkpackStub, getGgufArchitecture, parseGgufShard } from './gguf.js';
-import { orkpackPathFor, isOrkpackUsable, readOrkpackFooter, recordOrkFmt, llamaRuntimeTag, orkEnvFrom,
-         writeOrkpackProvenance, provPathFor } from './orkpack.js';
+import { orkpackPathFor, readOrkpackFooter, recordOrkFmt, llamaRuntimeTag, orkEnvFrom,
+         writeOrkpackProvenance } from './orkpack.js';
+import { resolveOrkpack, listOrkpackVariants, orkpackBuildTarget, finalizeOrkpackBuild,
+         discardOrkpackBuild, removeOrkpack } from './orkpack_dir.js';
 import { consolidateSplitGguf, consolidatedPathFor, splitGroupReady } from './gguf_merge.js';
 import { budgetMbForBpw, measureFromPack, bpwDelivery, bpwDeliveryMessage } from './quant_plan.js';
 
@@ -124,8 +131,14 @@ export function orkPrecisionForBuild(bits, mixed) {
   return p;
 }
 
+// Does a pack exist for this source — in EITHER layout?
+//
+// Deliberately the WEAK question: any well-formed variant on disk, usable or not. The scan below uses
+// it to decide "is there something here to validate or discard", and `resolveOrkpack` alone would
+// answer "no pack" for a directory holding only stale ones, which would make the scan skip the very
+// packs it exists to clean up.
 export function hasOrkpack(absGguf) {
-  try { return fs.statSync(orkpackPathFor(absGguf)).size > 0; } catch { return false; }
+  return listOrkpackVariants(absGguf).variants.length > 0;
 }
 
 // Is this model's .orkpack one the runtime would ADOPT as-is (no re-conversion)?
@@ -140,21 +153,16 @@ export function hasOrkpack(absGguf) {
 //
 // The footer answers both exactly; see src/orkpack.js. Pass the precision this model will SERVE at so
 // the signature check is the same one the runtime will apply; omit it for a weaker structural check.
+// In the directory layout this asks whether ANY variant would be adopted — which is the question the
+// cold-start guard and the load path are really asking. Which one gets picked is resolveOrkpack's job.
 export function isOrkpackFresh(absGguf, precision = null) {
-  return isOrkpackUsable(orkpackPathFor(absGguf), precision);
+  return resolveOrkpack(absGguf, { precision }) !== null;
 }
 
-// Remove an unusable .orkpack and every sidecar that belongs to it. The .gmax tuning profile and the
-// stub GGUF describe the pack's specific contents, so leaving them behind would attach an old profile
-// to a freshly built pack (ggml-ork only unlinks .gmax when IT sees the pack as stale — when we delete
-// first, it just sees "absent" and that cleanup never runs). .meta.json is the retired freshness
-// sidecar, swept here so old installs don't leave litter.
-function removeOrkpack(absGguf) {
-  const pack = orkpackPathFor(absGguf);
-  for (const p of [pack, pack + '.tmp', pack + '.json', pack + '.meta.json', provPathFor(pack), pack + '.gmax', pack + '.gguf']) {
-    try { fs.unlinkSync(p); } catch {}
-  }
-}
+// Removal moved to src/orkpack_dir.js. In the directory layout it is removing the DIRECTORY, which
+// retires the missed-sidecar class instead of patching it: the old hardcoded suffix list here was
+// already known to miss a split pack's `<base>.orkpack-0000N-of-0000M.gguf` stub siblings. The legacy
+// arm keeps the list and gains an anchored sweep that finally catches them.
 
 export class ConversionScheduler {
   constructor(pool) {
@@ -289,16 +297,14 @@ export class ConversionScheduler {
   // A rebuild is ~23 minutes and is also the right answer for a pack whose provenance we cannot verify
   // (these were produced by an older path, and this one carries no provenance record at all).
   _discardSplitPack(absFirstShard) {
-    const pack = orkpackPathFor(absFirstShard);
-    for (const f of [pack, pack + '.gguf', pack + '.json', provPathFor(pack)]) {
-      try {
-        const sz = fs.statSync(f).size;
-        fs.unlinkSync(f);
-        console.log(`[conversion] removed ${path.basename(f)} (${(sz / 1073741824).toFixed(2)} GiB): its embedded ` +
-                    'metadata is a single shard\'s header, so its stub would be split (and short of the ' +
-                    'tensors only the other shards carry) — rebuilding from the consolidated gguf');
-      } catch {}
-    }
+    const bytes = listOrkpackVariants(absFirstShard).variants.reduce((n, v) => n + v.sizeBytes, 0);
+    if (!bytes) return;
+    // One call for both layouts, and it now also sweeps the stub's sibling symlinks — which this
+    // hand-rolled list missed, and which are exactly the artifact of the split that is being discarded.
+    removeOrkpack(absFirstShard);
+    console.log(`[conversion] removed the pack for ${path.basename(absFirstShard)} (${(bytes / 1073741824).toFixed(2)} GiB): ` +
+                "its embedded metadata is a single shard's header, so its stub would be split (and short of the " +
+                'tensors only the other shards carry) — rebuilding from the consolidated gguf');
   }
 
   enqueue(rel) {
@@ -359,17 +365,36 @@ export class ConversionScheduler {
     return this._spawnBuild(rel, envExtra);
   }
 
-  // Spawn ONE conversion subprocess; resolves true iff the .orkpack was produced. Shared by the idle pump
+  // Spawn ONE conversion subprocess; resolves to the FINAL pack path iff one was produced, else null.
+  // (It used to resolve a boolean; a path is truthy, so every existing truthiness check still reads the
+  // same, and the two-pass `quantize` below needs pass 1's path to rank from.) Shared by the idle pump
   // and the blocking convertNow. Holds this.current for the build's duration so the two paths can't run
   // concurrently on the single NPU stream.
-  _spawnBuild(rel, envExtra = {}, packArgs = [], label = null) {
+  //
+  // `keep` skips the short-circuit on an existing pack and the finalize rename — the two-pass mixed
+  // build uses it for pass 1, whose product is a qerr ranking rather than a servable variant.
+  _spawnBuild(rel, envExtra = {}, packArgs = [], label = null, { tag = '', keep = false } = {}) {
     const pr = new Promise((resolve) => {
       const abs  = path.join(MODELS_DIR, rel);
-      const pack = orkpackPathFor(abs);
-      if (hasOrkpack(abs)) { this.queued.delete(rel); resolve(true); return; }   // built since enqueue
-      // progress sidecar — /v1/models reads <model>.orkpack.json → UI shows "converting"
+      if (!keep && hasOrkpack(abs)) {                     // built since enqueue
+        this.queued.delete(rel);
+        resolve(resolveOrkpack(abs)?.path ?? orkpackPathFor(abs));
+        return;
+      }
+      // WHERE THE PACK IS BUILT. A temp name inside the model's pack directory, renamed to its
+      // measured bpw on success — see src/orkpack_dir.js. ggml-ork's own `<model>.orkpack` derivation
+      // is overridden by ORK_ORKPACK_PATH below; without that the runtime would place the pack where
+      // we no longer look for it and every load would rebuild a multi-GB pack from scratch.
+      let pack;
+      try { pack = orkpackBuildTarget(abs, tag); }
+      catch (e) { console.warn(`[conversion] ${rel}: cannot create the pack directory (${e.message})`); resolve(null); return; }
+
+      // Progress sidecar — both enumerations read `<model>.orkpack.json`, i.e. the HANDLE's name, and
+      // they keep doing so: progress belongs to the MODEL, not to whichever variant is being built,
+      // and keeping it on the handle is what makes it discoverable without the UI learning the layout.
+      const sidecarPath = orkpackPathFor(abs) + '.json';
       const sidecar = (progress) => { try {
-        fs.writeFileSync(pack + '.json', JSON.stringify({ status: 'converting', progress, ...(label ? { label } : {}) }));
+        fs.writeFileSync(sidecarPath, JSON.stringify({ status: 'converting', progress, ...(label ? { label } : {}) }));
       } catch {} };
       sidecar(0);
       let srcSize = 0; try { srcSize = fs.statSync(abs).size; } catch {}
@@ -381,6 +406,10 @@ export class ConversionScheduler {
       // without its pack.
       const env = { ...process.env,
         ORK_NO_STUB: '1', ...envExtra,   // envExtra (ORK_QUANT/ORK_HYBRID) matches the serve
+        // NOT optional, and not a development knob any more: it is how the server says where the pack
+        // goes. A runtime that still derived its own path, paired with a server that stopped placing
+        // packs there, would silently rebuild multi-GB packs on every load.
+        ORK_ORKPACK_PATH: pack,
         LD_LIBRARY_PATH: [LLAMA_RUNTIME_DIR, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':') };
       // A single 1-token forward pass packs+dumps every weight; --no-repack keeps weights host so the
       // ggml-ork matmul offload fires; -ngl 99 offloads all layers. `--device ORK` PINS them to the NPU:
@@ -427,9 +456,19 @@ export class ConversionScheduler {
         this.current = null;
         this.currentPromise = null;
         this.queued.delete(rel);
-        try { fs.unlinkSync(pack + '.json'); } catch {}
-        const built = hasOrkpack(abs);
+        try { fs.unlinkSync(sidecarPath); } catch {}
+        // THIS build's product, not "some pack exists": an explicit re-quantize must not report
+        // success because a sibling variant happens to be sitting in the directory.
+        let produced = null;
+        try { if (fs.statSync(pack).size > 0) produced = pack; } catch {}
+        if (!produced) discardOrkpackBuild(pack);
+        // Name it for what it MEASURES as. Same call the Models page labels with, so the filename and
+        // the label are one string from one measurement and cannot disagree.
+        if (produced && !keep) { try { produced = finalizeOrkpackBuild(produced); } catch (e) {
+          console.warn(`[conversion] ${rel}: built, but naming it failed (${e.message}) — left at ${produced}`); } }
+        const built = produced;
         if (built) {
+          pack = produced;
           // This pack was written by the CURRENTLY-installed runtime, so its footer states the on-disk
           // format token that runtime expects. Record it — that is the one field of the freshness check
           // we cannot compute ourselves without loading the NPU runtime (see src/orkpack.js).
@@ -489,8 +528,6 @@ export class ConversionScheduler {
     const bits  = cfg.bits === 8 ? 8 : 4;
     const mixed = !!cfg.mixed;
     const abs   = path.join(MODELS_DIR, rel);
-    const pack  = orkpackPathFor(abs);
-    const qerrAt = pack.replace(/\.orkpack$/i, '.qerr.orkpack');
 
     if (!fs.existsSync(abs)) return { ok: false, error: 'no such model: ' + rel };
     const arch = getGgufArchitecture(abs);
@@ -501,34 +538,39 @@ export class ConversionScheduler {
     if (this.current) { this.preempt(); try { await this.currentPromise; } catch {} }
 
     const env = orkEnvFrom(orkPrecisionForBuild(bits, mixed));
-    const clean = () => { for (const f of [qerrAt, qerrAt + '.gguf', qerrAt + '.tmp']) { try { fs.unlinkSync(f); } catch {} } };
+    let scaffold = null;      // pass 1's `.building-…` pack, when the mixed flow made one to rank from
     try {
       removeOrkpack(abs);                      // an explicit rebuild replaces, never adopts
-      clean();
 
-      // Pass 1 — uniform. For a mixed build its real product is the recorded qerr.
+      // Pass 1 — uniform. For a mixed build its real product is the recorded qerr, so it is built with
+      // `keep`: it stays under its `.building-…` name, never becomes a servable variant, and is swept
+      // in the finally. Pass 2 gets its OWN build target, so the old rename-aside dance is gone — that
+      // existed only because ggml-ork derived the output path from -m and pass 2 would otherwise have
+      // overwritten the very file it ranks from. We name both targets now, so they simply differ.
       const p1 = ['--pack-bits', String(bits), '--no-pack-mixed'];
-      if (!await this._spawnBuild(rel, env, p1, mixed ? 'pass 1 of 2 - measuring' : 'quantizing')) {
-        return { ok: false, error: 'pass 1 produced no .orkpack' };
-      }
-      if (!mixed) return { ok: true, bits, mixed };
+      const p1Pack = await this._spawnBuild(rel, env, p1, mixed ? 'pass 1 of 2 - measuring' : 'quantizing',
+                                            { tag: mixed ? 'p1' : '', keep: mixed });
+      if (!p1Pack) return { ok: false, error: 'pass 1 produced no .orkpack' };
+      if (!mixed) { reportBpwDelivered(rel, p1Pack, cfg); return { ok: true, bits, mixed, pack: p1Pack }; }
+      scaffold = p1Pack;
 
       // Pass 2 — promote the worst-quantised weights, ranked by pass 1's qerr.
-      fs.renameSync(pack, qerrAt);
-      try { fs.renameSync(pack + '.gguf', qerrAt + '.gguf'); } catch {}
       const p2 = ['--pack-bits', String(bits), '--pack-mixed',
-                  '--pack-qerr-source', qerrAt,
-                  '--pack-budget',   String(promoteBudgetMb(qerrAt, cfg)),
+                  '--pack-qerr-source', p1Pack,
+                  '--pack-budget',   String(promoteBudgetMb(p1Pack, cfg)),
                   '--pack-qerr-min', String(cfg.qerrMin ?? 0.05)];
       if (cfg.promote) p2.push('--pack-promote', String(cfg.promote));
-      if (!await this._spawnBuild(rel, env, p2, 'pass 2 of 2 - promoting')) {
-        try { fs.renameSync(qerrAt, pack); } catch {}   // keep the uniform pack; never leave nothing servable
-        return { ok: false, error: 'pass 2 failed; kept the uniform pack' };
+      const p2Pack = await this._spawnBuild(rel, env, p2, 'pass 2 of 2 - promoting', { tag: 'p2', keep: false });
+      if (!p2Pack) {
+        // Never leave nothing servable: promote pass 1's uniform pack into a real variant instead.
+        let kept = null;
+        try { kept = finalizeOrkpackBuild(p1Pack); scaffold = null; } catch {}
+        return { ok: false, error: `pass 2 failed; kept the uniform pack${kept ? ` as ${path.basename(kept)}` : ''}` };
       }
-      reportBpwDelivered(rel, pack, cfg);   // measure the artifact, never fail on it
-      return { ok: true, bits, mixed };
+      reportBpwDelivered(rel, p2Pack, cfg);   // measure the artifact, never fail on it
+      return { ok: true, bits, mixed, pack: p2Pack };
     } finally {
-      clean();
+      if (scaffold) discardOrkpackBuild(scaffold);   // scaffolding, removed either way
       this._pump();
     }
   }

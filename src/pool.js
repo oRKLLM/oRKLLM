@@ -12,8 +12,9 @@ import { eagle3Generate } from './eagle.js';
 import { getAggregatedTools } from './mcp.js';
 import { buildToolSystemPrompt } from './mcp_inference.js';
 import { isOrkpackFresh, getConversionScheduler } from './conversion.js';
-import { orkEnvFrom, orkQuantForSource, isOrkpackPath, isOrkpackUsable, stubPathFor, orkpackPathFor, readOrkpackFooter, sigPrecision, sourceGgufFor, supersededByPack,
+import { orkEnvFrom, orkQuantForSource, isOrkpackPath, isOrkpackUsable, stubPathFor, orkpackPathFor, readOrkpackFooter, sigPrecision, sourceGgufFor,
          provenanceChipsetMismatch } from './orkpack.js';
+import { resolveOrkpack, supersededByPack } from './orkpack_dir.js';
 import { isRecurrentArch, supportsThinkingToggle, ggufQuantBits, parseGgufShard } from './gguf.js';
 import { consolidateSplitGguf, splitGroupReady } from './gguf_merge.js';
 import { cacheKey, getCachePath, tmpCachePath, putCachePath, isCacheEnabled } from './cache.js';
@@ -255,7 +256,7 @@ function workerEnv({ disableVulkan = false, orkQuant = null, orkHybrid = null, o
 // the hot-cache reservation. Default limit = total RAM − 1 GiB; when the prefix
 // cache is on, its hot budget is carved out first (strictly enforced). Floors at
 // 1 GiB so a tiny/misconfigured cap can never starve the runtime.
-function resolveWcacheBudgetMB() {
+export function resolveWcacheBudgetMB() {
   const defaultMB = Math.max(1024, Math.floor(os.totalmem() / 1048576) - 1024);
   const globalMB = parseInt(dbGetSetting('global_memory_limit_mb') ?? String(defaultMB)) || defaultMB;
   const hotMB = dbGetSetting('cache_enabled') === '1'
@@ -570,7 +571,26 @@ class EnginePool {
       await this._unloadSlot(s);
 
       console.log(`[EnginePool] Slot ${s.id}: spawning worker for model: ${modelName}`);
+      // THE one place a model id becomes a path. For a pack the id is a HANDLE — `<base>.orkpack`,
+      // which under the directory layout is a name rather than a file — so it resolves to the variant
+      // that would actually serve (src/orkpack_dir.js). Everything downstream of here holds a concrete
+      // path and needs no further resolution. Under the legacy layout the handle IS the file, so this
+      // is the identity.
       let modelPath = path.join(MODELS_DIR, modelName);
+      if (isOrkpackPath(modelName)) {
+        const r = resolveOrkpack(path.join(MODELS_DIR, sourceGgufFor(modelName)), {
+          settings: modelSettingsFor(modelName),
+          precision: { orkQuant: options.ork_quant, orkHybrid: options.ork_hybrid },
+          budgetMB: resolveWcacheBudgetMB(),
+        });
+        if (r) {
+          modelPath = r.path;
+          if (r.layout === 'dir') console.log(`[EnginePool] ${modelName} -> ${path.basename(r.path)} (${r.reason})`);
+        }
+        // No `r` falls through to the handle path, which does NOT exist under the directory layout —
+        // so the existence check below throws with the handle's name. That is the intended loud
+        // failure: a pack directory with nothing usable in it must not quietly serve something else.
+      }
       if (!fs.existsSync(modelPath)) {
         throw new Error(`Model file not found: ${modelPath}`);
       }
@@ -832,11 +852,20 @@ class EnginePool {
         // experimental MoE-on-NPU expert offload (gguf/ggml-ork only; default off, set per-fork)
         orkMoeNpu: options.ork_moe_npu,
         sourceIsStub: !!options.orkpack,
-        // A pack-backed model names its pack directly; a plain .gguf gets its own pack when that pack
-        // is one this run would actually adopt (same check the cold-start guard makes).
+        // A pack-backed model names its pack directly (already the RESOLVED variant — the load path
+        // resolves the handle once, at the top of load()); a plain .gguf gets its own pack when that
+        // pack is one this run would actually adopt (same check the cold-start guard makes).
+        //
+        // This is not optional and it is not a development knob: the worker drives the library through
+        // N-API, so ggml-ork's own `<model>.orkpack` derivation — which scans the COMMAND LINE for the
+        // .gguf it was handed — finds nothing and disables the packed-weight path entirely.
         orkpackPath: options.orkpack
-          || (backend === 'llama' && isOrkpackFresh(modelPath, { orkQuant: options.ork_quant, orkHybrid: options.ork_hybrid })
-                ? orkpackPathFor(modelPath) : null),
+          || (backend === 'llama'
+                ? resolveOrkpack(modelPath, {
+                    precision: { orkQuant: options.ork_quant, orkHybrid: options.ork_hybrid },
+                    budgetMB: resolveWcacheBudgetMB(),
+                  })?.path ?? null
+                : null),
         // global process-RAM cap minus the hot prefix cache → NPU residency budget
         wcacheBudgetMB: resolveWcacheBudgetMB(),
       }) });
