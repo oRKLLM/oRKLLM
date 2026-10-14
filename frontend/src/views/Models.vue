@@ -2205,7 +2205,8 @@ export default {
           this.$notify(data.loadError.message || 'Failed to load model', 'error');
           return false;
         }
-        if (data.isLoaded && data.model === modelId && !data.loading) return true;
+        if (data.isLoaded && !data.loading
+            && (data.model === modelId || (data.modelAliases || []).includes(modelId))) return true;   // a packed model answers to its .orkpack id AND the .gguf it was built from
       }
       this.$notify('Model load timed out', 'error');
       return false;

@@ -153,6 +153,22 @@ function resolveOrkPrecision(modelName, options = {}, saved = null) {
 // perfectly good slot to reload the very model that was already in it.
 // (The swap mirrors orkpackPathFor, which is itself a pure extension swap, but on the id
 // rather than an absolute path.)
+// Every id that denotes the resident model. A packed model answers to BOTH its `.orkpack`
+// id and the `.gguf` it was built from: enumeration hides the gguf once the pack exists
+// (supersededByPack), but a browser tab whose model list predates the pack is still holding
+// that id and polls "is MY model loaded?". Reporting only the canonical name leaves such a
+// tab comparing against an equality that can never become true, so it spins to its 5-minute
+// timeout and reports a failure for a model that is in fact resident and serving.
+function modelAliasesFor(modelName) {
+  if (!modelName) return [];
+  const out = [modelName];
+  if (isOrkpackPath(modelName)) {
+    const src = sourceGgufFor(modelName);
+    try { if (src !== modelName && fs.existsSync(path.join(MODELS_DIR, src))) out.push(src); } catch {}
+  }
+  return out;
+}
+
 function canonicalModelId(modelName) {
   if (!modelName || isOrkpackPath(modelName) || !/\.gguf$/i.test(modelName)) return modelName;
   try {
@@ -1416,6 +1432,7 @@ class EnginePool {
     return {
       isLoaded:      primary.isLoaded,
       model:         primary.activeModel?.name  ?? null,
+      modelAliases:  modelAliasesFor(primary.activeModel?.name ?? null),
       isMock:        primary.activeModel?.isMock ?? false,
       // True while ANY slot is mid-generation. The source of truth for the chat
       // UI's Stop button: an SSE stream can drop (a buffering proxy swallowing
