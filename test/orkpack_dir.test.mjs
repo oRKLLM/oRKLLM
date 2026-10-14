@@ -3,7 +3,7 @@
 // Spec: docs/ORKPACK_DIRECTORY_LAYOUT.md. The governing property under test throughout is that the
 // SOURCE is the identity and the variant is an attribute: a re-quantize moves the FILE and must not
 // move any key. The last two describes pin that directly.
-import { test, describe, beforeEach } from 'node:test';
+import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
@@ -70,7 +70,19 @@ const src = (d, name = 'Qwen3.8-27B-BF16.gguf') => {
   fs.writeFileSync(p, Buffer.alloc(64));              // a stand-in source; nothing reads its contents
   return p;
 };
-beforeEach(() => clearOrkpackDirState());
+// resolveOrkpack now ALWAYS reports which artifact it selected and why (so a benchmark log records
+// the artifact it measured). Capture it rather than letting it spam the run, and let the tests that
+// care assert on it.
+const LOG = { log: [], warn: [] };
+let _real;
+beforeEach(() => {
+  clearOrkpackDirState();
+  LOG.log = []; LOG.warn = [];
+  _real = { log: console.log, warn: console.warn };
+  console.log  = (...a) => LOG.log.push(a.join(' '));
+  console.warn = (...a) => LOG.warn.push(a.join(' '));
+});
+afterEach(() => { console.log = _real.log; console.warn = _real.warn; });
 
 // ─────────────────────────────────────────────────────────────────────────────
 describe('the handle and the directory are different paths', () => {
@@ -123,14 +135,11 @@ describe('isPackDir — the marker, and only the marker', () => {
     const d = mk(); const g = src(d);
     fs.mkdirSync(orkpackDirFor(g));
     packAt(path.join(orkpackDirFor(g), '4bpw.orkpack'), 4);
-    const warn = console.warn; const lines = []; console.warn = (m) => lines.push(String(m));
-    try {
-      assert.equal(listOrkpackVariants(g).layout, 'none');
-      listOrkpackVariants(g);                           // second look: still silent
-    } finally { console.warn = warn; }
-    assert.equal(lines.length, 1, 'warned exactly once');
-    assert.match(lines[0], /no \.orkpack-dir marker|\.orkpack-dir/);
-    assert.match(lines[0], /orkpackMigrateToDir/);
+    assert.equal(listOrkpackVariants(g).layout, 'none');
+    listOrkpackVariants(g);                             // second look: still silent
+    assert.equal(LOG.warn.length, 1, 'warned exactly once');
+    assert.match(LOG.warn[0], /\.orkpack-dir/);
+    assert.match(LOG.warn[0], /orkpackMigrateToDir/);
   });
 
   test('a malformed or future-schema marker is not a marker', () => {
@@ -232,17 +241,13 @@ describe('directory layout', () => {
 
   test('a pin that no longer exists falls through, loudly, once', () => {
     const d = mk(); const g = build(d, [['4.9bpw', 4]]);
-    const warn = console.warn; const lines = []; console.warn = (m) => lines.push(String(m));
-    let r;
-    try {
-      r = resolveOrkpack(g, { settings: { pack_variant: '4bpw' } });
-      resolveOrkpack(g, { settings: { pack_variant: '4bpw' } });
-    } finally { console.warn = warn; }
+    const r = resolveOrkpack(g, { settings: { pack_variant: '4bpw' } });
+    resolveOrkpack(g, { settings: { pack_variant: '4bpw' } });
     assert.equal(r.label, '4.9bpw', 'a load, not a failure');
     assert.notEqual(r.reason, 'explicit');
-    assert.equal(lines.length, 1);
-    assert.match(lines[0], /no longer exists/);
-    assert.match(lines[0], /re-quantize/);
+    assert.equal(LOG.warn.length, 1);
+    assert.match(LOG.warn[0], /no longer exists/);
+    assert.match(LOG.warn[0], /re-quantize/);
   });
 
   test('unusable variants are skipped; all-unusable resolves to nothing', () => {
@@ -281,53 +286,124 @@ describe('the tiebreak', () => {
 
   test('highest bpw that FITS the budget', () => {
     const d = mk(); const g = twoInTier(d);
-    const quiet = (f) => { const w = console.warn; console.warn = () => {}; try { return f(); } finally { console.warn = w; } };
-    const all = quiet(() => resolveOrkpack(g, { budgetMB: 4096 }));
+    const all = resolveOrkpack(g, { budgetMB: 4096 });
     assert.equal(all.label, 'big');
     assert.equal(all.reason, 'budget');
   });
 
   test('when none fits, the LOWEST bpw — never a refusal', () => {
     const d = mk(); const g = twoInTier(d);
-    const quiet = (f) => { const w = console.warn; console.warn = () => {}; try { return f(); } finally { console.warn = w; } };
-    const r = quiet(() => resolveOrkpack(g, { budgetMB: 0 }));
+    const r = resolveOrkpack(g, { budgetMB: 0 });
     assert.ok(r, 'a model that will not load is a worse failure than a defensible default');
     assert.equal(r.label, 'small');
   });
 
   test('it is independent of mtime — a touch must not change the answer', () => {
     const d = mk(); const g = twoInTier(d);
-    const quiet = (f) => { const w = console.warn; console.warn = () => {}; try { return f(); } finally { console.warn = w; } };
-    const before = quiet(() => resolveOrkpack(g, { budgetMB: 4096 })).label;
+    const before = resolveOrkpack(g, { budgetMB: 4096 }).label;
     const loser = path.join(orkpackDirFor(g), 'small.orkpack');
     const t = new Date(Date.now() + 60_000);
     fs.utimesSync(loser, t, t);
     clearOrkpackDirState();
-    assert.equal(quiet(() => resolveOrkpack(g, { budgetMB: 4096 })).label, before);
+    assert.equal(resolveOrkpack(g, { budgetMB: 4096 }).label, before);
   });
 
-  test('an ambiguous pick is announced, with the variants, the winner and the knob', () => {
+  test('an ambiguous pick is a WARNING, naming the winner and the override', () => {
     const d = mk(); const g = twoInTier(d);
-    const warn = console.warn; const lines = []; console.warn = (m) => lines.push(String(m));
-    try { resolveOrkpack(g, { budgetMB: 4096 }); } finally { console.warn = warn; }
-    assert.equal(lines.length, 1);
-    assert.match(lines[0], /2 eligible variants/);
-    assert.match(lines[0], /small/); assert.match(lines[0], /big/);
-    assert.match(lines[0], /chose 'big'/);
-    assert.match(lines[0], /pack_variant/);
+    resolveOrkpack(g, { budgetMB: 4096 });
+    assert.equal(LOG.warn.length, 1, 'more than one eligible variant is a real choice made for you');
+    assert.deepEqual(LOG.log, [], '...and it is not ALSO logged');
+    assert.match(LOG.warn[0], /of 2 variant\(s\)/);
+    assert.match(LOG.warn[0], /chose 'big'/);
+    assert.match(LOG.warn[0], /pack_variant/);
   });
 
-  test('one eligible variant is never announced', () => {
+  test('one eligible variant is logged, not warned', () => {
     const d = mk(); const g = src(d);
     writePackDirMarker(orkpackDirFor(g), {});
     packAt(path.join(orkpackDirFor(g), '4bpw.orkpack'), 4);
-    const warn = console.warn; const lines = []; console.warn = (m) => lines.push(String(m));
-    try { resolveOrkpack(g); } finally { console.warn = warn; }
-    assert.deepEqual(lines, []);
+    resolveOrkpack(g);
+    assert.deepEqual(LOG.warn, []);
+    assert.equal(LOG.log.length, 1);
   });
 
   test('defaultPackBudgetMB is a real number, floored', () => {
     assert.ok(defaultPackBudgetMB() >= 1024);
+  });
+});
+
+// ★ A run that does not record WHICH artifact it used is not a usable record — and the CLI tools
+// that derive their own pack path (llama-bench / ork_bench / ork_ppl) are exactly the ones whose
+// numbers end up on the wiki. The same line is printed by ggml-ork's [ORK PACK].
+describe('the selection is always reported', () => {
+  // `tier` pins every variant to the SAME footer tier, so the budget rule is what decides between
+  // them — otherwise orkQuantForSource narrows a BF16 source to int4 and the pool is a single pack.
+  const dirWith = (d, variants, { name = 'M-BF16.gguf', tier = null } = {}) => {
+    const g = src(d, name);
+    writePackDirMarker(orkpackDirFor(g), {});
+    for (const [label, bpw] of variants) {
+      packAt(path.join(orkpackDirFor(g), `${label}.orkpack`), bpw, tier ? { quantSig: tier } : {});
+    }
+    return g;
+  };
+  const only = () => { const all = [...LOG.log, ...LOG.warn]; assert.equal(all.length, 1, all.join('\n')); return all[0]; };
+
+  test('every resolution says which pack and by what rule', () => {
+    const d = mk();
+    resolveOrkpack(dirWith(d, [['4bpw', 4]]));
+    const line = only();
+    assert.match(line, /4bpw\.orkpack/, 'names the artifact');
+    assert.match(line, /only candidate/, 'names the rule');
+  });
+
+  test('the legacy layout reports too', () => {
+    const d = mk(); const g = src(d);
+    packAt(orkpackPathFor(g), 4);
+    resolveOrkpack(g);
+    assert.match(only(), /legacy layout/);
+  });
+
+  test('an explicit pin reports as explicit, and says when it is unusable', () => {
+    const d = mk(); const g = dirWith(d, [['4bpw', 4]]);
+    packAt(path.join(orkpackDirFor(g), 'stale.orkpack'), 8, { version: 6 });
+    resolveOrkpack(g, { settings: { pack_variant: 'stale' } });
+    const line = only();
+    assert.match(line, /pack_variant='stale'/);
+    assert.match(line, /NOT usable/);
+  });
+
+  test('the budget line carries the inputs, and calls the footprint a FILE size', () => {
+    const d = mk(); const g = dirWith(d, [['4bpw', 4], ['8bpw', 8]], { tier: SIG4 });
+    resolveOrkpack(g, { budgetMB: 4096 });
+    const line = only();
+    assert.match(line, /pack FILE/, 'so nobody reads it as a residency measurement');
+    assert.match(line, /not a residency measurement/);
+    assert.match(line, /budget .* from the configured weight-residency limit/);
+    assert.match(line, /bpw .* measured from the index/);
+  });
+
+  test('the unmeasured fallback budget is named as such', () => {
+    const d = mk(); const g = dirWith(d, [['4bpw', 4], ['8bpw', 8]], { tier: SIG4 });
+    resolveOrkpack(g);                                   // no budgetMB -> defaultPackBudgetMB()
+    assert.match(only(), /budget .* from totalmem - 1 GiB/);
+  });
+
+  test('it is deduplicated per answer, and a CHANGED answer always prints', () => {
+    const d = mk(); const g = dirWith(d, [['4bpw', 4], ['8bpw', 8]], { tier: SIG4 });
+    resolveOrkpack(g, { budgetMB: 4096 });
+    resolveOrkpack(g, { budgetMB: 4096 });
+    resolveOrkpack(g, { budgetMB: 4096 });
+    assert.equal([...LOG.log, ...LOG.warn].length, 1, 'the server resolves constantly; repeating is noise');
+    resolveOrkpack(g, { settings: { pack_variant: '4bpw' } });
+    assert.equal([...LOG.log, ...LOG.warn].length, 2, 'a different answer is always reported');
+  });
+
+  test('a resolution to NOTHING prints nothing — there is no artifact to report', () => {
+    const d = mk(); const g = src(d);
+    writePackDirMarker(orkpackDirFor(g), {});
+    packAt(path.join(orkpackDirFor(g), 'old.orkpack'), 4, { version: 6 });
+    assert.equal(resolveOrkpack(g), null);
+    assert.deepEqual([...LOG.log, ...LOG.warn], []);
   });
 });
 

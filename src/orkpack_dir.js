@@ -155,15 +155,17 @@ export function defaultPackBudgetMB() {
 export function resolveOrkpack(absGguf, { settings = null, precision = null, budgetMB = null } = {}) {
   const { layout, variants } = listOrkpackVariants(absGguf, { precision });
   if (!variants.length) return null;
-  const hit = (v, reason) => ({ path: v.path, label: v.label, layout, reason, variant: v, candidates: variants });
+  const hit = (v, reason, how, ambiguous = false) => announce(absGguf,
+    { path: v.path, label: v.label, layout, reason, variant: v, candidates: variants }, how, ambiguous);
 
-  if (layout === 'legacy') return hit(variants[0], 'legacy');
+  if (layout === 'legacy') return hit(variants[0], 'legacy', 'legacy layout (no pack directory for this model)');
 
   // 1. EXPLICIT
   const pinned = settings?.pack_variant ? String(settings.pack_variant) : null;
   if (pinned) {
     const v = variants.find(x => x.label === pinned);
-    if (v) return hit(v, 'explicit');
+    if (v) return hit(v, 'explicit', `pack_variant='${pinned}' (explicit — pinned on this model` +
+      `${v.usable ? '' : '; NOT usable, so the load will fail loudly rather than serve another variant'})`);
     warnOnce(`${absGguf}:${pinned}`,
       `[orkpack] ${path.basename(absGguf)}: pack_variant='${pinned}' names a variant that no longer exists ` +
       `(have: ${variants.map(x => x.label).join(', ') || 'none'}) — most likely a re-quantize changed its ` +
@@ -175,37 +177,66 @@ export function resolveOrkpack(absGguf, { settings = null, precision = null, bud
 
   // 2. TIER
   let pool = usable;
-  let reason = 'tier';
+  let tierNote = '';
   const want = orkQuantForSource(ggufQuantBits(absGguf), settings?.npu_quant ?? 'auto');
   if (want) {
     const tier = Number(want);
     const matched = usable.filter(v => v.qbits === tier);
-    if (matched.length) pool = matched;
+    if (matched.length) { pool = matched; tierNote = ` after the int${tier} tier filter`; }
     else {
-      reason = 'tier-unmet';
+      tierNote = ` (no int${tier} variant; selected across all tiers)`;
       warnOnce(`${absGguf}:tier${tier}`,
         `[orkpack] ${path.basename(absGguf)}: no usable int${tier} variant (have: ` +
         `${usable.map(v => `${v.label}=int${v.qbits}`).join(', ')}) — selecting across all tiers instead.`);
     }
-  } else {
-    reason = 'untiered';
   }
 
   // 3. SOLE
-  if (pool.length === 1 && usable.length === 1) return hit(pool[0], 'sole');
+  if (pool.length === 1) {
+    return hit(pool[0], usable.length === 1 ? 'sole' : 'tier',
+      `the only candidate of ${variants.length} variant(s)${tierNote}`);
+  }
 
   // 4. BUDGET
-  if (pool.length === 1) return hit(pool[0], reason);
   const budget = (budgetMB ?? defaultPackBudgetMB()) * 1048576;
+  const explicitBudget = budgetMB != null;
   const { variant: chosen, fit } = pickByBudget(pool, budget);
-  // Ambiguity resolved silently is how we got here. Say which variants were eligible, which won and
-  // why, and name the knob that overrides it.
-  warnOnce(`${absGguf}:pick:${chosen.label}:${pool.map(v => v.label).join(',')}`,
-    `[orkpack] ${path.basename(absGguf)}: ${pool.length} eligible variants ` +
-    `(${pool.map(v => `${v.label} ${(v.sizeBytes / 1073741824).toFixed(2)}GiB`).join(', ')}) — chose ` +
-    `'${chosen.label}': ${fit ? 'highest bpw that fits' : 'none fits, so the lowest bpw against'} the ` +
-    `${(budget / 1073741824).toFixed(1)}GiB budget. Set pack_variant on the Models page to pin one.`);
-  return hit(chosen, 'budget');
+  return hit(chosen, 'budget',
+    `chose '${chosen.label}' of ${variants.length} variant(s)${tierNote} via ` +
+    `${fit ? 'highest-bpw-that-fits' : 'lowest-bpw (none fit the budget)'}; pack FILE ${hsize(chosen.sizeBytes)} ` +
+    `(an upper bound on resident weight bytes, not a residency measurement); budget ${hsize(budget)} from ` +
+    `${explicitBudget ? 'the configured weight-residency limit' : 'totalmem - 1 GiB'}` +
+    `; bpw ${chosen.bpw ?? '?'} measured from the index`,
+    pool.length > 1);
+}
+
+// GiB for anything pack-sized, MiB below — a real pack is 1-25 GiB, but a small one printing
+// "0.00 GiB" reads like a bug. Same convention as ggml-ork's ork_hsize, so the two lines compare.
+const hsize = (b) => b >= 1073741824 ? `${(b / 1073741824).toFixed(2)} GiB` : `${Math.round(b / 1048576)} MiB`;
+
+// ALWAYS say which artifact was selected and why.
+//
+// Not a debug aid: these are the same inputs ggml-ork's own [ORK PACK] line reports, and the reason
+// both exist is that `llama-bench` / `ork_bench` / `ork_ppl` derive their own pack path. If a bench
+// tool silently selected a different variant than the server serves, every number measured that way
+// would be about a different artifact than the one in production, with nothing in the output saying
+// so — the same "measured one thing, shipped another" shape as the pack_mixed bug that started this
+// work. One line in both logs makes any residual divergence visible instead of inferable.
+//
+// Deduplicated on (source, chosen path, reason): the server resolves constantly while enumerating,
+// so repeating would be noise — but a CHANGE of answer always prints. `ambiguous` raises it to a
+// warning and adds the override hint, because more than one eligible variant is a real choice made
+// on the model's behalf.
+const _announced = new Set();
+function announce(absGguf, r, how, ambiguous = false) {
+  const key = `${absGguf}|${r.path}|${r.reason}`;
+  if (_announced.has(key)) return r;
+  _announced.add(key);
+  const line = `[orkpack] ${path.basename(absGguf)} -> ${r.layout === 'dir' ? path.basename(r.path) : r.path}` +
+               ` — ${how}`;
+  if (ambiguous) console.warn(`${line}. Set pack_variant on the Models page to pin one.`);
+  else console.log(line);
+  return r;
 }
 
 // Highest bpw that FITS the measured budget; if none fits, the lowest bpw.
@@ -234,8 +265,10 @@ function pickByBudget(pool, budgetBytes) {
 const _warned = new Set();
 function warnOnce(key, msg) { if (_warned.has(key)) return; _warned.add(key); console.warn(msg); }
 
-/** Test hook: forget the one-time warnings and the measured-label memo. */
-export function clearOrkpackDirState() { _warned.clear(); _unmarkedWarned.clear(); clearPackLabelCache(); }
+/** Test hook: forget the one-time warnings, the selection log and the measured-label memo. */
+export function clearOrkpackDirState() {
+  _warned.clear(); _unmarkedWarned.clear(); _announced.clear(); clearPackLabelCache();
+}
 
 /** The concrete pack file for this source, or null. Shorthand for resolveOrkpack(...)?.path. */
 export function orkpackFileFor(absGguf, opts = {}) { return resolveOrkpack(absGguf, opts)?.path ?? null; }

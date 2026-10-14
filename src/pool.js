@@ -583,10 +583,10 @@ class EnginePool {
           precision: { orkQuant: options.ork_quant, orkHybrid: options.ork_hybrid },
           budgetMB: resolveWcacheBudgetMB(),
         });
-        if (r) {
-          modelPath = r.path;
-          if (r.layout === 'dir') console.log(`[EnginePool] ${modelName} -> ${path.basename(r.path)} (${r.reason})`);
-        }
+        // resolveOrkpack reports the selection itself (one [orkpack] line naming the artifact, the
+        // rule and its inputs), so nothing is logged here — one account of which pack was chosen,
+        // in the same shape the CLI tools print, not two that could drift.
+        if (r) modelPath = r.path;
         // No `r` falls through to the handle path, which does NOT exist under the directory layout —
         // so the existence check below throws with the handle's name. That is the intended loud
         // failure: a pack directory with nothing usable in it must not quietly serve something else.

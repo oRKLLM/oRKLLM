@@ -323,14 +323,55 @@ must land together or a multi-GB pack is silently rebuilt at the legacy path.
    footer's job, unchanged. (oRKLLM guarantees the filename comes from the measurement, §5; a
    hand-renamed file can only mis-order a tie, not be wrongly adopted.)
 
-   **Deliberate asymmetry with the JS resolver:** the C side has no notion of a memory budget and no
-   settings row, so with no `ORK_QUANT` set it takes the highest bpw rather than applying §3.2 step 4.
-   It is the CLI fallback only — every oRKLLM-driven load and build passes `ORK_ORKPACK_PATH`, so the
-   JS resolver is the one that decides in production.
+   **The automatic rule is the SAME on both sides**, and that is not cosmetic. The CLI fallback is
+   what `llama-bench`, `ork_bench` and `ork_ppl` use — exactly the tools whose numbers go on the wiki
+   and drive decisions. If the bench tool silently selected a different variant than the server
+   serves, every number measured that way would be about a different artifact than the one in
+   production, with nothing in the output saying so. That is the same *measured one thing, shipped
+   another* shape as the `pack_mixed` bug that started this work, so it is designed out rather than
+   documented.
+
+   So the C side reads `MemTotal` from `/proc/meminfo` and applies §3.2 step 4 verbatim: highest bpw
+   that fits `MemTotal - 1 GiB` (floored at 1 GiB — `defaultPackBudgetMB()`'s exact formula), else
+   the lowest. `ORK_PACK_BUDGET_MB` overrides it, which lets a bench run reproduce the server's
+   *configured* budget (the global memory limit minus the hot-cache reservation) — the one input a
+   CLI process cannot otherwise see. With neither available it falls back to highest-bpw and the
+   printed line says so in those words.
+
+   **The one remaining difference is the explicit `pack_variant` override**, which only the server
+   can know. That asymmetry is defensible precisely because it is an override rather than a default:
+   the automatic answer is identical.
 3. **oRKLLM's conversion subprocess passes `ORK_ORKPACK_PATH` explicitly.** `_spawnBuild`
    (`src/conversion.js`) used to spawn `llama-completion -m <abs>` and rely on the derivation to place
    the pack; it now names the `.building-…` target itself. This was the real coupling, and it was on
    the oRKLLM side.
+
+4. **Both sides print the selection, always.** A run that does not record which artifact it used is
+   not a usable record. One line, same shape on both sides, naming the pack, the rule that chose it,
+   and the rule's inputs:
+
+   ```
+   [ORK PACK] /m/M-BF16/4.9bpw.orkpack — chose '4.9bpw' of 3 variant(s) after the ORK_QUANT tier
+   filter via highest-bpw-that-fits; pack FILE 4 MiB (an upper bound on resident weight bytes, not a
+   residency measurement); budget 4 MiB from ORK_PACK_BUDGET_MB; ORK_QUANT=4; bpw 4.9 from the filename
+
+   [orkpack] M-BF16.gguf -> 4.9bpw.orkpack — chose '4.9bpw' of 3 variant(s) after the int4 tier
+   filter via highest-bpw-that-fits; pack FILE 4 MiB (an upper bound on resident weight bytes, not a
+   residency measurement); budget 4 MiB from the configured weight-residency limit; bpw 4.8 measured
+   from the index
+   ```
+
+   The footprint is explicitly called a **pack FILE size** and explicitly *not* a residency
+   measurement, so nobody later reads the number as something it is not. The C line says bpw came
+   **from the filename**, the JS line that it was **measured from the index** — the two can only
+   differ if a file was renamed by hand, and now that shows in the log instead of nowhere.
+
+   On the JS side this replaces the old ambiguity-only warning: every resolution is reported, at
+   `log` level normally and at `warn` level (with the `pack_variant` hint) when more than one variant
+   was eligible, since that is a real choice made on the model's behalf. It is deduplicated per
+   `(source, chosen path, reason)` — the server resolves constantly while enumerating, so repeating
+   would be noise, but a **changed** answer always prints. `pool.js` no longer logs its own line, so
+   there is one account of the choice rather than two that could drift.
 
 **Not fixed, flagged:** ggml-ork's own stub naming is `persist_final + ".gguf"` (`:3983`), a plain
 append, so it does **not** keep a split shard suffix terminal the way `stubPathFor` does
@@ -454,8 +495,8 @@ did not just write.
 
 ## 12. Tests — `test/orkpack_dir.test.mjs`, node:test, no NPU
 
-**Measured:** baseline `alpha` **212/212**; with this change **254/254, 0 fail** (`npm run test:unit`,
-2026-10-14). 42 new tests in 9 suites.
+**Measured:** baseline `alpha` **212/212**; with this change **261/261, 0 fail** (`npm run test:unit`,
+2026-10-14). 49 new tests in 10 suites.
 
 | suite | pins |
 |---|---|
@@ -467,21 +508,32 @@ did not just write.
 | build target and finalize | the target is inside the directory and creates the marker; finalize names the pack for its measurement; a same-label rebuild replaces; an unmeasurable pack gets `unlabelled-<ms>`, never a fabricated number; discard takes sidecars and refuses a finished variant |
 | removal | directory: whole tree, stub siblings included; a single variant; the last variant takes the empty directory; legacy: the old list **plus** the split-stub sibling it used to miss; and a shared-prefix model is not touched |
 | migration | hardlink/verify/unlink with the **inode preserved**; `--dry-run` touches nothing; byte-identical round-trip; unmigrate refuses several variants; a simulated crash between link and unlink resolves to the directory with the legacy file intact; idempotent; nothing-to-do is reported, not invented |
+| ★ the selection is always reported | every resolution names the artifact and the rule; legacy reports too; an explicit pin reports as explicit and says when it is unusable; the budget line carries its inputs and calls the footprint a **pack FILE** size; the unmeasured fallback budget is named as such; deduplicated per answer with a **changed** answer always printing; resolving to nothing prints nothing |
 | ★ identity survives a re-quantize | the file moves `4bpw` → `5bpw`, the handle and the settings row do not; and the negative control that a bpw-in-the-handle scheme **would** have orphaned that row |
 
-**ggml-ork**, verified by extracting the new functions into a standalone harness
-(`ork_is_pack_dir` / `ork_variant_bpw` / `ork_pick_variant` / `ork_default_orkpack_path`), compiling
-them with `c++ -std=c++17 -Wall -Wextra` (clean, no warnings) and running them against a fixture
-directory of five packs:
+**ggml-ork**, verified by extracting the new functions (`ork_mem_total_mb`, `ork_pack_budget_mb`,
+`ork_variant_bpw`, `ork_is_pack_dir`, `ork_pick_variant`, `ork_default_orkpack_path`) into a
+standalone harness, compiling with `c++ -std=c++17 -Wall -Wextra` (clean, no warnings) and running
+them against fixture directories:
 
 | input | resolves to |
 |---|---|
-| no `ORK_QUANT` | `8bpw.orkpack` (highest bpw) |
-| `ORK_QUANT=8` | `8bpw.orkpack` |
-| `ORK_QUANT=4` | `4.9bpw.orkpack` (highest bpw **within the tier**) |
-| a v6 pack in the directory | never selected (version gate) |
-| `.building-1-2.orkpack` | never selected |
+| budget available, several fit | highest bpw that fits |
+| budget available, none fit | **lowest** bpw — never a refusal |
+| no `/proc/meminfo`, no `ORK_PACK_BUDGET_MB` | highest bpw, and the line says the budget rule could not be applied and may differ from the server |
+| `ORK_QUANT=4` / `=8` | the tier filter dominates, then the budget rule within the tier |
+| a v6 pack, or a `.building-` file | never selected |
 | source with no pack directory | `<base>.orkpack` — legacy, unchanged |
+| marked but empty directory | a `.building-` target inside it, and the line says so |
+
+**Cross-resolver parity, measured.** Both resolvers were run against the *same* directory (three
+int4-tier variants at 4 / 4.9 / 8 measured bpw, file sizes straddling the budget) at three budgets:
+
+| budget | JS picks | C picks |
+|---|---|---|
+| 16 MiB | `8bpw` | `8bpw` |
+| 4 MiB | `4.9bpw` | `4.9bpw` |
+| 1 MiB | `4bpw` | `4bpw` |
 
 The fork was **not** built end to end (that needs the board), so this is a unit-level verification of
 the new code, not an integration test.
@@ -502,10 +554,15 @@ E2E: `npm run test:e2e` via the pre-commit hook, run before the implementation c
 - **The budget footprint is the pack's FILE size**, which is an upper bound on resident weight bytes
   rather than a measurement of them. It is the right direction (it prefers the smaller variant
   slightly sooner than strictly necessary) but it is not calibrated against real residency.
-- **The two resolvers are deliberately not identical** (§6.2): the C derivation has no budget and no
-  settings, so a CLI run with no `ORK_QUANT` can pick a different variant than the server would. In
-  production every load and build passes `ORK_ORKPACK_PATH`, so the JS resolver decides — but that is
-  an argument, not a measurement.
+- **The two resolvers now agree on the automatic rule, measured on one fixture at three budgets**
+  (§12). That is a check of the implementations against each other, not a proof: they are separate
+  code in separate languages and can drift again. The inputs they read also differ in ways the
+  fixture cannot expose — the C side parses bpw from the filename where the JS side measures it off
+  the index, and only the server sees `pack_variant` and the configured budget.
+- **`/proc/meminfo` was never read on a real Linux box** by this code. The Mac this was written on
+  has none, so the fallback branch is what the harness exercised directly; the budget branch was
+  driven through `ORK_PACK_BUDGET_MB`. The parse itself (`MemTotal: %ld kB`) is untested against a
+  real file.
 - **Nothing here touches `ORKPACK_VERSION`, the footer, or `isOrkpackUsable`'s gates**, so it does not
   conflict with the held-back `fix/orkpack-v8` *semantically*. Whether it conflicts as a git merge is
   not something I checked: I read neither that branch nor `feat/orkpack-4bit-footprint`'s diff.
