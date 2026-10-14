@@ -12,7 +12,7 @@ import { eagle3Generate } from './eagle.js';
 import { getAggregatedTools } from './mcp.js';
 import { buildToolSystemPrompt } from './mcp_inference.js';
 import { isOrkpackFresh, getConversionScheduler } from './conversion.js';
-import { orkEnvFrom, orkQuantForSource, isOrkpackPath, isOrkpackUsable, stubPathFor, orkpackPathFor, readOrkpackFooter, sigPrecision, sourceGgufFor,
+import { orkEnvFrom, orkQuantForSource, isOrkpackPath, isOrkpackUsable, stubPathFor, orkpackPathFor, readOrkpackFooter, sigPrecision, sourceGgufFor, supersededByPack,
          provenanceChipsetMismatch } from './orkpack.js';
 import { isRecurrentArch, supportsThinkingToggle, ggufQuantBits, parseGgufShard } from './gguf.js';
 import { consolidateSplitGguf, splitGroupReady } from './gguf_merge.js';
@@ -144,6 +144,24 @@ function resolveOrkPrecision(modelName, options = {}, saved = null) {
 
 // Does this model id load through the llama/ggml-ork backend? Both a .gguf and the .orkpack built from
 // it do, and every option resolved for one applies to the other.
+// A packed model has TWO legitimate ids for ONE artifact: the source `<name>.gguf` and the
+// `<name>.orkpack` built from it. Enumeration drops the gguf once the pack exists
+// (supersededByPack), so a browser tab whose model list predates the pack still offers the
+// .gguf id while a freshly loaded tab offers the .orkpack -- and both render under the same
+// display label, so they look identical to the user. Slot reuse keys on this, not on the raw
+// string: otherwise the second tab asks for a name the pool "isn't holding", and evicts a
+// perfectly good slot to reload the very model that was already in it.
+// (The swap mirrors orkpackPathFor, which is itself a pure extension swap, but on the id
+// rather than an absolute path.)
+function canonicalModelId(modelName) {
+  if (!modelName || isOrkpackPath(modelName) || !/\.gguf$/i.test(modelName)) return modelName;
+  try {
+    return supersededByPack(path.join(MODELS_DIR, modelName))
+      ? modelName.replace(/\.gguf$/i, '.orkpack')
+      : modelName;
+  } catch { return modelName; }
+}
+
 function isLlamaBackedModel(modelName) {
   const n = String(modelName).toLowerCase();
   return n.endsWith('.gguf') || isOrkpackPath(n);
@@ -221,6 +239,7 @@ function createSlot(id) {
     activeModel:      null,   // { name, path, options, isMock, libPath }
     isLoaded:         false,
     loadingPromise:   null,
+    loadingModel:     null,   // which model loadingPromise is for — see load()
     activeGeneration: null,
     idleTimer:        null,
   };
@@ -423,7 +442,14 @@ class EnginePool {
   async load(modelName, options = {}, slot) {
     const s = slot ?? this._slots[0];
 
-    if (s.loadingPromise) return s.loadingPromise;
+    // Join an in-flight load ONLY if it is for the same model. Returning another model's
+    // promise reported ITS success as ours, so the caller believed its model was resident and
+    // then generated against whatever actually loaded. Two tabs loading different models is
+    // enough to hit it. Otherwise wait for that load to settle, then load ours over it.
+    if (s.loadingPromise) {
+      if (canonicalModelId(s.loadingModel) === canonicalModelId(modelName)) return s.loadingPromise;
+      await s.loadingPromise.catch(() => {});
+    }
 
     // Resolve the rkllm context length (init-time `max_context_len`) once, so
     // every caller — pinned autoload (no options), admin load, chat route —
@@ -492,10 +518,11 @@ class EnginePool {
       };
     }
 
+    s.loadingModel = modelName;
     s.loadingPromise = (async () => {
       // Reuse only if it is the same model AND the same context length — a
       // changed ctx_window must force a re-init (max_context_len is init-time).
-      if (s.isLoaded && s.activeModel?.name === modelName &&
+      if (s.isLoaded && canonicalModelId(s.activeModel?.name) === canonicalModelId(modelName) &&
           s.activeModel?.options?.max_context_len === options.max_context_len &&
           s.activeModel?.options?.kv_type_k === options.kv_type_k &&
           s.activeModel?.options?.kv_type_v === options.kv_type_v &&
@@ -737,6 +764,7 @@ class EnginePool {
       throw e;
     } finally {
       s.loadingPromise = null;
+      s.loadingModel = null;
     }
   }
 
