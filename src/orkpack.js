@@ -37,14 +37,18 @@ import { LLAMA_RUNTIME_DIR, getPlatform, getPlatformSource, getNpuCoreCount, get
 // entries and is condemned as stale on every scan. That is a rebuild loop over packs that are perfectly
 // good, which is why the layout is selected by the version field rather than assumed.
 const MAGIC = 'ORKPK01';
-const FOOTER_SIZES = { 6: 32, 7: 64 };
+const FOOTER_SIZES = { 6: 32, 7: 64, 8: 64 };   // v8 shares v7's LAYOUT; the bump is semantic (see ORKPACK_VERSION)
 const MAX_FOOTER_SIZE = 64;
 
 // EXACT match, not a range — mirroring ork_pack_version_ok(), which is `v == ORKPACK_VERSION`. The
 // runtime adopts one layout and regenerates everything else ("predates the pack-compat token"), so a v6
 // pack on a v7 runtime is genuinely stale and has to be rebuilt, not read. Older numbers stay PARSEABLE
 // above so a stale pack is still reported accurately instead of as a zeroed unknown.
-const ORKPACK_VERSION = 7;
+// v8 = the declined set is stored QUANTISED (token_embd -> Q4_K, lm_head -> Q6_K) rather than copied
+// verbatim from the source, and the 4-bit tier is chosen by a measured RAM rule instead of an env flag.
+// Same footer LAYOUT as v7, so 8 maps to 64 above; the bump exists purely to force a rebuild, because
+// the fix lives in the BUILDER and an existing pack cannot inherit it.
+const ORKPACK_VERSION = 8;
 const FOOTER_SIZE = FOOTER_SIZES[ORKPACK_VERSION];
 
 // Build-config precision signature bits (mirror of ggml-ork's ork_build_sig).
