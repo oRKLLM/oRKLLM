@@ -4,7 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { MODELS_DIR, LIBRKLLMRT_PATH, RUNTIMES_DIR, LLAMA_RUNTIME_DIR, parseRuntimeVersion, getNpuCoreCount } from './config.js';
-import { dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings, dbListEnabledMcpServers } from './db.js';
+import { dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings, dbGetModelSettingsFirstShard, dbListEnabledMcpServers } from './db.js';
 import { applyPerformance, pinWorkerToBig } from './perf_governor.js';
 import { syncRuntimes, hasRuntime } from './runtime_sync.js';
 import { syncLlamaRuntime, isLlamaRuntimeAvailable } from './llama_sync.js';
@@ -111,7 +111,23 @@ const DEFAULT_MAX_CONTEXT_LEN = 4096;
 function modelSettingsFor(modelName) {
   const direct = dbGetModelSettings(modelName);
   if (direct && Object.keys(direct).length) return direct;
-  if (isOrkpackPath(modelName)) return dbGetModelSettings(sourceGgufFor(modelName)) || {};
+  const src = isOrkpackPath(modelName) ? sourceGgufFor(modelName) : modelName;
+  if (src !== modelName) {
+    const fromSrc = dbGetModelSettings(src);
+    if (fromSrc && Object.keys(fromSrc).length) return fromSrc;
+  }
+  // ...and finally the pre-consolidation FIRST-SHARD id. A split model's settings were written
+  // against `…-00001-of-NNNNN.gguf`; consolidation renamed the model and orphaned that row. See
+  // dbGetModelSettingsFirstShard for what this cost on the 27B.
+  const fromShard = dbGetModelSettingsFirstShard(src);
+  if (fromShard && Object.keys(fromShard).length) {
+    if (!modelSettingsFor._warned?.has(src)) {
+      (modelSettingsFor._warned ??= new Set()).add(src);
+      console.warn(`[EnginePool] settings for ${src} were found under its pre-consolidation shard id — ` +
+                   `re-save them on the Models page to key them to the current name`);
+    }
+    return fromShard;
+  }
   return direct || {};
 }
 

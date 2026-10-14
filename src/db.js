@@ -419,6 +419,28 @@ export function dbGetModelSettings(modelId) {
   }
 }
 
+// A split model's settings were written under its FIRST SHARD's id (`…-00001-of-00002.gguf`) --
+// the id the Models page offered before consolidation merged the shards into one file. Consolidation
+// renames the model and nothing answers to the shard id any more, so the row is ORPHANED and every
+// setting in it silently reverts to default. That is not cosmetic: on the Qwen3.8-27B it meant a
+// recorded {"npu_quant":"int4","pack_mixed":true} never reached the pack build, which therefore
+// produced the int8-inflating i4a8 tier instead of native W4A4 -- 22.66 GiB resident instead of
+// 11.33, i.e. a model that no longer fits the board. Found by GLOB on the shard pattern; the lowest
+// shard number sorts first and is the one the settings were written against.
+export function dbGetModelSettingsFirstShard(baseGgufId) {
+  try {
+    const m = /^(.*)\.gguf$/i.exec(String(baseGgufId));
+    if (!m) return {};
+    const pat = m[1] + '-[0-9][0-9][0-9][0-9][0-9]-of-[0-9][0-9][0-9][0-9][0-9].gguf';
+    const row = withReconnect(d => d.prepare(
+      'SELECT settings FROM model_settings WHERE model_id GLOB ? ORDER BY model_id LIMIT 1').get(pat));
+    return row ? JSON.parse(row.settings) : {};
+  } catch (e) {
+    console.error('[Database] getModelSettingsFirstShard error:', e);
+    return {};
+  }
+}
+
 export function dbSetModelSettings(modelId, settings) {
   try {
     withReconnect(d => d.prepare('INSERT OR REPLACE INTO model_settings (model_id, settings) VALUES (?, ?)').run(modelId, JSON.stringify(settings)));
