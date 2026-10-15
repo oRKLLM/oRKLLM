@@ -331,12 +331,25 @@ must land together or a multi-GB pack is silently rebuilt at the legacy path.
    another* shape as the `pack_mixed` bug that started this work, so it is designed out rather than
    documented.
 
-   So the C side reads `MemTotal` from `/proc/meminfo` and applies §3.2 step 4 verbatim: highest bpw
-   that fits `MemTotal - 1 GiB` (floored at 1 GiB — `defaultPackBudgetMB()`'s exact formula), else
-   the lowest. `ORK_PACK_BUDGET_MB` overrides it, which lets a bench run reproduce the server's
-   *configured* budget (the global memory limit minus the hot-cache reservation) — the one input a
-   CLI process cannot otherwise see. With neither available it falls back to highest-bpw and the
-   printed line says so in those words.
+   So the C side applies §3.2 step 4 verbatim: highest bpw that fits the budget, else the lowest.
+   **The budget and the forced tier are ARGUMENTS to the resolver**, not environment reads, which
+   makes the selection a pure function of the directory's contents plus those two inputs — the same
+   property the server-side resolver has, and the reason the budget branch can be tested by passing
+   it. The one caller (`ork_persist_init`) supplies them: `ORK_QUANT`, read once at the entry point
+   as this file reads it everywhere else, and `ork_pack_budget_mb()` — `MemTotal` from
+   `/proc/meminfo`, minus 1 GiB, floored at 1 GiB, which is `defaultPackBudgetMB()`'s exact formula.
+   With no readable `MemTotal` it falls back to highest-bpw and the printed line says so in those
+   words.
+
+   **There is deliberately no environment variable to override the budget**, and no CLI flag or
+   config file either. An env knob that SELECTS behaviour is a side channel; the rule here is that
+   behaviour-selecting inputs travel through the API.
+
+   **Accepted consequence:** a bare `llama-bench` on a box whose server has a *configured* budget
+   (the global memory limit minus the hot-cache reservation) cannot see that number and will use the
+   `MemTotal` rule instead, so it may select a different variant than the server. That is the trade:
+   the selection line prints the budget and its source, so the difference is visible in the record,
+   which was the actual requirement.
 
    **The one remaining difference is the explicit `pack_variant` override**, which only the server
    can know. That asymmetry is defensible precisely because it is an override rather than a default:
@@ -353,7 +366,7 @@ must land together or a multi-GB pack is silently rebuilt at the legacy path.
    ```
    [ORK PACK] /m/M-BF16/4.9bpw.orkpack — chose '4.9bpw' of 3 variant(s) after the ORK_QUANT tier
    filter via highest-bpw-that-fits; pack FILE 4 MiB (an upper bound on resident weight bytes, not a
-   residency measurement); budget 4 MiB from ORK_PACK_BUDGET_MB; ORK_QUANT=4; bpw 4.9 from the filename
+   residency measurement); budget 4 MiB (MemTotal 31787 MiB - 1 GiB); bpw 4.9 from the filename
 
    [orkpack] M-BF16.gguf -> 4.9bpw.orkpack — chose '4.9bpw' of 3 variant(s) after the int4 tier
    filter via highest-bpw-that-fits; pack FILE 4 MiB (an upper bound on resident weight bytes, not a
@@ -520,8 +533,8 @@ them against fixture directories:
 |---|---|
 | budget available, several fit | highest bpw that fits |
 | budget available, none fit | **lowest** bpw — never a refusal |
-| no `/proc/meminfo`, no `ORK_PACK_BUDGET_MB` | highest bpw, and the line says the budget rule could not be applied and may differ from the server |
-| `ORK_QUANT=4` / `=8` | the tier filter dominates, then the budget rule within the tier |
+| budget argument 0 (no readable `MemTotal`) | highest bpw, and the line says the budget rule could not be applied and may differ from the server |
+| tier argument 4 / 8 | the tier filter dominates, then the budget rule within the tier; an unmet tier says "no intN variant; selected across all tiers" |
 | a v6 pack, or a `.building-` file | never selected |
 | source with no pack directory | `<base>.orkpack` — legacy, unchanged |
 | marked but empty directory | a `.building-` target inside it, and the line says so |
@@ -558,11 +571,18 @@ E2E: `npm run test:e2e` via the pre-commit hook, run before the implementation c
   (§12). That is a check of the implementations against each other, not a proof: they are separate
   code in separate languages and can drift again. The inputs they read also differ in ways the
   fixture cannot expose — the C side parses bpw from the filename where the JS side measures it off
-  the index, and only the server sees `pack_variant` and the configured budget.
-- **`/proc/meminfo` was never read on a real Linux box** by this code. The Mac this was written on
-  has none, so the fallback branch is what the harness exercised directly; the budget branch was
-  driven through `ORK_PACK_BUDGET_MB`. The parse itself (`MemTotal: %ld kB`) is untested against a
-  real file.
+  the index, and only the server sees `pack_variant` and the configured budget. The configured-budget
+  gap is now permanent by decision (§6.2): there is no channel for a CLI run to be told that number,
+  and the selection line reports the budget it used instead.
+- **`/proc/meminfo` parse: MEASURED on real hardware** (board `.236`, 2026-10-14, by the reviewer —
+  not by me, and not from this worktree). `ork_mem_total_mb()` compiled verbatim and run there reads
+  `MemTotal:       32549908 kB` as **31787 MiB**, giving a derived budget of **30763 MiB**; the
+  `sscanf` handles the variable padding. The arithmetic checks out independently
+  (32549908 / 1024 = 31787; 31787 - 1024 = 30763). This was an open caveat in the previous revision
+  and it is now closed.
+- **The budget branch is exercised by passing the argument**, on both sides. The Mac this was written
+  on has no `/proc/meminfo`, so the *default* path there returns 0 and takes the no-budget fallback;
+  that fallback is tested directly too.
 - **Nothing here touches `ORKPACK_VERSION`, the footer, or `isOrkpackUsable`'s gates**, so it does not
   conflict with the held-back `fix/orkpack-v8` *semantically*. Whether it conflicts as a git merge is
   not something I checked: I read neither that branch nor `feat/orkpack-4bit-footprint`'s diff.
