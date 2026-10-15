@@ -7,8 +7,7 @@ import {
   readOrkpackFooter, sigQbits, sigCompatible, orkEnvFrom, isOrkpackUsable,
   orkpackPathFor, MAGIC, FOOTER_SIZES, footerSize,
   resolveOrkpackVersion, ORKPACK_VERSION_FALLBACK, ORKPACK_VERSION_NEWEST_KNOWN,
-  isOrkpackPath, stubPathFor, sourceGgufFor, orkQuantForSource, sigPrecision,
-} from '../src/orkpack.js';
+  isOrkpackPath, stubPathFor, sourceGgufFor, orkQuantForSource, sigPrecision, packBuildRecord } from '../src/orkpack.js';
 import { ggufQuantBits } from '../src/gguf.js';
 
 // ── Minimal .orkpack writer (mirrors the reader's understanding of the footer) ────
@@ -126,20 +125,73 @@ describe('sigQbits', () => {
   });
 });
 
-describe('rotation bit (SIG_HD_BIT)', () => {
-  test('a rotated pack is refused by an ORK_I4_NOROT run', () => {
-    assert.equal(sigCompatible(sig({ q: '4', hd: 1 }), { orkQuant: '4', orkNoRot: '1' }), false);
+// ROTATION — and why the signature bit is no longer part of the answer.
+//
+// This block used to assert the opposite of what it asserts now, on the reasoning that "a SET HD bit
+// can only have been stamped by a build that rotated, so refusing it from a NOROT run is always
+// right". That reasoning was wrong: the runtime DERIVES the bit as `forced_qbits == 4 && !NOROT` and
+// never looks at the weights, so it is set on an unrotated NF4 i4a8 pack too — which is the tier the
+// 4-bit rule picks whenever the machine can afford int8 residency, i.e. the common case, not a corner.
+// MEASURED on a pack built from qwen3-1.7b-f16 on 2026-10-15: 196 DT_I4 (unrotated) entries, recorded
+// ROTATED = 0, SIG_HD_BIT = 1.
+//
+// The answer now comes from the footer's RECORDED build flags, and from nothing at all when the pack
+// predates them.
+describe('rotation', () => {
+  const BUILDREC = 0x10, ROTATED = 0x20;
+
+  test('the derived signature bit decides nothing, in either direction', () => {
+    // Set, with no recorded flags: UNKNOWN, so the pack is not refused.
+    assert.equal(sigCompatible(sig({ q: '4', hd: 1 }), { orkQuant: '4', orkNoRot: '1' }), true);
+    // Clear, likewise: a clear bit was never evidence of an unrotated build.
+    assert.equal(sigCompatible(sig({ q: '4', hd: 0 }), { orkQuant: '4', orkNoRot: '1' }), true);
   });
 
-  test('a clear bit is never treated as proof of an unrotated build', () => {
-    // The runtime calls the field vestigial and the only real int4 pack we have carries HD=0 despite
-    // being built rotated. Reading clear as "unrotated" would reject every existing int4 pack as stale.
-    assert.equal(sigCompatible(sig({ q: '4', hd: 0 }), { orkQuant: '4' }), true);
-    assert.equal(sigCompatible(sig({ q: '4', hd: 0 }), { orkQuant: '4', orkNoRot: '1' }), true);
+  test('a RECORDED rotated pack is refused by an ORK_I4_NOROT run', () => {
+    assert.equal(sigCompatible(sig({ q: '4', hd: 1 }), { orkQuant: '4', orkNoRot: '1' },
+                               BUILDREC | ROTATED), false);
+  });
+
+  test('a RECORDED unrotated pack is accepted, even with the derived bit set', () => {
+    // Exactly the case the old rule got wrong: HD=1 but the entries are unrotated NF4.
+    assert.equal(sigCompatible(sig({ q: '4', hd: 1 }), { orkQuant: '4', orkNoRot: '1' },
+                               BUILDREC), true);
   });
 
   test('an int8 pack is never judged on rotation', () => {
     assert.equal(sigCompatible(sig({ q: '8' }), { orkQuant: '8', orkNoRot: '1' }), true);
+  });
+});
+
+describe('packBuildRecord', () => {
+  const B = 0x10, R = 0x20, S = 0x40, P = 0x80, G = 0x01;
+
+  test('a pack with no record answers UNKNOWN, never "no"', () => {
+    // The distinction is the whole point: "not applied" invites leaving the pack alone, "unknown"
+    // invites rebuilding it. Collapsing them is how a stale pack survives.
+    for (const f of [{}, { provFlags: 0 }]) {
+      const r = packBuildRecord(f);
+      assert.equal(r.recorded, false);
+      assert.equal(r.rotated, null);
+      assert.equal(r.smooth, null);
+      assert.equal(r.gptq, null);
+      assert.equal(r.promoted, null);
+    }
+  });
+
+  test('a recorded pack answers true/false per rung', () => {
+    const r = packBuildRecord({ provFlags: B | R | S | G });
+    assert.equal(r.recorded, true);
+    assert.equal(r.rotated, true);
+    assert.equal(r.smooth, true);
+    assert.equal(r.gptq, true);
+    assert.equal(r.promoted, false);   // recorded AND absent — a real "no", not an unknown
+  });
+
+  test('BUILDREC alone means every rung is recorded as NOT applied', () => {
+    const r = packBuildRecord({ provFlags: B });
+    assert.equal(r.recorded, true);
+    assert.deepEqual([r.rotated, r.smooth, r.gptq, r.promoted], [false, false, false, false]);
   });
 });
 

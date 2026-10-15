@@ -143,14 +143,123 @@ export function logOrkpackVersionInForce() {
 // Build-config precision signature bits (mirror of ggml-ork's ork_build_sig).
 const SIG_QB_MASK = 0x0ff;   // the forced-precision char: '4', '8', or 0 = source-driven default
 const SIG_HY_BIT  = 0x100;   // ORK_HYBRID
-// Hadamard rotation. ggml-ork's ork_sig_compatible deliberately does NOT check this bit and its own
-// comment calls that "a known hole … build/run-must-match by convention". We DO check it, because the
-// consequence of a mismatch is not a refused load but a silently garbage model: rotation is orthogonal
-// (R*A)·(R*B) == A*B, so a rotated pack run unrotated produces plausible-looking nonsense. Native W4A4
-// is unconditionally rotated (unrotated W4A4 measures PPL ~104 vs ~24), so the bit is set for any pack
-// built at the 4-bit tier unless ORK_I4_NOROT was used. Checking it costs nothing and closes the hole
-// on our side; the runtime is free to keep ignoring it.
-const SIG_HD_BIT  = 0x200;   // hadamard rotation (implied by native W4A4)
+// Hadamard rotation, as the SIGNATURE records it — which is to say, badly. Kept only so the constant
+// has a name where the comment below can explain why nothing reads it any more.
+const SIG_HD_BIT  = 0x200;   // hadamard rotation — DERIVED, see below. Do not trust it.
+
+// ---- THE BUILD RECORD: what the pack says the quality ladder actually applied -----------------
+//
+// Spare bits of the footer's `prov_flags`, which ggml-ork now stamps from a CENSUS of the entries it
+// actually wrote (ork_build_record). This supersedes SIG_HD_BIT for every question about rotation.
+//
+// WHY IT HAD TO BE RECORDED. SIG_HD_BIT is computed by the writer as `forced_qbits == 4 && !NOROT`.
+// It is therefore SET on an unrotated NF4 i4a8 pack, which is an entirely ordinary thing to build and
+// is what the 4-bit tier rule chooses whenever the machine can afford int8 residency. The comment
+// below sigCompatible used to argue that "a set bit is trustworthy: it can only have been stamped by
+// a build that rotated". That was false, and it was false in the direction that matters: rotation is
+// orthogonal, so acting on a wrong answer yields a fluent wrong model rather than an error.
+// VERIFIED on a pack built 2026-10-15 from qwen3-1.7b-f16: 196 DT_I4 (unrotated) entries, recorded
+// ROTATED = 0, SIG_HD_BIT = 1.
+//
+// BUILDREC is a separate bit from the values it qualifies, because 0 is otherwise ambiguous between
+// "not applied" and "written before the record existed". A pre-record pack must read as UNKNOWN; the
+// UI says so, and does not render it as "not applied" — an old pack genuinely does not know, and
+// collapsing the two is how someone concludes a rebuild is unnecessary when it is not.
+const PROV_GPTQ     = 0x01;
+const PROV_IMATRIX  = 0x02;
+const PROV_LOCKED   = 0x04;
+const PROV_PARTIAL  = 0x08;
+const PROV_BUILDREC = 0x10;
+const PROV_ROTATED  = 0x20;
+const PROV_SMOOTH   = 0x40;
+const PROV_PROMOTED = 0x80;
+
+/**
+ * The ladder state a pack RECORDS, as tri-state: true (applied), false (not applied), null (unknown —
+ * the pack predates the record). Never derived from the filename, the signature, or the tier.
+ * `provFlags` is undefined for a v6 footer, which is also "unknown".
+ */
+export function packBuildRecord(footer) {
+  const fl = footer && Number.isInteger(footer.provFlags) ? footer.provFlags : null;
+  const recorded = fl !== null && (fl & PROV_BUILDREC) !== 0;
+  const bit = (b) => (recorded ? (fl & b) !== 0 : null);
+  return {
+    recorded,
+    rotated:  bit(PROV_ROTATED),
+    smooth:   bit(PROV_SMOOTH),
+    gptq:     bit(PROV_GPTQ),
+    promoted: bit(PROV_PROMOTED),
+    // These two are meaningful whenever the footer has the fields at all; they are not part of the
+    // ladder and predate BUILDREC.
+    locked:   fl !== null ? (fl & PROV_LOCKED)  !== 0 : null,
+    partial:  fl !== null ? (fl & PROV_PARTIAL) !== 0 : null,
+    imatrix:  fl !== null ? (fl & PROV_IMATRIX) !== 0 : null,
+  };
+}
+
+// ---- the provenance record: the ladder's PARAMETERS, as text -----------------------------------
+//
+// The load-bearing booleans are in the footer because the load path reads it anyway. The parameters
+// (alpha, damping, requested vs achieved bpw, the promotion ordering) are provenance, and ggml-ork
+// puts variable-length provenance at the end of the pack's metadata section, found by its own
+// trailer rather than by any offset a reader has to learn:  <utf-8 text> | u64 len | "ORKPROV1".
+//
+// Returns a flat { key: value } of its `key: value` lines, or null when the pack carries no record
+// (every pack built before it existed).
+const PROV_REC_MAGIC = 'ORKPROV1';
+export function readOrkpackProvRecord(packPath) {
+  let fd = null;
+  try {
+    const f = readOrkpackFooter(packPath);
+    if (!f || !f.indexOff) return null;
+    fd = fs.openSync(packPath, 'r');
+    const hdr = Buffer.allocUnsafe(16);
+    if (fs.readSync(fd, hdr, 0, 16, f.indexOff) !== 16) return null;
+    const metaOff  = Number(hdr.readBigUInt64LE(0));
+    const metaSize = Number(hdr.readBigUInt64LE(8));
+    if (!(metaSize > 16) || metaOff + metaSize > f.size) return null;
+    const tr = Buffer.allocUnsafe(16);
+    if (fs.readSync(fd, tr, 0, 16, metaOff + metaSize - 16) !== 16) return null;
+    if (tr.toString('latin1', 8, 16) !== PROV_REC_MAGIC) return null;
+    const tlen = Number(tr.readBigUInt64LE(0));
+    if (!(tlen > 0) || tlen > (1 << 20) || metaOff + metaSize - 16 - tlen < 0) return null;
+    const txt = Buffer.allocUnsafe(tlen);
+    if (fs.readSync(fd, txt, 0, tlen, metaOff + metaSize - 16 - tlen) !== tlen) return null;
+    const out = {};
+    for (const line of txt.toString('utf8').split('\n')) {
+      const i = line.indexOf(':');
+      if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+    }
+    return out;
+  } catch { return null; }
+  finally { if (fd !== null) { try { fs.closeSync(fd); } catch {} } }
+}
+
+/**
+ * Everything the UI needs to say what a pack IS, read from the pack. Tri-state throughout: a field is
+ * null when the artifact cannot say, and the caller must render that as "unknown" rather than "no".
+ *
+ * Returns null only when the file is not a readable pack at all.
+ */
+export function packLadderFor(packPath) {
+  const f = readOrkpackFooter(packPath);
+  if (!f) return null;
+  const rec = packBuildRecord(f);
+  const pr  = readOrkpackProvRecord(packPath) || {};
+  const num = (k) => { const v = parseFloat(pr[k]); return Number.isFinite(v) ? v : null; };
+  return {
+    ...rec,
+    version: f.version,
+    bits: sigQbits(f.quantSig),
+    smoothAlpha: rec.smooth ? num('ladder_smooth_alpha') : null,
+    gptqDamp:    rec.gptq   ? num('ladder_gptq_damp')    : null,
+    rht:         'ladder_rht' in pr ? pr.ladder_rht === '1' : null,
+    bpwTarget:   pr.bpw_target && pr.bpw_target !== 'unset' ? num('bpw_target') : null,
+    bpwAchieved: num('bpw_achieved'),
+    promotedInt8: pr.promoted_int8 || null,
+    promoteOrder: pr.promote_order || null,
+  };
+}
 
 export function orkpackPathFor(absGguf) { return absGguf.replace(/\.gguf$/i, '.orkpack'); }
 
@@ -299,22 +408,24 @@ export function sigPrecision(sig) {
 //     precision simply adopts it. It is only a gate when the run forces a precision.
 // (ggml-ork deliberately does NOT check the rotation bit here; neither do we. It sets ORK_I4_NOROT
 // apart as build/run-must-match by convention, and oRKLLM never sets it.)
-export function sigCompatible(packSig, { orkQuant = null, orkHybrid = null, orkNoRot = null } = {}) {
+export function sigCompatible(packSig, { orkQuant = null, orkHybrid = null, orkNoRot = null } = {},
+                              provFlags = null) {
   if ((packSig & SIG_HY_BIT) !== (orkHybrid ? SIG_HY_BIT : 0)) return false;
-  // Rotation (SIG_HD_BIT), which ggml-ork itself skips. Checked in ONE direction only, deliberately.
+  // ROTATION. This used to key on SIG_HD_BIT in ONE direction, on the argument that "a set bit is
+  // trustworthy: it can only have been stamped by a build that rotated". That argument was wrong.
+  // The writer DERIVES that bit from `forced_qbits == 4 && !NOROT` and never observes the weights, so
+  // it is set on an unrotated NF4 i4a8 pack too — measured on a pack built 2026-10-15 whose 196
+  // entries are all DT_I4 and whose recorded ROTATED flag is 0 while SIG_HD_BIT is 1. Neither
+  // direction of that bit proves anything, so it is no longer consulted.
   //
-  // A set bit is trustworthy: it can only have been stamped by a build that rotated, so refusing to
-  // serve it from an ORK_I4_NOROT run is always right. A CLEAR bit is not evidence of anything — the
-  // runtime's own comment calls the field "vestigial in the sig", and the only real 4-bit pack
-  // available to check (v5, sig 0x34) carries HD=0 despite having been built rotated. Treating clear
-  // as "unrotated" would therefore reject every existing int4 pack as stale, which above
-  // ORK_ORKPACK_MAX_REGEN_MB means abort() rather than rebuild.
-  //
-  // So: catch the direction the bit can actually prove, and leave the other to the build/run-must-match
-  // convention until a v6 int4 pack confirms the bit is populated. oRKLLM never sets ORK_I4_NOROT, so
-  // this is inert today; it exists so that changing that cannot silently produce a garbage model
-  // (rotation is orthogonal — (R*A)·(R*B) == A*B — so a mismatch reads as fluent nonsense, not an error).
-  if (orkNoRot && (packSig & SIG_HD_BIT)) return false;
+  // The answer now comes from the footer's RECORDED build flags when the pack has them, and from
+  // nothing at all when it does not — because "unknown" is the honest answer for a pre-record pack
+  // and guessing is what produced this bug. A pack we cannot interrogate is left alone, exactly as
+  // before: it is not condemned (above ORK_ORKPACK_MAX_REGEN_MB "stale" means abort(), not rebuild).
+  if (orkNoRot) {
+    const rec = packBuildRecord({ provFlags });
+    if (rec.rotated === true) return false;
+  }
   if (orkQuant) return sigQbits(packSig) === (String(orkQuant)[0] === '4' ? 4 : 8);
   return true;
 }
@@ -518,7 +629,7 @@ export function isOrkpackUsable(packPath, precision = null, expected = orkpackVe
   if (!(f.indexOff < f.size)) return false;                // truncated / corrupt index offset
   const exp = expectedOrkFmt();
   if (exp !== null && f.orkFmt !== exp) return false;      // tiling/quant format changed under us
-  if (precision && !sigCompatible(f.quantSig, precision)) return false;
+  if (precision && !sigCompatible(f.quantSig, precision, f.provFlags ?? null)) return false;
   return true;
 }
 

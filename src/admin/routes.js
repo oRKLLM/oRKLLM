@@ -12,7 +12,7 @@ import { spawn, spawnSync } from 'child_process';
 import { getStats, clearSessionStats, clearAllTimeStats } from '../stats.js';
 import { getMetricsSnapshot } from '../monitor.js';
 import { supportsThinkingToggle, isTrailingGgufShard, isOrkpackStub, ggufDisplayName, parseGgufShard } from '../gguf.js';
-import { isOrkpackPath, supersededByPack, stubPathFor, sourceGgufFor, orkpackPathFor } from '../orkpack.js';
+import { isOrkpackPath, supersededByPack, stubPathFor, sourceGgufFor, orkpackPathFor, packLadderFor } from '../orkpack.js';
 import { quantPlan, INT4_BPW, INT8_BPW } from '../quant_plan.js';
 import {
   dbGetSetting, dbSetSetting, dbGetModelSettings, dbSetModelSettings, dbDeleteModelSettings,
@@ -858,7 +858,13 @@ export default async function adminRoutes(fastify, options) {
       const packPath = ggufPath.replace(/\.gguf$/i, '.orkpack');
       try { const st = fs.statSync(packPath); if (st.size > 0) return { status: 'done', packedBytes: st.size }; } catch {}
       const s = readJson(packPath + '.json');
-      if (s && s.status) return { status: s.status, progress: Math.max(0, Math.min(100, Math.round(s.progress || 0))), ...(s.label ? { label: s.label } : {}) };
+      // etaText/etaSec: the conversion scheduler writes them once a build is far enough in to mean
+      // anything. Passed straight through; a build that cannot estimate yet simply omits them, which
+      // the UI renders as a bar with no time rather than a made-up one.
+      if (s && s.status) return { status: s.status, progress: Math.max(0, Math.min(100, Math.round(s.progress || 0))),
+                                  ...(s.label ? { label: s.label } : {}),
+                                  ...(s.etaText ? { etaText: s.etaText, etaSec: s.etaSec } : {}),
+                                  ...(Number.isFinite(s.elapsedSec) ? { elapsedSec: s.elapsedSec } : {}) };
       return { status: 'none' };
     };
 
@@ -920,6 +926,12 @@ export default async function adminRoutes(fastify, options) {
               runtime: 'llama',
               thinkingToggle: tmpl ? supportsThinkingToggle(tmpl) : true,
               orkConversion: { status: 'done', packedBytes: sizeOf(abs) },
+              // What the quality ladder actually applied, READ FROM THE PACK. Tri-state: a field is
+              // null when the artifact cannot say (a pack built before the record existed), and the
+              // UI must render that as "unknown" rather than "not applied" — collapsing the two is
+              // how someone decides a rebuild is unnecessary when it is not. Never derived from the
+              // filename, the tier or the signature: deriving it is the bug this replaced.
+              packLadder: packLadderFor(abs),
             });
           } else {
             available.push({ id: rel, displayName: ggufDisplayName(rel), sizeBytes: sizeOf(abs), runtime: 'llama', thinkingToggle: supportsThinkingToggle(abs), orkConversion: orkConversionState(abs) });

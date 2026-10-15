@@ -175,6 +175,46 @@
                                 title="The .orkpack was built by a different llama runtime and is being rebuilt for the current one">
                           <v-icon start size="12">mdi-refresh</v-icon>ORK pack stale — rebuilding
                         </v-chip>
+                        <!-- NOT QUANTISED YET. A model with no .orkpack is no longer converted
+                             automatically — the first quantisation is the user's, with settings they
+                             choose — so the absence needs a name, or it reads as something that failed. -->
+                        <v-chip v-else-if="model.runtime === 'llama' && model.orkConversion?.status === 'none'"
+                                size="x-small" color="grey" variant="tonal"
+                                title="No .orkpack yet. This model runs un-packed (weights are packed inline per matmul). Quantise it from the Quantization tab to choose its tier, bits per weight and quality ladder — it is not done automatically, because those are your choices to make.">
+                          <v-icon start size="12">mdi-tune-variant</v-icon>not quantised
+                        </v-chip>
+                        <!-- WHAT THE PACK ACTUALLY IS. Every one of these comes from a field STORED in the
+                             pack (its footer's build record + provenance block), never from the filename or
+                             from the quant signature — a badge computed from "is this a 4-bit pack" would
+                             reproduce the exact defect this replaced, just with a nicer presentation.
+                             Three states, and the third is not cosmetic: a pack built before the record
+                             existed genuinely cannot say, and showing that as "not applied" is how someone
+                             concludes a rebuild is unnecessary when it is not. -->
+                        <template v-if="model.packLadder">
+                          <v-chip size="x-small" :color="ladderColor(model.packLadder.bits === 4 ? model.packLadder.rotated : null)"
+                                  variant="tonal" :title="ladderTitle('Hadamard rotation', model.packLadder.rotated,
+                                    'the weights are rotated and the activations are rotated to match')">
+                            Hadamard: {{ ladderWord(model.packLadder.bits === 4 ? model.packLadder.rotated : null) }}
+                          </v-chip>
+                          <v-chip size="x-small" :color="ladderColor(model.packLadder.smooth)" variant="tonal"
+                                  :title="ladderTitle('SmoothQuant', model.packLadder.smooth,
+                                    'a per-input-channel scale is folded into the weights and divided back out of the activations'
+                                    + (model.packLadder.smoothAlpha != null ? ' (alpha ' + model.packLadder.smoothAlpha + ')' : ''))">
+                            SmoothQuant: {{ ladderWord(model.packLadder.smooth) }}
+                          </v-chip>
+                          <v-chip size="x-small" :color="ladderColor(model.packLadder.gptq)" variant="tonal"
+                                  :title="ladderTitle('GPTQ', model.packLadder.gptq,
+                                    'the weights were quantised with error feedback against a calibration Hessian'
+                                    + (model.packLadder.gptqDamp != null ? ' (damping ' + model.packLadder.gptqDamp + ')' : ''))">
+                            GPTQ: {{ ladderWord(model.packLadder.gptq) }}
+                          </v-chip>
+                          <v-chip v-if="model.packLadder.bpwAchieved" size="x-small" color="primary" variant="tonal"
+                                  :title="'Bits per weight measured on the finished pack'
+                                    + (model.packLadder.bpwTarget ? ' (requested ' + model.packLadder.bpwTarget.toFixed(2) + ')' : '')
+                                    + (model.packLadder.promotedInt8 ? ' — promoted to int8: ' + model.packLadder.promotedInt8 : '')">
+                            {{ model.packLadder.bpwAchieved.toFixed(2) }} bpw
+                          </v-chip>
+                        </template>
                       </div>
                       <!-- Live conversion progress (GGUF → NPU-native pack). Foregrounded if the user hits Load.
                            'merging' is the step BEFORE it: a split (sharded) download is consolidated into one
@@ -184,7 +224,9 @@
                           <span class="text-caption text-grey">
                             {{ model.orkConversion.status === 'merging' ? 'Consolidating split shards…' : 'Converting to ORK format…' }}
                           </span>
-                          <span class="text-caption text-grey">{{ model.orkConversion.progress }}%</span>
+                          <span class="text-caption text-grey">
+                            {{ model.orkConversion.progress }}%<template v-if="model.orkConversion.etaText"> &middot; ~{{ model.orkConversion.etaText }} left</template>
+                          </span>
                         </div>
                         <v-progress-linear :model-value="model.orkConversion.progress" color="primary" height="6" rounded />
                       </div>
@@ -2509,6 +2551,19 @@ export default {
     quantOf(name) {
       const m = (name || '').match(/(IQ\d+\w*|Q\d+(?:_K(?:_[SML])?|_[01])?|BF16|F16|F32)/i);
       return m ? m[1].toUpperCase() : null;
+    },
+    // ---- the pack's quality-ladder badges -------------------------------------------------
+    // THREE states, and the third is load-bearing. `true` and `false` come from a field the pack
+    // records; `null` means the pack predates that record and genuinely does not know. Rendering
+    // null as "no" would be a confident wrong answer about an artifact — exactly the failure the
+    // stored fields exist to remove — so it gets its own word and its own colour.
+    ladderWord(v) { return v === true ? 'yes' : v === false ? 'no' : 'unknown'; },
+    ladderColor(v) { return v === true ? 'success' : v === false ? 'grey' : 'warning'; },
+    ladderTitle(name, v, what) {
+      if (v === true)  return `${name} was applied at pack time: ${what}.`;
+      if (v === false) return `${name} was NOT applied to this pack.`;
+      return `${name}: UNKNOWN. This pack was built before the runtime recorded what it applied, so `
+           + `the answer is not in the file. It is not "no" — rebuild the pack to find out.`;
     },
     formatNum(n) {
       if (!n) return '0';

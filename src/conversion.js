@@ -20,34 +20,14 @@ import { isOrkpackStub, getGgufArchitecture, parseGgufShard } from './gguf.js';
 import { orkpackPathFor, isOrkpackUsable, readOrkpackFooter, recordOrkFmt, llamaRuntimeTag, orkEnvFrom,
          writeOrkpackProvenance, provPathFor } from './orkpack.js';
 import { consolidateSplitGguf, consolidatedPathFor, splitGroupReady } from './gguf_merge.js';
-import { budgetMbForBpw, measureFromPack, bpwDelivery, bpwDeliveryMessage } from './quant_plan.js';
+import { measureFromPack, bpwDelivery, bpwDeliveryMessage, projectFromGguf, bytesAtBpw } from './quant_plan.js';
 
 export { orkpackPathFor };
 
-// The pass-2 promotion budget in MiB, i.e. ggml-ork's `--pack-budget`.
-//
-// The UI asks for BITS PER WEIGHT, which is the unit the measured quality ladder is indexed by and
-// the only one that means the same thing on a 1.7B and a 27B. Converting it to a byte budget is not
-// client-side arithmetic: the budget is spent in ON-DISK bytes (a promoted int8 weight inside the
-// K%512==0 && K<=4096 envelope also gains a Bf sidecar, so it costs up to 3x its blob delta) and it
-// is spent on whichever weights the qerr ranking picks — a measurement that only exists once pass 1
-// has written its pack. Here, between the passes, it does exist, so the conversion is exact:
-// budgetMbForBpw replays the packer's own greedy loop over that index.
-//
-// Precedence: an explicit budgetMB (the API's older shape, and any non-UI caller) > a bpw target >
-// the historical 8 MiB default.
-function promoteBudgetMb(qerrPack, cfg) {
-  if (cfg.budgetMB != null) return cfg.budgetMB;
-  if (cfg.bpw != null) {
-    const mb = budgetMbForBpw(qerrPack, Number(cfg.bpw), cfg.qerrMin ?? 0.05);
-    if (mb != null) {
-      console.log(`[conversion] ${cfg.bpw} bpw -> --pack-budget ${mb.toFixed(2)} MiB (ranked on pass 1's qerr)`);
-      return mb;
-    }
-    console.warn(`[conversion] pass 1 recorded no rankable qerr — cannot resolve ${cfg.bpw} bpw to a budget`);
-  }
-  return 8;
-}
+// (The bpw -> --pack-budget MiB conversion that used to live here is gone: ggml-ork takes
+// --pack-bpw directly and owns the stopping rule, so this repo no longer carries a second
+// implementation of the packer's promotion loop. quant_plan.budgetMbForBpw remains for the older
+// --pack-budget shape and for the size projection the Quantization tab draws.)
 
 // Did the finished pack come out at the rate that was asked for?
 //
@@ -75,6 +55,27 @@ function reportBpwDelivered(rel, pack, cfg) {
   } catch (e) {
     console.warn(`[quantize] ${rel}: could not verify the pack's bits per weight — ${e.message}`);
   }
+}
+
+// "2 h 41 m", "18 m", "45 s" -- for the sidecar's etaText, which the UI shows verbatim.
+export function humanDuration(sec) {
+  if (!Number.isFinite(sec) || sec < 0) return null;
+  if (sec < 90) return `${Math.round(sec)} s`;
+  const m = Math.round(sec / 60);
+  if (m < 90) return `${m} m`;
+  const h = Math.floor(m / 60);
+  return `${h} h ${m % 60} m`;
+}
+
+// The bits-per-weight a spawn was asked for, read back off its own argv so the size projection and the
+// build cannot disagree about what is being built. 4.0 when nothing says otherwise (the 4-bit base
+// tier); 8.0 for an explicit int8 build.
+function packArgsBpw(args) {
+  const i = args.indexOf('--pack-bpw');
+  if (i >= 0) { const v = Number(args[i + 1]); if (Number.isFinite(v)) return v; }
+  const b = args.indexOf('--pack-bits');
+  if (b >= 0 && args[b + 1] === '8') return 8;
+  return 4;
 }
 
 // Architectures that have no .orkpack of their own, detected up front so we skip at enqueue time
@@ -176,12 +177,21 @@ export class ConversionScheduler {
     return cands.find(p => { try { return fs.statSync(p).isFile(); } catch { return false; } }) || null;
   }
 
-  // Walk MODELS_DIR and enqueue every .gguf that needs a (re)build: one with no .orkpack, OR one whose
-  // .orkpack this runtime would REFUSE (see isOrkpackFresh — footer schema, on-disk format token, and
-  // the precision signature we'd serve it at). A refused pack is deleted here rather than left to be
-  // met at load time: ggml-ork would re-pack it inline on every serve, and for a pack over
-  // ORK_ORKPACK_MAX_REGEN_MB it aborts instead. Deleting first also means the rebuild sees "absent",
-  // not "stale", so no oversize-regeneration guard stands in its way.
+  // Walk MODELS_DIR and enqueue every .gguf whose EXISTING .orkpack this runtime would refuse (see
+  // isOrkpackFresh — footer schema, on-disk format token, precision signature). Those are rebuilt.
+  //
+  // A MODEL WITH NO PACK IS NOT ENQUEUED, and that is the rule, not an optimisation. The first
+  // quantisation of a model is a decision — tier, bits per weight, which quality-ladder rungs — and it
+  // belongs to the user, who makes it from the Quantization tab. A freshly downloaded model simply
+  // runs un-packed until they do. An automatic first build would also be the one place a multi-hour
+  // GPTQ pass could ambush someone, and removing it settles that structurally rather than by policy.
+  //
+  // THE STALE PACK IS NO LONGER DELETED HERE. It used to be, to make the rebuild see "absent" and so
+  // dodge ggml-ork's ORK_ORKPACK_MAX_REGEN_MB abort — a guard that no longer exists. Deleting it now
+  // would be actively wrong: the runtime reads the OLD pack to recover the settings it was built with
+  // (tier, bpw target, ladder) so the rebuild reproduces the user's choices instead of reverting them
+  // to defaults. Destroy the recipe and the rebuild silently becomes a different model. It is replaced
+  // in place, via <pack>.tmp and a rename.
   // Called at startup (initialization) AND after a runtime install / user-initiated runtime change.
   scanAndEnqueue() {
     const tag = llamaRuntimeTag();
@@ -203,15 +213,15 @@ export class ConversionScheduler {
           continue;
         }
         if (hasOrkpack(p) && !isOrkpackFresh(p, this._precisionFor(rel))) {
-          console.log(`[conversion] unusable .orkpack for ${rel} — discarding + rebuilding`);
-          removeOrkpack(p);
+          console.log(`[conversion] .orkpack for ${rel} is stale — rebuilding it to its own recorded settings`);
           invalidated++;
+          this.enqueue(rel);
         }
-        if (!hasOrkpack(p)) this.enqueue(rel);
+        // No pack: left alone. The user quantises it when they choose to.
       }
     };
     walk(MODELS_DIR);
-    if (invalidated) console.log(`[conversion] revalidation: ${invalidated} unusable .orkpack(s) discarded (runtime ${tag ?? 'unknown'})`);
+    if (invalidated) console.log(`[conversion] revalidation: ${invalidated} stale .orkpack(s) queued for rebuild (runtime ${tag ?? 'unknown'})`);
     return invalidated;
   }
 
@@ -301,8 +311,13 @@ export class ConversionScheduler {
     }
   }
 
+  // Queue a model for a pack REBUILD. Only ever called for a model that already HAS a pack this
+  // runtime refuses — a model with no pack is not a conversion job, it is a model the user has not
+  // quantised yet. The guard is here rather than only at the call sites so a future caller cannot
+  // reintroduce the auto-build by accident.
   enqueue(rel) {
     if (this.queued.has(rel) || (this.current && this.current.rel === rel)) return;
+    if (!hasOrkpack(path.join(MODELS_DIR, rel))) return;   // no pack = not quantised yet; the user decides
     const _arch = getGgufArchitecture(path.join(MODELS_DIR, rel));
     if (UNSUPPORTED_ARCHS.has(_arch)) {
       console.warn(`[conversion] ${rel}: arch '${_arch}' has no standalone .orkpack (DFlash speculative-draft head — runs co-resident with its target); skipping.`);
@@ -348,7 +363,16 @@ export class ConversionScheduler {
   // true iff the .orkpack was produced.
   async convertNow(rel, envExtra = {}) {
     if (!this.binPath) return false;
-    if (hasOrkpack(path.join(MODELS_DIR, rel))) return true;   // already built
+    const _abs = path.join(MODELS_DIR, rel);
+    if (hasOrkpack(_abs)) {
+      if (isOrkpackFresh(_abs, this._precisionFor(rel))) return true;       // already built and usable
+      // Stale: rebuild it now, to its own recipe, before the load.
+    } else {
+      // NOT QUANTISED YET — and this path must not quantise it. The model loads un-packed; ggml-ork
+      // packs each weight inline as it meets it, which is what every model without a pack has always
+      // done. The user starts the first quantisation themselves, with settings they choose.
+      return false;
+    }
     this.queued.delete(rel);                                   // out of the idle queue — we build it now
     if (this.current && this.current.rel !== rel) {
       this.preempt();                                          // yield the NPU from a different idle build
@@ -366,13 +390,52 @@ export class ConversionScheduler {
     const pr = new Promise((resolve) => {
       const abs  = path.join(MODELS_DIR, rel);
       const pack = orkpackPathFor(abs);
-      if (hasOrkpack(abs)) { this.queued.delete(rel); resolve(true); return; }   // built since enqueue
-      // progress sidecar — /v1/models reads <model>.orkpack.json → UI shows "converting"
+      /* The precision THIS build stamps, taken from the env it is about to run with rather than from
+       * the pool — they are the same for an idle rebuild and deliberately different for a user
+       * Quantize, and asking the pool would then call a perfectly good pack a failure. */
+      const builtPrec = { orkQuant: envExtra.ORK_QUANT ?? null, orkHybrid: envExtra.ORK_HYBRID ?? null };
+      // A FRESH pack appearing since enqueue means someone else built it — nothing to do. A STALE one
+      // is exactly what we are here to replace, so it must not short-circuit (it used to, back when
+      // the stale pack was deleted before the rebuild was queued).
+      if (hasOrkpack(abs) && isOrkpackFresh(abs, builtPrec)) {
+        this.queued.delete(rel); resolve(true); return;
+      }
+      /* progress sidecar — /v1/models reads <model>.orkpack.json -> UI shows "converting"
+       *
+       * IT NOW CARRIES AN ETA, because the build got long. The quality ladder runs GPTQ by default for
+       * W4A4 packs, and GPTQ is O(K^3) per weight: on a 1.7B it is tens of minutes, and it scales with
+       * sum(K^3) across the model. Every such build is now started deliberately -- nothing auto-builds
+       * an absent pack any more -- so it is a job someone is watching, and a job someone is watching
+       * needs a bar and a time. The same seconds with neither read as a hang.
+       *
+       * The estimate is the dumbest one that cannot be wrong about the mechanism: elapsed * (1 - p)/p
+       * against the SAME progress fraction the bar shows. It needs no model of GPTQ's cost curve, and
+       * it self-corrects as the build proceeds. It is withheld until the build is far enough in to
+       * mean anything -- an ETA computed off 1% of a 12 GiB pack is noise wearing a number. */
+      const t0 = Date.now();
       const sidecar = (progress) => { try {
-        fs.writeFileSync(pack + '.json', JSON.stringify({ status: 'converting', progress, ...(label ? { label } : {}) }));
+        const elapsedSec = Math.round((Date.now() - t0) / 1000);
+        const etaSec = progress >= 2 && elapsedSec >= 60
+          ? Math.round(elapsedSec * (100 - progress) / progress) : null;
+        fs.writeFileSync(pack + '.json', JSON.stringify({
+          status: 'converting', progress, elapsedSec, etaSec,
+          ...(etaSec != null ? { etaText: humanDuration(etaSec) } : {}),
+          ...(label ? { label } : {}),
+        }));
       } catch {} };
       sidecar(0);
+      /* Progress is bytes written against bytes EXPECTED, and the expected size is not the source's.
+       * A 4-bit pack is roughly a quarter of an f16 GGUF, so measuring against the source pinned the
+       * bar near 25% for the whole build and then jumped. quant_plan projects the pack size from the
+       * GGUF's tensor table at the rate being built; the source size stays as the fallback for a GGUF
+       * it cannot read. */
       let srcSize = 0; try { srcSize = fs.statSync(abs).size; } catch {}
+      let expectSize = srcSize;
+      try {
+        const plan = projectFromGguf(abs);
+        const bpw = packArgsBpw(packArgs);
+        if (plan) { const b = bytesAtBpw(plan, bpw); if (b && b.totalBytes > 0) expectSize = b.totalBytes; }
+      } catch {}
 
       // ORK_PERSIST is REMOVED upstream and now GGML_ABORTs the process — the pack path is derived from
       // -m, so it must NOT be set. ORK_NO_STUB=1 suppresses the companion stub GGUF that finalize would
@@ -388,7 +451,10 @@ export class ConversionScheduler {
       // a bare -ngl assigns the layers to the first GPU device (Vulkan0) — weights land in Mali buffers,
       // MUL_MAT runs on Vulkan, and ggml-ork packs ZERO weights → no .orkpack. Targeting the ORK device
       // (rather than disabling Vulkan) routes the matmuls to the NPU while leaving the GPU available.
-      const args = ['-m', abs, '--device', 'ORK', '-ngl', '99', '-t', '4', '-c', '256', '--no-repack',
+      // -c 512: the GPTQ calibration pass batches within the context the caller builds, and a bigger
+      // batch is fewer passes over the corpus for the same accumulated rank. 512 is also ggml-ork's own
+      // safe ceiling -- a wider prefill is the colsplit submit hazard.
+      const args = ['-m', abs, '--device', 'ORK', '-ngl', '99', '-t', '4', '-c', '512', '--no-repack',
                     ...packArgs,
                     '-p', 'x', '-n', '1', '--temp', '0', '-no-cnv'];
       console.log(`[conversion] building ${rel}.orkpack …${label ? ' (' + label + ')' : ''}`);
@@ -417,7 +483,7 @@ export class ConversionScheduler {
       const tick = setInterval(() => {
         try {
           const w = fs.statSync(pack + '.tmp').size;
-          const p = srcSize > 0 ? Math.min(99, Math.round(100 * w / srcSize)) : 0;
+          const p = expectSize > 0 ? Math.min(99, Math.round(100 * w / expectSize)) : 0;
           sidecar(p);
         } catch { /* .tmp not created yet (model still loading) — keep the last value */ }
       }, 1500);
@@ -428,7 +494,10 @@ export class ConversionScheduler {
         this.currentPromise = null;
         this.queued.delete(rel);
         try { fs.unlinkSync(pack + '.json'); } catch {}
-        const built = hasOrkpack(abs);
+        // A rebuild replaces the pack in place, so "a pack exists" is not evidence it succeeded — the
+        // OLD one would satisfy it. Ask the question that distinguishes them: is the pack on disk one
+        // this runtime would now accept, at the precision this build stamped?
+        const built = hasOrkpack(abs) && isOrkpackFresh(abs, builtPrec);
         if (built) {
           // This pack was written by the CURRENTLY-installed runtime, so its footer states the on-disk
           // format token that runtime expects. Record it — that is the one field of the freshness check
@@ -506,24 +575,29 @@ export class ConversionScheduler {
       removeOrkpack(abs);                      // an explicit rebuild replaces, never adopts
       clean();
 
-      // Pass 1 — uniform. For a mixed build its real product is the recorded qerr.
-      const p1 = ['--pack-bits', String(bits), '--no-pack-mixed'];
-      if (!await this._spawnBuild(rel, env, p1, mixed ? 'pass 1 of 2 - measuring' : 'quantizing')) {
-        return { ok: false, error: 'pass 1 produced no .orkpack' };
-      }
-      if (!mixed) return { ok: true, bits, mixed };
-
-      // Pass 2 — promote the worst-quantised weights, ranked by pass 1's qerr.
-      fs.renameSync(pack, qerrAt);
-      try { fs.renameSync(pack + '.gguf', qerrAt + '.gguf'); } catch {}
-      const p2 = ['--pack-bits', String(bits), '--pack-mixed',
-                  '--pack-qerr-source', qerrAt,
-                  '--pack-budget',   String(promoteBudgetMb(qerrAt, cfg)),
-                  '--pack-qerr-min', String(cfg.qerrMin ?? 0.05)];
-      if (cfg.promote) p2.push('--pack-promote', String(cfg.promote));
-      if (!await this._spawnBuild(rel, env, p2, 'pass 2 of 2 - promoting')) {
-        try { fs.renameSync(qerrAt, pack); } catch {}   // keep the uniform pack; never leave nothing servable
-        return { ok: false, error: 'pass 2 failed; kept the uniform pack' };
+      /* ONE PASS. A mixed build used to be two: pass 1 built a uniform pack purely to record each
+       * weight's measured quantisation error, pass 2 re-ran the whole thing ranking on that error and
+       * promoting until a MiB budget was spent -- with the bpw -> MiB conversion implemented here, in
+       * JavaScript, by replaying the packer's own greedy loop (quant_plan.budgetMbForBpw).
+       *
+       * The packer now takes the bits-per-weight target directly and owns the stopping rule, so the
+       * second implementation of that rule is gone and so is the duplicated build. It also promotes in
+       * a BETTER order: the Q4_K_M structural prior (attn_v, then ffn_down) rather than qerr ranking,
+       * measured 3.8% better at a matched bit budget -- qerr is a poor ordering, not merely a flat one,
+       * which is also why the whole measure-then-rank round trip was not buying what it cost.
+       *
+       * --pack-budget / --pack-qerr-min / --pack-promote still exist in the runtime and still work;
+       * they are simply no longer how a bpw request is expressed. */
+      // --pack-build: this IS the quantisation the user asked for, so the runtime may create a pack
+      // that does not exist. Nothing else in this service passes it.
+      const args = ['--pack-build', '--pack-bits', String(bits)];
+      if (!mixed) args.push('--no-pack-mixed');
+      else if (cfg.bpw != null) args.push('--pack-bpw', String(cfg.bpw));
+      else if (cfg.budgetMB != null) args.push('--pack-mixed', '--pack-budget', String(cfg.budgetMB),
+                                               '--pack-qerr-min', String(cfg.qerrMin ?? 0.05));
+      if (cfg.promote) args.push('--pack-promote', String(cfg.promote));
+      if (!await this._spawnBuild(rel, env, args, 'quantizing')) {
+        return { ok: false, error: 'no .orkpack produced' };
       }
       reportBpwDelivered(rel, pack, cfg);   // measure the artifact, never fail on it
       return { ok: true, bits, mixed };

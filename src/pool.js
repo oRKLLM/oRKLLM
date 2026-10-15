@@ -11,7 +11,7 @@ import { syncLlamaRuntime, isLlamaRuntimeAvailable } from './llama_sync.js';
 import { eagle3Generate } from './eagle.js';
 import { getAggregatedTools } from './mcp.js';
 import { buildToolSystemPrompt } from './mcp_inference.js';
-import { isOrkpackFresh, getConversionScheduler } from './conversion.js';
+import { isOrkpackFresh, hasOrkpack, getConversionScheduler } from './conversion.js';
 import { orkEnvFrom, orkQuantForSource, isOrkpackPath, isOrkpackUsable, stubPathFor, orkpackPathFor, readOrkpackFooter, sigPrecision, sourceGgufFor, supersededByPack,
          provenanceChipsetMismatch } from './orkpack.js';
 import { isRecurrentArch, supportsThinkingToggle, ggufQuantBits, parseGgufShard } from './gguf.js';
@@ -636,16 +636,22 @@ class EnginePool {
         err.code = chipMismatch ? 'ORKPACK_WRONG_CHIPSET' : 'ORKPACK_UNUSABLE';
         throw err;
       }
-      if (isGguf && !isOrkpackFresh(modelPath, orkPrecision)) {
+      // A STALE pack is rebuilt before the load — it was already quantised, deliberately, and only the
+      // format moved; the rebuild reproduces the settings the pack itself records. A model with NO
+      // pack is left alone: it has not been quantised yet, that is the user's call to make from the
+      // Quantization tab, and it loads perfectly well un-packed (weights are packed inline per
+      // matmul). convertNow() enforces the same rule, so this condition and that one cannot drift
+      // into disagreeing about it.
+      if (isGguf && hasOrkpack(modelPath) && !isOrkpackFresh(modelPath, orkPrecision)) {
         const sched = getConversionScheduler();
         if (sched) {
           await Promise.all(this._slots.filter(o => o !== s && o.isLoaded).map(o => this._unloadSlot(o)));
           // Both knobs, not just ORK_QUANT: ORK_HYBRID is the strictly-checked half of the pack's
           // build signature, so omitting it builds a pack this very load would then reject.
           const envExtra = orkEnvFrom(orkPrecision);
-          console.log(`[EnginePool] ${modelName}: no fresh .orkpack — building before load (NPU evicted for the convert)`);
+          console.log(`[EnginePool] ${modelName}: .orkpack is stale — rebuilding before load to its own recorded settings (NPU evicted for the convert)`);
           try { await sched.convertNow(modelName, envExtra); }
-          catch (e) { console.warn(`[EnginePool] ${modelName}: pre-load .orkpack build failed (${e.message}) — loading without warm cache`); }
+          catch (e) { console.warn(`[EnginePool] ${modelName}: pre-load .orkpack rebuild failed (${e.message}) — loading without warm cache`); }
         }
       }
 

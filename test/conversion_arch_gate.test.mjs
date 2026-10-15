@@ -18,10 +18,14 @@ function gstr(s) {
   const b = Buffer.from(s, 'utf8');
   return Buffer.concat([u64(b.length), b]);
 }
-function writeArchGguf(name, arch) {
+function writeArchGguf(name, arch, { withPack = false } = {}) {
   const kv = Buffer.concat([gstr('general.architecture'), u32(8 /* STRING */), gstr(arch)]);
   const p = path.join(MODELS, name);
   fs.writeFileSync(p, Buffer.concat([u32(0x46554747), u32(3), u64(0), u64(1), kv]));
+  // enqueue() is now a REBUILD queue: a model with no pack has not been quantised yet and is never
+  // queued, because the first quantisation is the user's. So a test that means to exercise the ARCH
+  // gate has to give the model a pack first, or it is only re-testing the no-pack rule.
+  if (withPack) fs.writeFileSync(path.join(MODELS, name.replace(/\.gguf$/i, '.orkpack')), 'x');
   return name;
 }
 
@@ -43,16 +47,26 @@ describe('conversion arch gate', () => {
   // arch out made every user Quantize of a Qwen3.5/3.6/3.8 model fail with "cannot be packed".
   test('packs gated-delta-net hybrids (qwen35 and friends)', () => {
     for (const arch of ['qwen35', 'qwen35moe', 'qwen3next', 'granitehybrid']) {
-      const rel = writeArchGguf(`${arch}.gguf`, arch);
+      const rel = writeArchGguf(`${arch}.gguf`, arch, { withPack: true });
       enqueue(sched, rel);
       assert.ok(sched.queued.has(rel), `${arch} should be queued for conversion`);
     }
   });
 
+  // THE FIRST QUANTISATION IS THE USER'S. A model with no .orkpack has not been quantised, and nothing
+  // in this service may decide to quantise it — not a download, not a scan, not a load. It runs
+  // un-packed until the user asks. (The one place that does build is quantize(), which passes
+  // --pack-build.)
+  test('a model with no pack is never queued for an automatic build', () => {
+    const rel = writeArchGguf('never-auto.gguf', 'qwen3');
+    enqueue(sched, rel);
+    assert.ok(!sched.queued.has(rel), 'a model with no pack must not be auto-converted');
+  });
+
   // A DFlash draft head is the one arch with genuinely no pack of its own: it runs co-resident with its
   // target via run_dflash and is never loaded standalone.
   test('skips a DFlash draft head', () => {
-    const rel = writeArchGguf('dflash.gguf', 'dflash');
+    const rel = writeArchGguf('dflash.gguf', 'dflash', { withPack: true });
     enqueue(sched, rel);
     assert.ok(!sched.queued.has(rel), 'dflash must not be queued');
   });
@@ -65,7 +79,7 @@ describe('conversion arch gate', () => {
       assert.match((await sched.quantize(dflash)).error, /no standalone \.orkpack/);
       // The hybrid gets all the way to the spawn and fails there for want of a binary — the point is
       // that it is NOT rejected on its architecture.
-      assert.match((await sched.quantize(hybrid)).error, /produced no \.orkpack/);
+      assert.match((await sched.quantize(hybrid)).error, /no \.orkpack produced/);
     } finally { sched.binPath = null; }
   });
 });
