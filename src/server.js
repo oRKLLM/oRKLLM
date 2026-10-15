@@ -17,6 +17,7 @@ import { getSystemMetrics } from './monitor.js';
 import { getStats } from './stats.js';
 import pool from './pool.js';
 import { initConversionScheduler, getConversionScheduler } from './conversion.js';
+import { logOrkpackVersionInForce } from './orkpack.js';
 import { initDFlashConversionScheduler, getDFlashConversionScheduler } from './dflash_conversion.js';
 import { MODELS_DIR } from './config.js';
 import { syncRuntimes } from './runtime_sync.js';
@@ -402,6 +403,11 @@ const start = async () => {
         fastify.log.info(`[Embeddings] store migration: scanned=${s.scanned} migrated=${s.migrated} deduped=${s.deduped} alreadyLinked=${s.alreadyLinked} errors=${s.errors} storeFiles=${s.storeFiles}`);
     } catch (e) { fastify.log.warn(`[Embeddings] store migration failed (non-fatal): ${e.message}`); }
     await autoLoadPinnedModel();
+    // Which .orkpack format version this process will ACCEPT, and whether the installed runtime told
+    // us or we are assuming. Unconditional — the model-load path gates on it even with autoconvert
+    // off. A reader/builder disagreement does not raise an error, it quietly rebuilds packs forever,
+    // so it has to be legible in the log rather than inferred from behaviour.
+    try { logOrkpackVersionInForce(); } catch (e) { fastify.log.warn(`[orkpack] version probe failed: ${e.message}`); }
     // .orkpack conversion scheduler: enqueue every unconverted .gguf and convert serially during idle
     // (so models load fast from a pre-tiled cache). Default on; disable with ork_autoconvert=0.
     if (dbGetSetting('ork_autoconvert') !== '0') {

@@ -87,7 +87,7 @@ test('provenance survives a pack too short to carry a footer', () => {
   // a truncated or half-written pack.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orkprov-'));
   const pack = path.join(dir, 'truncated.orkpack');
-  fs.writeFileSync(pack, Buffer.alloc(8));            // < FOOTER_SIZE (32) — unparseable
+  fs.writeFileSync(pack, Buffer.alloc(8));            // shorter than the smallest footer (v6, 32 B) — unparseable
   const rec = writeOrkpackProvenance(pack, {});
   assert.equal(rec.footer, null, 'no footer to report');
   assert.ok(readOrkpackProvenance(pack), 'record is present regardless');

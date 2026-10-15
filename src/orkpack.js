@@ -37,19 +37,108 @@ import { LLAMA_RUNTIME_DIR, getPlatform, getPlatformSource, getNpuCoreCount, get
 // entries and is condemned as stale on every scan. That is a rebuild loop over packs that are perfectly
 // good, which is why the layout is selected by the version field rather than assumed.
 const MAGIC = 'ORKPK01';
-const FOOTER_SIZES = { 6: 32, 7: 64, 8: 64 };   // v8 shares v7's LAYOUT; the bump is semantic (see ORKPACK_VERSION)
+// Every layout we can PARSE. This table is about readability, not acceptance: a v6 pack is still
+// decoded at its own offsets so a stale pack reports accurately instead of as a zeroed unknown.
+// v8 shares v7's LAYOUT — that bump is semantic (the declined set is stored QUANTISED, token_embd ->
+// Q4_K / lm_head -> Q6_K, and the 4-bit tier is chosen by a measured RAM rule rather than an env flag),
+// so it maps to the same 64 bytes.
+const FOOTER_SIZES = { 6: 32, 7: 64, 8: 64 };
 const MAX_FOOTER_SIZE = 64;
 
-// EXACT match, not a range — mirroring ork_pack_version_ok(), which is `v == ORKPACK_VERSION`. The
-// runtime adopts one layout and regenerates everything else ("predates the pack-compat token"), so a v6
-// pack on a v7 runtime is genuinely stale and has to be rebuilt, not read. Older numbers stay PARSEABLE
-// above so a stale pack is still reported accurately instead of as a zeroed unknown.
-// v8 = the declined set is stored QUANTISED (token_embd -> Q4_K, lm_head -> Q6_K) rather than copied
-// verbatim from the source, and the 4-bit tier is chosen by a measured RAM rule instead of an env flag.
-// Same footer LAYOUT as v7, so 8 maps to 64 above; the bump exists purely to force a rebuild, because
-// the fix lives in the BUILDER and an existing pack cannot inherit it.
-const ORKPACK_VERSION = 8;
-const FOOTER_SIZE = FOOTER_SIZES[ORKPACK_VERSION];
+// ---- which version do we EXPECT? ask the runtime, do not assume ------------------------------------
+//
+// Acceptance is EXACT equality, mirroring ggml-ork's ork_pack_version_ok(), which is
+// `v == ORKPACK_VERSION`. The question is whose ORKPACK_VERSION.
+//
+// It cannot be a number typed here. This service and the llama runtime are SEPARATELY DEPLOYED: the
+// service ships as an apt package, the runtime as a tarball adopted independently
+// (<LLAMA_RUNTIME_DIR>/manifest.json), and a board routinely runs a current package against a
+// months-old runtime. If the reader says 8 and the deployed builder writes 7, nothing errors — it
+// LOOPS: every pack on disk reads stale, the conversion scheduler rebuilds, the rebuild spawns the
+// DEPLOYED runtime, that v7 builder writes a v7 pack, the reader calls it stale again. A v7 builder
+// can never satisfy a v8 reader, and each turn is GGUF-load-bound (hours for a 27B), so the first
+// casualty is the largest pack on the box. Keeping two numbers equal across two release channels was a
+// merge-ordering rule someone had to remember; the second number is gone instead.
+//
+// So the runtime publishes what it actually builds. ggml-ork stamps its ORKPACK_VERSION into the
+// library as "ORKPACK_FORMAT_VERSION=<n>" and the release workflow lifts it out of the built artifact
+// into manifest.json as `orkpackVersion`. We read that.
+
+// The newest layout this reader can parse — DERIVED from FOOTER_SIZES, so adding a row is the only
+// edit. This is not what we expect; it is only how far ahead we can still read. See
+// orkpackVersionInfo() for the number that actually decides acceptance.
+const ORKPACK_VERSION_NEWEST_KNOWN = Math.max(...Object.keys(FOOTER_SIZES).map(Number));
+
+// What to assume when the installed runtime does not say — i.e. ANY runtime built before the manifest
+// carried `orkpackVersion`, which is every bundle currently in the wild.
+//
+// 7, explicitly, and NOT "the newest we know". The two directions are not symmetric:
+//   • assume OLD and be wrong → we call a pack fresh that the runtime then declines, and the runtime
+//     regenerates it once, on its own, at load. One rebuild, self-correcting.
+//   • assume NEW and be wrong → the non-terminating rebuild loop above.
+// So the fallback is the last version that shipped in a release bundle, and it must only ever move
+// forward when a runtime that OMITS the field can no longer be the one installed.
+const ORKPACK_VERSION_FALLBACK = 7;
+
+/**
+ * Resolve the pack version in force from a runtime manifest OBJECT. Pure — the caller supplies the
+ * manifest, so this is exercised directly in tests without a runtime on disk and without an env knob.
+ *
+ * Returns { version, layoutKnown, fromManifest, source }:
+ *   • version      — the number a pack's footer must carry to be adopted.
+ *   • layoutKnown  — false when the runtime names a version we have no footer layout for (a runtime
+ *                     NEWER than this service). We then cannot adjudicate freshness at all, and
+ *                     isOrkpackUsable stops gating on the version rather than condemning every pack
+ *                     to a rebuild whose result our own reader could never accept either.
+ *   • fromManifest — did the runtime actually tell us, or are we assuming?
+ *   • source       — one clause, for the log.
+ */
+export function resolveOrkpackVersion(manifest) {
+  const fb = (source) => ({ version: ORKPACK_VERSION_FALLBACK, layoutKnown: true, fromManifest: false, source });
+  if (!manifest || typeof manifest !== 'object') return fb('no readable runtime manifest');
+  const v = manifest.orkpackVersion;
+  if (v === undefined || v === null)
+    // Every bundle built before the runtime started publishing the field. NOT an error — it is the
+    // expected state on any board that has not yet adopted a newer runtime.
+    return fb('installed runtime predates the manifest orkpackVersion field');
+  if (!Number.isInteger(v) || v <= 0)
+    return fb(`manifest orkpackVersion is not a version number (${JSON.stringify(v)})`);
+  if (!(v in FOOTER_SIZES))
+    return { version: v, layoutKnown: false, fromManifest: true,
+             source: `installed runtime builds v${v}, newer than any layout this service can parse ` +
+                     `(up to v${ORKPACK_VERSION_NEWEST_KNOWN}) — freshness NOT adjudicated here` };
+  return { version: v, layoutKnown: true, fromManifest: true, source: 'installed runtime manifest' };
+}
+
+/**
+ * The pack version in force, read from the installed runtime. Uncached, like llamaRuntimeTag(): a
+ * runtime install REPLACES manifest.json mid-process (syncLlamaRuntime), and the conversion
+ * scheduler's revalidation runs immediately after, so a cached answer would be the pre-install one at
+ * exactly the moment it matters.
+ */
+export function orkpackVersionInfo() {
+  const m = runtimeManifest();                 // read ONCE: this runs per pack during a models-dir scan
+  return { ...resolveOrkpackVersion(m), tag: manifestTag(m) };
+}
+
+/** Just the number. */
+export function orkpackVersion() { return orkpackVersionInfo().version; }
+
+/** The footer size of a given version (default: the one in force). MAX for a layout we do not know. */
+export function footerSize(version = orkpackVersion()) { return FOOTER_SIZES[version] ?? MAX_FOOTER_SIZE; }
+
+/**
+ * Say the pack version in force, and where it came from, once at startup. A reader/builder mismatch
+ * should be visible in a log rather than inferred from a box that quietly rebuilds forever — the same
+ * reason ggml-ork names the pack variant it picked on every run.
+ */
+export function logOrkpackVersionInForce() {
+  const i = orkpackVersionInfo();
+  console.log(`[orkpack] pack format v${i.version} in force — ${i.source}` +
+              `${i.tag ? ` (llama-runtime ${i.tag})` : ''}` +
+              `${i.fromManifest ? '' : ` [assumed; this reader parses up to v${ORKPACK_VERSION_NEWEST_KNOWN}]`}`);
+  return i;
+}
 
 // Build-config precision signature bits (mirror of ggml-ork's ork_build_sig).
 const SIG_QB_MASK = 0x0ff;   // the forced-precision char: '4', '8', or 0 = source-driven default
@@ -245,14 +334,21 @@ export function orkEnvFrom({ orkQuant = null, orkHybrid = null, orkNoRot = null,
   return env;
 }
 
-// Identity of the installed llama runtime (its build tag, e.g. "b10664-ork"). No longer a freshness
-// key — the footer is — but it scopes the format-token calibration below and is useful in logs.
-export function llamaRuntimeTag() {
+// The installed runtime bundle's manifest, or null when there is no runtime / it is unreadable. The
+// bundle ships it (tag, llamaCommit, orkDriverCommit, orkpackVersion) and the adopt step adds the
+// installed asset's identity (assetName/assetSize/assetSha) — see llama_sync.js. Everything we know
+// about the runtime WITHOUT loading it comes from here.
+function runtimeManifest() {
   try {
     const m = JSON.parse(fs.readFileSync(path.join(LLAMA_RUNTIME_DIR, 'manifest.json'), 'utf8'));
-    return m.tag || m.orkDriverCommit || m.llamaCommit || null;
+    return (m && typeof m === 'object') ? m : null;
   } catch { return null; }
 }
+
+// Identity of the installed llama runtime (its build tag, e.g. "b10664-ork"). No longer a freshness
+// key — the footer is — but it scopes the format-token calibration below and is useful in logs.
+function manifestTag(m) { return m ? (m.tag || m.orkDriverCommit || m.llamaCommit || null) : null; }
+export function llamaRuntimeTag() { return manifestTag(runtimeManifest()); }
 
 // ---- ork-driver on-disk format token (footer.ork_fmt) ----
 //
@@ -407,11 +503,18 @@ export function provenanceChipsetMismatch(packPath) {
 // Is this .orkpack one the runtime would ADOPT (no re-conversion)? Structural validity plus, when a
 // serving precision is supplied, the signature check that decides adoption. Omit `precision` to ask
 // the weaker question "is this a well-formed pack for this runtime" (e.g. for a UI badge).
-export function isOrkpackUsable(packPath, precision = null) {
+//
+// `expected` is the pack version in force; it defaults to whatever the INSTALLED runtime says it
+// builds (orkpackVersionInfo) and is an argument rather than an env knob so tests can pass one.
+export function isOrkpackUsable(packPath, precision = null, expected = orkpackVersionInfo()) {
   const f = readOrkpackFooter(packPath);
   if (!f) return false;
   if (f.magic !== MAGIC) return false;
-  if (f.version !== ORKPACK_VERSION) return false;
+  // EXACT equality, mirroring ork_pack_version_ok() — except when the runtime names a version whose
+  // layout we cannot parse. Then our own reader could not accept the rebuild either, so gating here
+  // would only spin the conversion scheduler; leave the verdict to the runtime, which is the one
+  // party that can actually act on it. logOrkpackVersionInForce() says so at startup.
+  if (expected.layoutKnown !== false && f.version !== expected.version) return false;
   if (!(f.indexOff < f.size)) return false;                // truncated / corrupt index offset
   const exp = expectedOrkFmt();
   if (exp !== null && f.orkFmt !== exp) return false;      // tiling/quant format changed under us
@@ -419,4 +522,6 @@ export function isOrkpackUsable(packPath, precision = null) {
   return true;
 }
 
-export { ORKPACK_VERSION, FOOTER_SIZE, MAGIC };
+// No ORKPACK_VERSION / FOOTER_SIZE constants: there is no single right answer independent of the
+// installed runtime. Use orkpackVersion() / orkpackVersionInfo() / footerSize().
+export { ORKPACK_VERSION_FALLBACK, ORKPACK_VERSION_NEWEST_KNOWN, FOOTER_SIZES, MAGIC };

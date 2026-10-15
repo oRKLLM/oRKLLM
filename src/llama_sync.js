@@ -5,6 +5,7 @@ import zlib from 'zlib';
 import crypto from 'crypto';
 import { LLAMA_RUNTIME_DIR, LLAMA_RUNTIME_MIRRORS } from './config.js';
 import { getConversionScheduler } from './conversion.js';
+import { logOrkpackVersionInForce } from './orkpack.js';
 
 function mirrorApi(slug) {
   return `https://api.github.com/repos/${slug}/releases`;
@@ -259,6 +260,12 @@ export async function syncLlamaRuntime(tag = null, { force = false } = {}) {
       manifest.assetSha  = 'sha256:' + crypto.createHash('sha256').update(buf).digest('hex');
       fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
       console.log(`[LlamaSync] Installed llama runtime ${release.tag_name} to ${LLAMA_RUNTIME_DIR}`);
+      // A runtime swap can CHANGE the .orkpack format version we accept — the bundle publishes the
+      // number its own builder writes (manifest.json `orkpackVersion`, stamped from the library at
+      // release time) and we follow it. Say which one is now in force BEFORE the revalidation below
+      // decides what to discard, so a run of "unusable .orkpack — discarding" lines has its cause on
+      // the preceding line instead of having to be inferred.
+      try { logOrkpackVersionInForce(); } catch { /* advisory */ }
       // Runtime changed → re-check every model's .orkpack against the new runtime and rebuild any
       // that are now stale (the pack tiling/format can differ across runtime versions). The manifest
       // above is already written, so orkpackRuntimeId() reflects the new runtime. Covers the manual
